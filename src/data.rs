@@ -25,9 +25,10 @@
 
 use std::mem::{align_of, size_of};
 
-/// Number of zone-affinity weights stored per cell. Must match
-/// [`crate::zones::ZONE_COUNT`].
-pub const ZONE_COUNT: usize = 5;
+/// Number of zone-affinity weights stored per cell. Sourced from
+/// [`crate::zones::ZONE_COUNT`] so the wire format never drifts from the zone
+/// definition.
+pub use crate::zones::ZONE_COUNT;
 
 /// Identifier addressing a chunk by its integer `(cx, cy)` grid coordinates.
 ///

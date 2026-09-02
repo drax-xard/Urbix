@@ -144,13 +144,17 @@ deterministic) compose into one seamless infinite city.
   - **Commercial** — busy mid-rise with bright/neon palettes.
   - **Industrial** — grimy, wide low warehouses, open lots.
   - **Park / Green** — low or zero buildings, foliage, open ground.
-- **Fuzzy (soft) borders:** each query blends contributions from the *nearest
-  two* sites using a weighted distance ratio (e.g., smoothstep/interpolated by
-  the second-nearest distance). The result is a per-point *zone affinity
-  vector* across a small palette of parameters (density, height range, color
-  palette, street/block style). This yields **gradual, seamless transitions**
-  between adjacent districts instead of hard edges, and naturally keeps
-  neighboring chunks consistent with one another.
+- **Fuzzy (soft) borders:** each query blends contributions from the sites
+  using a continuous (Shepard) inverse-distance weighting. Every site's weight
+  is `1 / d^p` for a small power `p`, then the per-zone weights are
+  normalised. The nearest site dominates deep inside its cell and the affinity
+  falls off continuously toward the border. Because every weight is a
+  continuous function of position, the result has **no hard edges and no
+  identity snapping** even where three or more cells meet. The output is a
+  per-point *zone affinity vector* across a small palette of parameters
+  (density, height range, color palette, street/block style). This yields
+  **gradual, seamless transitions** between adjacent districts and naturally
+  keeps neighboring chunks consistent with one another.
 
 ### 4.2 Chunk layer
 - World is divided into fixed **chunks** (e.g., 32×32 cells), addressed by
@@ -258,11 +262,13 @@ it is approachable and self-explanatory.
 ## 7. Development Plan (milestones)
 
 Each milestone produces a compilable, testable increment. Work is ordered so
-that earlier milestones are dependencies for later ones.
+that earlier milestones are dependencies for later ones. Each milestone header
+is prefixed with its status: ✅ **DONE** (implemented and released) or ⬜
+**PENDING** (not yet started).
 
 ---
 
-### Milestone 1 — Data Layer & Hashing
+### Milestone 1 — Data Layer & Hashing — ✅ DONE (released in 0.2.0)
 
 **Goal:** define every core data type and the deterministic hash primitive
 that the rest of the engine is built on.
@@ -283,7 +289,7 @@ that the rest of the engine is built on.
 
 ---
 
-### Milestone 2 — Voronoi Region Layer
+### Milestone 2 — Voronoi Region Layer — ✅ DONE
 
 **Goal:** generate the Voronoi diagram from the seed and expose a fuzzy
 zone-affinity query at any world coordinate.
@@ -297,20 +303,25 @@ zone-affinity query at any world coordinate.
    a large coordinate span (e.g. ±10 000 units).
 2. Each site is tagged with a `ZoneType` chosen via weighted random from the
    same seed stream.
-3. `query(x, z)` finds nearest and second-nearest sites by brute-force
-   scan (acceptable for ≤48 sites). Compute distance ratio, apply
-   `smoothstep`, blend the two sites' `ZoneParams`.
+3. `query(x, z)` computes a **Shepard inverse-distance blend** over all sites:
+   each site's weight is `1 / d^p` (with a tiny epsilon guard against landing
+   exactly on a site), accumulated per zone and normalised. Because every
+   weight is a continuous function of position, the affinity is continuous
+   everywhere — the nearest site dominates deep inside its cell and there is
+   no discontinuity even at points where several cells meet.
 
 **Tests:**
 - Query is deterministic across multiple calls.
 - Query at a site's exact position returns a near-1.0 affinity for that zone.
-- Two queries 0.01 apart yield affinities within a small ε (continuity).
+- Two queries 0.01 apart yield affinities within a small ε (continuity),
+  including sweeps across site-pair bisectors (the worst case for
+  discontinuities).
 
 **Exit criteria:** unit tests pass, fuzz-continuous property holds.
 
 ---
 
-### Milestone 3 — Chunk Generation (Core Loop)
+### Milestone 3 — Chunk Generation (Core Loop) — ⬜ PENDING
 
 **Goal:** a chunk of `chunk_size × chunk_size` cells can be generated
 deterministically from `(cx, cy, seed)`.
@@ -339,7 +350,7 @@ deterministically from `(cx, cy, seed)`.
 
 ---
 
-### Milestone 4 — Cache & Engine
+### Milestone 4 — Cache & Engine — ⬜ PENDING
 
 **Goal:** `WorldEngine` manages chunks with an LRU cache and exposes the
 public method surface.
@@ -358,7 +369,7 @@ public method surface.
 
 ---
 
-### Milestone 5 — FFI & Binary Format
+### Milestone 5 — FFI & Binary Format — ⬜ PENDING
 
 **Goal:** the engine is callable from C with a `repr(C)` binary protocol.
 
@@ -383,7 +394,7 @@ public method surface.
 
 ---
 
-### Milestone 6 — Interior Hooks
+### Milestone 6 — Interior Hooks — ⬜ PENDING
 
 **Goal:** wire the interior subsystem so every built cell has a stable
 `InteriorId`, and the interface for future interior generation exists.
@@ -407,7 +418,7 @@ existing chunk tests.
 
 ---
 
-### Milestone 7 — CLI, Docs & Benchmarks
+### Milestone 7 — CLI, Docs & Benchmarks — ⬜ PENDING
 
 **Goal:** a command-line tool that generates and dumps city data, full
 documentation, and performance baselines.

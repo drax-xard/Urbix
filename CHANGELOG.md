@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Milestone 2 audit fix — continuous zone blending**: replaced the
+  nearest-two-site + smoothstep blend in `region::VoronoiDiagram::query` with
+  Shepard inverse-distance weighting over all sites. The affinity is now
+  continuous everywhere (previously the second-nearest site's identity could
+  snap at Voronoi triple points, causing up to a ~0.5 jump in a zone's weight
+  over a tiny move). A bisector-sweep continuity test covers the worst case.
+- Consolidated the duplicated `ZONE_COUNT` into a single source
+  (`data.rs` now re-exports `zones::ZONE_COUNT`).
+- Updated `Urbix_Project.md` §3 and §7 to describe the Shepard algorithm.
+
+### Added
+
+- **Milestone 2 — Voronoi region layer**:
+  - `src/region.rs`: `VoronoiDiagram` generated deterministically from
+    `(seed, site_count)`, with seed-derived site positions over a ±10 000
+    span and weighted-random `ZoneType` tagging.
+  - Fuzzy `query(world_x, world_z) -> [f32; 5]` zone-affinity via continuous
+    Shepard inverse-distance weighting, producing soft, stable district
+    borders.
+  - Tests for determinism, near-1.0 affinity at a site, unit-sum weights,
+    and query continuity (including across site-pair bisectors).
+
 ## [0.2.0] — 2026-09-02
 
 ### Added
