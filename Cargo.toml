@@ -1,0 +1,17 @@
+[package]
+name = "urbix"
+version = "0.1.0"
+edition = "2021"
+description = "A platform-agnostic and language-agnostic engine for generating an explorable, infinite procedural city"
+license = "MIT"
+readme = "README.md"
+
+[lib]
+name = "urbix"
+path = "src/lib.rs"
+
+[[bin]]
+name = "urbix"
+path = "src/main.rs"
+
+[dependencies]
