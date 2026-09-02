@@ -26,6 +26,30 @@
 // SplitMix64-style mixing constant.
 const GOLDEN_RATIO: u64 = 0x9e37_79b9_7f4a_7c15;
 
+/// Domain byte separating generation *uses* of the hash stream.
+///
+/// Each distinct kind of derived value gets its own domain so that hashing the
+/// same coordinates for different purposes (building height, palette, interior
+/// id, Voronoi site placement, ...) never collides spuriously. Modules should
+/// follow the reserved bands below when introducing a new use.
+pub mod domain {
+    /// Voronoi site x-positions (see `region.rs`).
+    pub const SITE_X: u8 = 10;
+    /// Voronoi site y-positions (see `region.rs`).
+    pub const SITE_Y: u8 = 11;
+    /// Voronoi site zone tags (see `region.rs`).
+    pub const SITE_ZONE: u8 = 12;
+
+    /// Building height (see `building.rs`).
+    pub const HEIGHT: u8 = 20;
+    /// Building facade palette id (see `building.rs`).
+    pub const PALETTE: u8 = 21;
+    /// Building footprint sparsity / empty-lot roll (see `building.rs`).
+    pub const DENSITY: u8 = 22;
+    /// Interior id for a built cell (see `chunk.rs`).
+    pub const INTERIOR: u8 = 23;
+}
+
 /// Hash a coordinate pair under a seed and domain into a `u64`.
 ///
 /// The four inputs are folded into a single accumulator: `x` and `y` are the
@@ -67,6 +91,30 @@ pub fn hash_coords(x: i32, y: i32, seed: u64, domain: u8) -> u64 {
     acc = (acc ^ (acc >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
     acc = (acc ^ (acc >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
     acc ^ (acc >> 31)
+}
+
+/// Hash a coordinate pair into a `[0, 1)` `f32` for ratio/lottery draws.
+///
+/// A thin wrapper over [`hash_coords`] that normalises the 64-bit output into
+/// the unit interval. Used where generations need a fraction — building height
+/// interpolation, density rolls — rather than a raw key. The `domain` byte
+/// keeps each such draw independent from the others.
+///
+/// ## Example
+///
+/// ```
+/// use urbix::hash::hash_unit;
+///
+/// // In the unit interval, and deterministic.
+/// let t = hash_unit(3, 7, 445566, 1);
+/// assert!((0.0..1.0).contains(&t));
+/// assert_eq!(t, hash_unit(3, 7, 445566, 1));
+/// ```
+#[must_use]
+pub fn hash_unit(x: i32, y: i32, seed: u64, domain: u8) -> f32 {
+    // Take the high 24 bits of the mix to get a decently-spread f32 in [0,1).
+    // Dividing by 2^24 keeps the result strictly below 1.0.
+    (hash_coords(x, y, seed, domain) >> 40) as f32 / (1u32 << 24) as f32
 }
 
 #[cfg(test)]

@@ -22,6 +22,7 @@
 //! stay cheap, and neighbouring chunks remain consistent because they query
 //! the same continuous field.
 
+use crate::hash::domain;
 use crate::hash::hash_coords;
 use crate::zones::{ZoneType, ZONE_COUNT};
 
@@ -41,12 +42,6 @@ const SHEPARD_POWER: f64 = 4.0;
 /// co-located). Its effect, letting that site's weight dominate the affinity,
 /// is exactly what we want at a site's centre.
 const SHEPARD_EPSILON: f64 = 1e-8;
-
-/// Domain bytes let the hash primitive separate *uses* of the seed stream,
-/// so site x-positions, y-positions, and zone tags never collide spuriously.
-const DOMAIN_SITE_X: u8 = 10;
-const DOMAIN_SITE_Y: u8 = 11;
-const DOMAIN_SITE_ZONE: u8 = 12;
 
 /// Relative frequency of each zone when tagging sites (must sum to 1.0).
 const ZONE_WEIGHTS: [f64; ZONE_COUNT] = [0.25, 0.30, 0.20, 0.15, 0.10];
@@ -94,9 +89,9 @@ impl VoronoiDiagram {
             .map(|i| {
                 let idx = i as u64;
                 // Independent deterministic samples for x and y.
-                let xh = hash_coords(idx as i32, 0, seed, DOMAIN_SITE_X);
-                let yh = hash_coords(idx as i32, 0, seed, DOMAIN_SITE_Y);
-                let zh = hash_coords(idx as i32, 0, seed, DOMAIN_SITE_ZONE);
+                let xh = hash_coords(idx as i32, 0, seed, domain::SITE_X);
+                let yh = hash_coords(idx as i32, 0, seed, domain::SITE_Y);
+                let zh = hash_coords(idx as i32, 0, seed, domain::SITE_ZONE);
                 VoronoiSite {
                     x: to_span(xh),
                     y: to_span(yh),

@@ -321,7 +321,7 @@ zone-affinity query at any world coordinate.
 
 ---
 
-### Milestone 3 — Chunk Generation (Core Loop) — ⬜ PENDING
+### Milestone 3 — Chunk Generation (Core Loop) — ✅ DONE
 
 **Goal:** a chunk of `chunk_size × chunk_size` cells can be generated
 deterministically from `(cx, cy, seed)`.

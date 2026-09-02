@@ -23,7 +23,7 @@
 //! `Cell` records with no padding between them. `ChunkBuffer` owns that packed
 //! byte stream while providing typed access to the header and cells.
 
-use std::mem::{align_of, size_of};
+use std::mem::{align_of, offset_of, size_of};
 
 /// Number of zone-affinity weights stored per cell. Sourced from
 /// [`crate::zones::ZONE_COUNT`] so the wire format never drifts from the zone
@@ -190,25 +190,37 @@ impl ChunkBuffer {
     #[must_use]
     pub fn new(id: ChunkId, chunk_size: u16, seed: u64) -> Self {
         let cell_count = u32::from(chunk_size) * u32::from(chunk_size);
-        let header = ChunkHeader {
-            cx: id.cx,
-            cy: id.cy,
-            cell_count,
-            chunk_size,
-            _pad: [0u8; 6],
-            seed,
-        };
         let cell_bytes = cell_count as usize * size_of::<Cell>();
-        let mut data = Vec::with_capacity(size_of::<ChunkHeader>() + cell_bytes);
-        // SAFETY: ChunkHeader is POD (#[repr(C)] with no padding holes we
-        // rely on being zero); writing its bytes is well-defined.
-        let header_slice = unsafe {
-            std::slice::from_raw_parts(&header as *const _ as *const u8, size_of::<ChunkHeader>())
-        };
-        data.extend_from_slice(header_slice);
-        // Extend the header out to its full on-wire size with zeroed cells so
-        // the buffer length equals header + cell_count * sizeof(Cell).
-        data.resize(size_of::<ChunkHeader>() + cell_bytes, 0);
+        let total = size_of::<ChunkHeader>() + cell_bytes;
+
+        // Zero-init the WHOLE buffer up-front. The `ChunkHeader` struct has
+        // implicit alignment padding between `_pad` and `seed` that a struct
+        // literal cannot name; copying raw struct bytes would smuggle
+        // uninitialized stack padding into the wire format (UB + breaking the
+        // determinism invariant). Starting from zeros keeps every padding byte
+        // deterministic and zero.
+        let mut data = vec![0u8; total];
+
+        // Write the header fields at their exact on-wire offsets, unaligned,
+        // leaving the (already-zeroed) implicit alignment padding untouched.
+        // Offsets come from `offset_of!` so they can never drift from the real
+        // layout. `seed` sits after 6 explicit `_pad` bytes plus implicit
+        // padding, at offset 24.
+        unsafe {
+            let p = data.as_mut_ptr();
+            std::ptr::write_unaligned(p.add(offset_of!(ChunkHeader, cx)).cast::<i32>(), id.cx);
+            std::ptr::write_unaligned(p.add(offset_of!(ChunkHeader, cy)).cast::<i32>(), id.cy);
+            std::ptr::write_unaligned(
+                p.add(offset_of!(ChunkHeader, cell_count)).cast::<u32>(),
+                cell_count,
+            );
+            std::ptr::write_unaligned(
+                p.add(offset_of!(ChunkHeader, chunk_size)).cast::<u16>(),
+                chunk_size,
+            );
+            std::ptr::write_unaligned(p.add(offset_of!(ChunkHeader, seed)).cast::<u64>(), seed);
+        }
+
         Self { data }
     }
 
@@ -224,6 +236,57 @@ impl ChunkBuffer {
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.data
+    }
+
+    /// Number of `Cell` records carried by this buffer.
+    #[must_use]
+    pub fn cell_count(&self) -> usize {
+        self.header().cell_count as usize
+    }
+
+    /// Index of the first cell byte relative to the start of the buffer.
+    fn cell_region_offset(&self) -> usize {
+        size_of::<ChunkHeader>()
+    }
+
+    /// Read the `index`-th cell's packed bytes into a `Cell` value.
+    ///
+    /// ## Panics
+    ///
+    /// Panics if `index >= cell_count()`.
+    #[must_use]
+    pub fn get_cell(&self, index: usize) -> Cell {
+        assert!(index < self.cell_count(), "cell index out of range");
+        let off = self.cell_region_offset() + index * size_of::<Cell>();
+        // SAFETY: the buffer always holds exactly cell_count * 40 bytes of
+        // cells after a 32-byte header, so [off, off+40) is in bounds. The
+        // read is unaligned so it stays valid regardless of allocation
+        // alignment.
+        unsafe { std::ptr::read_unaligned(self.data.as_ptr().add(off) as *const Cell) }
+    }
+
+    /// Write a `Cell` into the `index`-th slot of the packed buffer.
+    ///
+    /// ## Panics
+    ///
+    /// Panics if `index >= cell_count()`.
+    pub fn set_cell(&mut self, index: usize, cell: Cell) {
+        assert!(index < self.cell_count(), "cell index out of range");
+        let off = self.cell_region_offset() + index * size_of::<Cell>();
+        // SAFETY: in-bounds as in `get_cell`; written unaligned so it is valid
+        // for any allocation alignment. `Cell` is POD and contains no
+        // references, so copying its bytes is safe.
+        unsafe {
+            std::ptr::write_unaligned(self.data.as_mut_ptr().add(off) as *mut Cell, cell);
+        }
+    }
+
+    /// Iterate over all cells as freshly-read `Cell` values.
+    ///
+    /// Useful for consumer code and tests that want to scan a whole chunk
+    /// without mutating it.
+    pub fn cells(&self) -> impl Iterator<Item = Cell> + '_ {
+        (0..self.cell_count()).map(move |i| self.get_cell(i))
     }
 }
 
@@ -272,5 +335,24 @@ mod tests {
         assert!(f.contains(CellFlags::IS_STREET));
         assert!(f.contains(CellFlags::IS_PARK));
         assert!(!CellFlags::NONE.contains(CellFlags::IS_STREET));
+    }
+
+    #[test]
+    fn chunk_buffer_cell_roundtrip() {
+        let mut buf = ChunkBuffer::new(ChunkId::new(0, 0), 2, 42);
+        let cell = Cell {
+            height: 12.5,
+            zone_affinity: [0.2, 0.3, 0.5, 0.0, 0.0],
+            palette_id: 3,
+            flags: CellFlags::IS_STREET,
+            _pad: 0,
+            interior_id: 99,
+        };
+        buf.set_cell(0, cell);
+        assert_eq!(buf.get_cell(0), cell);
+        // Unwritten cells stay zeroed.
+        assert_eq!(buf.get_cell(1).height, 0.0);
+        assert_eq!(buf.cell_count(), 4);
+        assert_eq!(buf.cells().count(), 4);
     }
 }

@@ -7,8 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-09-02
+
 ### Changed
 
+- Resolved a latent determinism bug in `ChunkBuffer::new`: the wire header's
+  implicit alignment padding (between `_pad` and `seed`) was copied from
+  uninitialized stack memory, so two identical buffers could differ in 4 bytes.
+  The buffer is now zero-initialised up-front and header fields are written at
+  their exact `offset_of!` offsets, keeping every padding byte zero and
+  deterministic.
+- Consolidated the per-use hash domain constants into `hash::domain` (single
+  source shared by `region`, `building`, and `chunk`).
 - **Milestone 2 audit fix — continuous zone blending**: replaced the
   nearest-two-site + smoothstep blend in `region::VoronoiDiagram::query` with
   Shepard inverse-distance weighting over all sites. The affinity is now
@@ -21,6 +31,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Milestone 3 — Chunk generation (core loop)**:
+  - `src/chunk.rs`: `generate_chunk(cx, cy, config, voronoi) -> ChunkBuffer`
+    pipes the full per-cell pipeline — Voronoi affinity query → blended zone
+    params → `street::layout_block` → `building::assign_building` → interior
+    key — into a packed `ChunkBuffer`. Cell content is keyed on **absolute**
+    world coordinates so chunk edges stay continuous.
+  - `src/street.rs`: `layout_block(cell_x, cell_y, params) -> CellFlags`
+    decides street membership from a per-zone block grid using `rem_euclid` on
+    absolute world coords (sign-stable, cross-chunk-consistent).
+  - `src/building.rs`: `assign_building(cell_x, cell_y, params, seed)`
+    derives height and facade palette from the hash, clamped to the zone's
+    range, and applies the zone's density roll for empty lots.
+  - `ChunkBuffer` gained typed cell accessors (`get_cell`, `set_cell`,
+    `cells`, `cell_count`) via safe unaligned reads/writes.
+  - Tests: deterministic regeneration, expected layout, streets at height 0,
+    built cells carry interiors, street-flag independence from chunk origin,
+    and a spread-sampling "Downtown taller than Residential" check.
 - **Milestone 2 — Voronoi region layer**:
   - `src/region.rs`: `VoronoiDiagram` generated deterministically from
     `(seed, site_count)`, with seed-derived site positions over a ±10 000
