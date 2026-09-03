@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`README.md` project summary**: added sections covering objectives, milestone
+  status, design choices, the visualizer tool, and a usage/verification
+  walkthrough so the crate's intent and state are clear at a glance.
+
 ## [0.4.0] — 2026-09-03
 
 ### Added
