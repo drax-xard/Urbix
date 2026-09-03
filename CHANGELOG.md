@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **2D city visualizer** (`examples/viz.rs`): renders a grid of generated
+  chunks to an image so the engine's output can be eyeballed. One pixel per
+  cell, with two colouring modes — hybrid (per-district zone hue brightened by
+  building height, roads drawn as streets) and flat dominant-zone affinity.
+  Writes both a dependency-free P6 PPM and a PNG (via a dev-only `image` crate
+  with just the `png` feature, so the library stays dependency-free). Flags:
+  `--seed`, `--center-cx`, `--center-cy`, `--extent`, `--chunk-size`, `--mode`,
+  `--out`.
+
 ## [0.3.0] — 2026-09-02
 
 ### Changed

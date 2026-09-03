@@ -15,3 +15,9 @@ name = "urbix"
 path = "src/main.rs"
 
 [dependencies]
+
+# Dev-only: used by `examples/viz.rs` to write PNGs. Kept as a dev-dependency
+# so the library crate itself stays dependency-free; the PPM writer has no
+# dependencies at all. Only the PNG codec is enabled to keep the dev build lean.
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
