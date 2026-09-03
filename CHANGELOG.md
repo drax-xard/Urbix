@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-09-03
+
+### Fixed
+
+- **CLI hardening** (`src/main.rs:19`): `Format` is now a typed `ValueEnum`
+  (`Bin`/`Json`) instead of `String`; `radius` capped at 64 and checked for
+  `i32` overflow (`cx±r`, `cy±r`), `chunk-size` capped at 256 and validated
+  via `WorldConfig::is_valid`, `--out` file-vs-directory mismatch now errors
+  before generation, and `coords` allocation is `with_capacity` bounded.
+- **JSON wire leak** (`src/data.rs:114`): `Cell`/`ChunkHeader` ` _pad` fields
+  are `#[serde(skip, default)]` so `json` output no longer leaks internal
+  padding bytes and round-trips via `Deserialize` default `0`.
+- **Interior determinism** (`src/interior.rs:70`): `PlaceholderInteriorState` now
+  splits `id` into low/high 32-bit halves for `hash_coords` to avoid overlapping
+  entropy (`id as i64` / `id>>32` overlapped).
+- **Benchmark accuracy** (`benches/chunk_gen.rs:53`): `cache/miss` now reuses the
+  `VoronoiDiagram` (distinct `cx` per iter) instead of recreating
+  `WorldEngine` + Voronoi each iteration, which overstated miss cost.
+- **`src/api.rs:28`**: removed `TODO(Milestone 4)` stub; module now re-exports
+  `WorldEngine` with a note that the public surface is `engine`/`ffi`.
+
 ## [0.7.0] — 2026-09-03
 
 ### Added

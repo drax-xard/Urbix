@@ -65,10 +65,10 @@ pub struct PlaceholderInteriorState {
 impl InteriorState for PlaceholderInteriorState {
     fn generate(id: InteriorId, seed: u64) -> Self {
         // Derive dimensions and properties from distinct hash domains so they
-        // do not correlate. `id` is a u64; split it into two i64 halves for
-        // hashing (sign-preserving cast via `as` is deterministic).
-        let x = id as i64;
-        let y = (id >> 32) as i64;
+        // do not correlate. `id` is a u64; split into low/high 32-bit halves
+        // to avoid overlapping entropy (previous `id as i64`/`id>>32` overlapped).
+        let x = (id & 0xFFFF_FFFF) as i64;
+        let y = ((id >> 32) & 0xFFFF_FFFF) as i64;
 
         // Width/height in 6..14 inclusive (9 values).
         let w_roll = hash_coords(x, y, seed, domain::INTERIOR_SIZE_W);

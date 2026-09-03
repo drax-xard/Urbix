@@ -62,10 +62,14 @@ fn bench_cache(c: &mut Criterion) {
         })
     });
     group.bench_function("miss", |b| {
+        let mut engine = WorldEngine::new(445566);
+        let mut idx: i32 = 0;
         b.iter(|| {
-            let mut engine = WorldEngine::new(black_box(445566));
-            // Each iteration uses a fresh engine so every chunk is a miss.
-            let buf = engine.generate_chunk(0, 0);
+            // Distinct coords each iter so every chunk is a miss, but Voronoi
+            // is reused (previous version recreated the engine + Voronoi, which
+            // overstated miss cost).
+            idx = idx.wrapping_add(1);
+            let buf = engine.generate_chunk(black_box(idx), black_box(0));
             black_box(buf);
         })
     });

@@ -123,6 +123,7 @@ pub struct Cell {
     /// Trait flags (see [`CellFlags`]).
     pub flags: CellFlags,
     /// Explicit 8-byte-alignment padding to match the C layout.
+    #[serde(skip, default)]
     pub _pad: u16,
     /// Deterministic interior key; `0` when the cell has no interior.
     pub interior_id: InteriorId,
@@ -158,6 +159,7 @@ pub struct ChunkHeader {
     /// Cells per chunk side (e.g. 32).
     pub chunk_size: u16,
     /// Padding to align `seed` on an 8-byte boundary.
+    #[serde(skip, default)]
     pub _pad: [u8; 6],
     /// World seed, kept for verification by the consumer.
     pub seed: u64,

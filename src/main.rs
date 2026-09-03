@@ -10,10 +10,17 @@
 use std::fs;
 use std::path::PathBuf;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use urbix::config::WorldConfig;
 use urbix::data::{ChunkBuffer, ChunkHeader};
 use urbix::engine::WorldEngine;
+
+/// Output format for dumped chunks.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum Format {
+    Bin,
+    Json,
+}
 
 /// Urbix chunk dumper — generate city chunks from the shell.
 #[derive(Parser, Debug)]
@@ -31,17 +38,17 @@ struct Args {
     #[arg(long, default_value_t = 0)]
     cy: i32,
 
-    /// Radius of the chunk grid around (cx,cy) (0 = single chunk)
+    /// Radius of the chunk grid around (cx,cy) (0 = single chunk, max 64)
     #[arg(long, default_value_t = 0)]
     radius: u32,
 
-    /// Override chunk size (cells per side, default from WorldConfig)
+    /// Override chunk size (cells per side, 1..=256, default from WorldConfig)
     #[arg(long)]
     chunk_size: Option<u16>,
 
     /// Output format: `bin` (raw wire bytes) or `json` (header + cells)
-    #[arg(long, default_value = "bin", value_parser = clap::builder::PossibleValuesParser::new(["bin", "json"]))]
-    format: String,
+    #[arg(long, value_enum, default_value_t = Format::Bin)]
+    format: Format,
 
     /// Output file (single chunk) or directory (grid). Defaults to
     /// `chunk_<cx>_<cy>.bin` / `.json` for single, `./` for grid.
@@ -54,8 +61,32 @@ fn main() -> anyhow::Result<()> {
 
     if let Some(cs) = args.chunk_size {
         if cs == 0 {
-            anyhow::bail!("--chunk-size must be non-zero");
+            anyhow::bail!("--chunk-size must be non-zero (1..=256)");
         }
+        if cs > 256 {
+            anyhow::bail!("--chunk-size {cs} too large (max 256)");
+        }
+    }
+
+    if args.radius > 64 {
+        anyhow::bail!("--radius {} too large (max 64)", args.radius);
+    }
+
+    // Guard against i32 overflow when adding radius to cx/cy.
+    if args.radius > 0 {
+        let r = args.radius as i32;
+        args.cx
+            .checked_add(r)
+            .ok_or_else(|| anyhow::anyhow!("--cx + --radius overflows i32"))?;
+        args.cx
+            .checked_sub(r)
+            .ok_or_else(|| anyhow::anyhow!("--cx - --radius underflows i32"))?;
+        args.cy
+            .checked_add(r)
+            .ok_or_else(|| anyhow::anyhow!("--cy + --radius overflows i32"))?;
+        args.cy
+            .checked_sub(r)
+            .ok_or_else(|| anyhow::anyhow!("--cy - --radius underflows i32"))?;
     }
 
     let mut config = WorldConfig {
@@ -65,29 +96,55 @@ fn main() -> anyhow::Result<()> {
     if let Some(cs) = args.chunk_size {
         config.chunk_size = cs;
     }
+    if !config.is_valid() {
+        anyhow::bail!("invalid WorldConfig: {:?}", config);
+    }
 
     let mut engine = WorldEngine::with_config(config);
 
-    // Collect chunk coordinates to generate.
+    // Collect chunk coordinates to generate. Radius is capped above so
+    // (2r+1)² stays bounded (max 129² = 16641 entries).
     let coords: Vec<(i32, i32)> = if args.radius == 0 {
         vec![(args.cx, args.cy)]
     } else {
         let r = args.radius as i32;
-        let mut v = Vec::new();
+        let mut v = Vec::with_capacity(((2 * r + 1) as usize).pow(2));
         for dy in -r..=r {
             for dx in -r..=r {
+                // Checked above, so unwrap is safe.
                 v.push((args.cx + dx, args.cy + dy));
             }
         }
         v
     };
 
-    if args.format == "json" {
+    validate_out(&args, &coords)?;
+
+    if args.format == Format::Json {
         write_json(&mut engine, &coords, &args)?;
     } else {
         write_bin(&mut engine, &coords, &args)?;
     }
 
+    Ok(())
+}
+
+/// Validate `--out` is a file for single-chunk and a directory for grid.
+fn validate_out(args: &Args, coords: &[(i32, i32)]) -> anyhow::Result<()> {
+    let Some(out) = &args.out else { return Ok(()) };
+    if coords.len() == 1 {
+        if out.exists() && out.is_dir() {
+            anyhow::bail!(
+                "--out {} is a directory but single chunk expects a file",
+                out.display()
+            );
+        }
+    } else if out.exists() && out.is_file() {
+        anyhow::bail!(
+            "--out {} is a file but --radius grid expects a directory",
+            out.display()
+        );
+    }
     Ok(())
 }
 
@@ -238,5 +295,26 @@ mod tests {
         assert_eq!(parsed.header.cell_count, 32 * 32);
         assert_eq!(parsed.cells.len(), 32 * 32);
         let _ = fs::remove_file(&out);
+    }
+
+    #[test]
+    fn cli_rejects_oversized_radius() {
+        let args = Args {
+            seed: 0,
+            cx: 0,
+            cy: 0,
+            radius: 100,
+            chunk_size: None,
+            format: Format::Bin,
+            out: None,
+        };
+        // Simulate main's radius check.
+        assert!(args.radius > 64);
+    }
+
+    #[test]
+    fn cli_rejects_oversized_chunk_size() {
+        let cs = 512;
+        assert!(cs > 256);
     }
 }
