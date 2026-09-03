@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-09-03
+
 ### Added
 
 - **`README.md` project summary**: added sections covering objectives, milestone
@@ -17,6 +19,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   buffers were generated at the old size, so they are cleared to prevent stale,
   differently-sized chunks from mixing with new output; the new size applies to
   the next `generate_chunk`. `set_chunk_size(0)` panics.
+- **FFI chunk buffer ownership & layout** (pre-Milestone 5): established the
+  memory contract that Milestone 5's C surface will rest on.
+  - `ChunkBuffer::into_raw_bytes` / `from_raw_bytes` leak and reclaim the packed
+    wire bytes across an FFI boundary with no allocator mismatch (returned
+    buffers are Rust-allocated and must be freed only via `urbix_chunk_free`).
+  - `src/ffi.rs` implements the thin C surface: `urbix_engine_create/destroy`,
+    `urbix_generate_chunk`, `urbix_chunk_free`, `urbix_get_zone`,
+    `urbix_set_draw_distance`, `urbix_set_chunk_size`. The buffer is returned by
+    value as `{ data, len }`; null handles/buffers are tolerated; a zero
+    `urbix_set_chunk_size` is a no-op at the C boundary (no panic across FFI).
+  - `include/urbix.h` is maintained by hand against `src/ffi.rs` (cbindgen is
+    still to be wired in `build.rs`), declaring the `repr(C)` records and
+    functions.
+  - `examples/basic_usage.c` is a real C consumer (with `_Static_assert`s on
+    the 32/40-byte layouts); `tests/ffi_basic.rs` round-trips a chunk from the
+    Rust side and compiles the C consumer with `cc` to prove the header stays
+    valid.
+
+### Changed
+
+- **`urbix_get_zone` uses `double` world coordinates**: `Urbix_Project.md` §2.4
+  now documents `double` (matching the f64 engine signature) instead of the old
+  `float` sketch, so the reference doc agrees with the implementation and stays
+  precise over the engine's wide coordinate span.
 
 ## [0.4.0] — 2026-09-03
 

@@ -248,6 +248,43 @@ impl ChunkBuffer {
         &self.data
     }
 
+    /// Leak the buffer's bytes into a raw `(data, len)` pair for hand-off
+    /// across an FFI boundary.
+    ///
+    /// The returned buffer lives in the Rust allocator and must be reclaimed
+    /// with [`from_raw_bytes`](Self::from_raw_bytes) (or the FFI
+    /// `urbix_chunk_free`) — never freed by a foreign allocator. Length is the
+    /// full on-wire size (header + cells).
+    #[must_use]
+    pub fn into_raw_bytes(self) -> (*mut u8, usize) {
+        // `Vec -> Box<[u8]>` guarantees a slice whose total size is exactly
+        // len bytes with no spare capacity, so reclaiming it later only needs
+        // the (ptr, len) we return — no capacity bookkeeping to smuggle across
+        // the boundary.
+        let boxed: Box<[u8]> = self.data.into_boxed_slice();
+        let fat = Box::into_raw(boxed); // *mut [u8]
+        let len = fat.len();
+        (fat.cast::<u8>(), len)
+    }
+
+    /// Claim back a buffer that was leaked by [`into_raw_bytes`](Self::into_raw_bytes).
+    ///
+    /// # Safety
+    ///
+    /// `ptr`/`len` must come from a single unmatched `into_raw_bytes` call;
+    /// calling this twice on the same pointer (or with an unrelated pointer) is
+    /// double-free / undefined behaviour.
+    #[must_use]
+    pub unsafe fn from_raw_bytes(ptr: *mut u8, len: usize) -> Self {
+        // Rebuild the exact boxed slice and hand it back to the Vec it came from.
+        let fat = std::ptr::slice_from_raw_parts_mut(ptr, len);
+        // SAFETY: caller guarantees `ptr`/`len` came from `into_raw_bytes`.
+        let boxed: Box<[u8]> = Box::from_raw(fat);
+        Self {
+            data: boxed.into_vec(),
+        }
+    }
+
     /// Number of `Cell` records carried by this buffer.
     #[must_use]
     pub fn cell_count(&self) -> usize {
@@ -404,5 +441,22 @@ mod tests {
             interior_id: 0,
         };
         buf.set_cell(15, cell);
+    }
+
+    #[test]
+    fn raw_bytes_round_trip_preserves_content() {
+        let buf = ChunkBuffer::new(ChunkId::new(3, -7), 8, 99);
+        let expected = buf.as_bytes().to_vec();
+        let (ptr, len) = buf.into_raw_bytes();
+        assert_eq!(len, expected.len());
+        // Reclaim and confirm byte-for-byte identity.
+        // SAFETY: ptr/len come from the single unmatched into_raw_bytes call.
+        let reclaimed = unsafe { ChunkBuffer::from_raw_bytes(ptr, len) };
+        assert_eq!(reclaimed.as_bytes(), expected.as_slice());
+        assert_eq!(reclaimed.header().cell_count, 8 * 8);
+        // The reclaimed buffer is fully usable again.
+        let cell = reclaimed.get_cell(0);
+        assert_eq!(cell.zone_affinity, [0.0f32; ZONE_COUNT]);
+        assert_eq!(cell.height, 0.0);
     }
 }

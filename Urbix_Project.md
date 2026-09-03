@@ -120,8 +120,9 @@ void         urbix_engine_destroy(UrbixEngine* engine);
 UrbixChunkBuffer urbix_generate_chunk(UrbixEngine* e, int32_t cx, int32_t cy);
 void             urbix_chunk_free(UrbixChunkBuffer buf);
 
-// Zone query
-UrbixZoneAffinity urbix_get_zone(UrbixEngine* e, float wx, float wz);
+// Zone query — world coordinates are double (f64) to match the engine and
+// stay precise over the engine's wide (i64) coordinate span.
+UrbixZoneAffinity urbix_get_zone(UrbixEngine* e, double wx, double wz);
 
 // Configuration
 void urbix_set_draw_distance(UrbixEngine* e, uint32_t radius);
