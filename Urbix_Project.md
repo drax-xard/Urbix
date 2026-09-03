@@ -350,7 +350,7 @@ deterministically from `(cx, cy, seed)`.
 
 ---
 
-### Milestone 4 — Cache & Engine — ⬜ PENDING
+### Milestone 4 — Cache & Engine — ✅ DONE
 
 **Goal:** `WorldEngine` manages chunks with an LRU cache and exposes the
 public method surface.

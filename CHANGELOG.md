@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Milestone 4 — Cache & Engine**:
+  - `src/cache.rs`: `ChunkCache` — distance-based LRU cache for `ChunkBuffer`s
+    keyed by `ChunkId`. Evicts chunks whose Chebyshev distance from the
+    current center exceeds `draw_distance`. Optional hard capacity cap with
+    least-recently-used eviction among candidates. Tracks recency stamps for
+    O(1) touch.
+  - `src/engine.rs`: `WorldEngine` — stateful facade holding `WorldConfig`,
+    `VoronoiDiagram`, and `ChunkCache`. Methods: `generate_chunk(cx, cy)` (cache
+    hit → no recomputation; miss → generate, insert, auto-evict),
+    `get_zone_affinity(wx, wz)`, `set_draw_distance(dd)`, `set_center(cx, cy)`,
+    `evict_distant_chunks()`.
+  - 59 lib tests: cache insert/get, distance eviction, negative coords,
+    LRU ordering, engine cached reuse, draw-distance control, bounded memory
+    over a 1000-step walk, zone-affinity validity, custom config.
 - **2D city visualizer** (`examples/viz.rs`): renders a grid of generated
   chunks to an image so the engine's output can be eyeballed. One pixel per
   cell, with two colouring modes — hybrid (per-district zone hue brightened by
