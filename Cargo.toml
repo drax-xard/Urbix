@@ -1,6 +1,6 @@
 [package]
 name = "urbix"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2021"
 description = "A platform-agnostic and language-agnostic engine for generating an explorable, infinite procedural city"
 license = "MIT"
@@ -9,12 +9,16 @@ readme = "README.md"
 [lib]
 name = "urbix"
 path = "src/lib.rs"
+crate-type = ["lib", "staticlib", "cdylib"]
 
 [[bin]]
 name = "urbix"
 path = "src/main.rs"
 
 [dependencies]
+
+[build-dependencies]
+cbindgen = "0.29"
 
 # Dev-only: used by `examples/viz.rs` to write PNGs. Kept as a dev-dependency
 # so the library crate itself stays dependency-free; the PPM writer has no

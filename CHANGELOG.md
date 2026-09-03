@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-09-03
+
+### Added
+
+- **Auto-generated C header** (Milestone 5): `build.rs` now runs `cbindgen`
+  against `src/ffi.rs` to regenerate `include/urbix.h`, which is checked into
+  the repo. `cbindgen.toml` drives the export allow-list, maps `CellFlags` →
+  `uint8_t` and `InteriorId` → `uint64_t`, keeps only the needed `ZONE_COUNT`
+  constant, and appends `_Static_assert`s that pin the 32/40-byte layouts.
+- **`crate-type = ["lib", "staticlib", "cdylib"]`** (Milestone 5): the crate now
+  also emits a C static library (`liburbix.a`) and a dynamic library
+  (`liburbix.dylib`/`.so`), so the FFI surface is consumable by any C-compatible
+  host, not just Rust.
+- **C link-and-run integration test** (`tests/c_link_run.rs`, Milestone 5):
+  builds `examples/basic_usage.c`, links it against the `staticlib`, and runs it
+  end-to-end, proving the full ABI + ownership contract works from a real C
+  consumer (create → generate → read header/cells → validate → free → destroy).
+- **FFI fuzz test** (Milestone 5): a stochastic sequence of
+  create → generate → free → destroy through the raw FFI, run under the normal
+  Rust allocator so double-free, use-after-free, and leaks are caught before they
+  escape the boundary.
+
+### Changed
+
+- **Milestone 5 marked DONE** in `Urbix_Project.md` §7, including the updated
+  `cbindgen.toml` deliverable, memory-contract notes, and test list.
+
 ## [0.4.1] — 2026-09-03
 
 ### Added

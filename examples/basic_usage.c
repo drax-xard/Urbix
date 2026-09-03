@@ -3,8 +3,10 @@
  * Minimal C consumer that drives the engine through its FFI:
  * create -> generate a chunk -> read the header and a few cells -> free.
  *
- * Compile (Milestone 5 links this against the engine staticlib):
+ * Compile and link against the engine staticlib (see tests/c_link_run.rs):
  *   cc -I include -c examples/basic_usage.c -o /tmp/basic_usage.o
+ *   cc  /tmp/basic_usage.o -L target/<profile> -lurbix -framework Security \
+ *       -framework CoreFoundation -o /tmp/basic_usage
  *
  * The on-wire layout of UrbixChunkHeader / UrbixCell must match their
  * `repr(C)` Rust counterparts; see Urbix_Project.md §2.3.

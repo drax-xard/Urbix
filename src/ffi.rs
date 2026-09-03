@@ -23,7 +23,7 @@
 //!
 //! The public types (`UrbixEngine`, `UrbixChunkBuffer`, `UrbixZoneAffinity`)
 //! are `#[repr(C)]` so their layout is fixed and stable; `include/urbix.h` is
-//! the matching (cbindgen-generated, currently maintained by hand) header.
+//! generated from this module by `cbindgen` (`build.rs`).
 
 use std::ptr;
 
@@ -34,7 +34,8 @@ use crate::zones::ZONE_COUNT;
 /// Opaque handle to a [`WorldEngine`], owned by the caller.
 ///
 /// Never dereference from foreign code; pass it back to the FFI functions.
-#[repr(C)]
+/// Deliberately not `#[repr(C)]`: it is a zero-sized opaque marker whose layout
+/// is irrelevant, and cbindgen emits an opaque forward-declared typedef for it.
 pub struct UrbixEngine {
     _private: [u8; 0],
 }

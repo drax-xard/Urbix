@@ -6,9 +6,12 @@
 //! - [`urbix_engine_create`] / [`urbix_generate_chunk`] / [`urbix_chunk_free`]
 //!   / [`urbix_engine_destroy`] round-trip a chunk buffer with no leak of the
 //!   Rust allocation.
-//! - The manually-maintained `include/urbix.h` compiles as valid C against the
+//! - The cbindgen-generated `include/urbix.h` compiles as valid C against the
 //!   shipped example consumer (`examples/basic_usage.c`), which asserts the
 //!   expected `repr(C)` sizes and offsets (`_Static_assert`).
+//! - A stochastic fuzz sequence exercises the ownership contract under load.
+//!
+//! A full link-and-run test lives in `tests/c_link_run.rs`.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -52,8 +55,8 @@ fn ffi_chunk_round_trip_and_layout() {
 #[test]
 fn header_compiles_as_valid_c_via_cc() {
     // Compile the shipped C consumer (which _Static_asserts the layout) against
-    // the hand-maintained header. This catches header/C ABI drift without
-    // needing a staticlib link step (deferred to Milestone 5).
+    // the cbindgen-generated header. This catches header/C ABI drift cheaply;
+    // the full link-and-run equivalent is in tests/c_link_run.rs.
     let include = PathBuf::from(MANIFEST_DIR).join("include");
     let src = PathBuf::from(MANIFEST_DIR)
         .join("examples")
@@ -76,4 +79,107 @@ fn header_compiles_as_valid_c_via_cc() {
         status.success(),
         "C consumer failed to compile against include/urbix.h"
     );
+}
+
+/// M5 fuzz test: a long stochastic sequence of create -> generate -> free ->
+/// destroy through the raw FFI. Exercises the ownership contract under load:
+/// every returned buffer must be freed exactly once and every engine destroyed
+/// exactly once, with no double-free/use-after-free, no leaks, and no panics
+/// escaping the boundary. Runs under the normal Rust global allocator, so any
+/// double-free/leak would trip it.
+#[test]
+fn fuzz_create_generate_free_destroy() {
+    // Small deterministic LCG so the run is reproducible (not a security RNG).
+    let mut rng: u64 = 0x9E3779B97F4A7C15 ^ 445566;
+    let mut next = move || {
+        rng ^= rng << 13;
+        rng ^= rng >> 7;
+        rng ^= rng << 17;
+        rng
+    };
+
+    const ENGINES: usize = 16;
+    const ROUNDS: usize = 500;
+
+    // A scatter of live buffers per engine, each freed before the engine dies.
+    let mut live: [Vec<urbix::ffi::UrbixChunkBuffer>; ENGINES] = Default::default();
+    let mut engines: [*mut urbix::ffi::UrbixEngine; ENGINES] = [std::ptr::null_mut(); ENGINES];
+
+    for (i, slot) in engines.iter_mut().enumerate() {
+        // SAFETY: each engine allocated here and destroyed at the end.
+        let engine = urbix_engine_create(next() % 1_000_000);
+        assert!(!engine.is_null(), "engine {i} allocation failed");
+        *slot = engine;
+    }
+
+    for round in 0..ROUNDS {
+        let ei = (next() % ENGINES as u64) as usize;
+        let engine = engines[ei];
+
+        let action = next() % 4;
+        match action {
+            // Generate a chunk and hold it.
+            0 => {
+                // SAFETY: live engine.
+                let buf = unsafe {
+                    urbix_generate_chunk(
+                        engine,
+                        (next() % 33) as i32 - 16,
+                        (next() % 33) as i32 - 16,
+                    )
+                };
+                assert!(!buf.data.is_null(), "round {round}: null buffer");
+                assert!(buf.len >= 32, "round {round}: buffer too short");
+                // SAFETY: header is the leading 32 bytes of an owned buffer.
+                let hdr = unsafe {
+                    std::ptr::read_unaligned(buf.data.cast::<urbix::data::ChunkHeader>())
+                };
+                let expected = 32 + hdr.cell_count as usize * 40;
+                assert_eq!(buf.len as usize, expected, "round {round}: wire length");
+                live[ei].push(buf);
+            }
+            // Free a held buffer if any.
+            1 => {
+                if let Some(buf) = live[ei].pop() {
+                    // SAFETY: buf came from urbix_generate_chunk, freed once.
+                    unsafe { urbix_chunk_free(buf) };
+                }
+            }
+            // Destroy an engine and replace it (its held buffers die with it).
+            2 => {
+                for buf in live[ei].drain(..) {
+                    // SAFETY: each buf freed exactly once before engine death.
+                    unsafe { urbix_chunk_free(buf) };
+                }
+                // SAFETY: engine created above; replaced immediately after.
+                urbix_engine_destroy(engine);
+                engines[ei] = urbix_engine_create(next() % 1_000_000);
+                assert!(!engines[ei].is_null(), "round {round}: recreate failed");
+            }
+            // Zone query + a chunk round-trip (generate -> immediately free).
+            _ => {
+                // SAFETY: live engine.
+                let zone = unsafe { urbix::ffi::urbix_get_zone(engine, 3.5, -7.25) };
+                let sum: f32 = zone.weights.iter().sum();
+                assert!(
+                    (sum - 1.0).abs() < 1e-6,
+                    "round {round}: affinity sum {sum}"
+                );
+                // SAFETY: live engine; freed immediately below.
+                let buf = unsafe { urbix_generate_chunk(engine, 0, 0) };
+                // SAFETY: valid owned buffer, freed exactly once.
+                unsafe { urbix_chunk_free(buf) };
+            }
+        }
+    }
+
+    // Tear down: free every remaining buffer, then every engine.
+    for i in 0..ENGINES {
+        for buf in live[i].drain(..) {
+            // SAFETY: each buffer freed exactly once.
+            unsafe { urbix_chunk_free(buf) };
+        }
+        // SAFETY: every engine destroyed exactly once at end of life.
+        urbix_engine_destroy(engines[i]);
+    }
 }
