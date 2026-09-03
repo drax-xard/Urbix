@@ -14,9 +14,14 @@ use std::process::Command;
 const MANIFEST_DIR: &str = env!("CARGO_MANIFEST_DIR");
 
 fn staticlib_path() -> PathBuf {
-    // Cargo exposes the current build profile (debug/release). The staticlib is
-    // produced alongside the rlib in the same profile's target directory.
-    let profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
+    // `PROFILE` is only set for build scripts, not for test processes. Use
+    // `cfg(debug_assertions)` which is set at compile time from the active
+    // profile (debug = true, release = false).
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
     let target_dir = std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| {
         PathBuf::from(MANIFEST_DIR)
             .join("target")
@@ -73,9 +78,12 @@ fn c_consumer_compiles_links_and_runs() {
         .arg("-o")
         .arg(&bin);
     // Rust std on macOS pulls in system frameworks via the rust driver; when
-    // linking from plain `cc` we must supply them explicitly.
+    // linking from plain `cc` we must supply them explicitly. On Linux the
+    // staticlib needs libdl/libm/pthread.
     #[cfg(target_os = "macos")]
     link.args(["-framework", "Security", "-framework", "CoreFoundation"]);
+    #[cfg(target_os = "linux")]
+    link.args(["-ldl", "-lm", "-pthread"]);
     #[cfg(target_os = "windows")]
     link.args(["-lws2_32", "-luserenv"]);
 

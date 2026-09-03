@@ -10,14 +10,8 @@ header = """\
  *
  * See Urbix_Project.md §2.3 (wire format) and §2.4 (FFI surface). */"""
 
-# Content inserted after auto-generated declarations.
-trailer = """\
-
-/* ---- Compile-time layout checks ---------------------------------------- */
-_Static_assert(sizeof(UrbixChunkHeader) == 32, "UrbixChunkHeader must be 32 bytes");
-_Static_assert(sizeof(UrbixCell) == 40,      "UrbixCell must be 40 bytes");
-_Static_assert(_Alignof(UrbixChunkHeader) == 8, "UrbixChunkHeader must be 8-byte aligned");
-_Static_assert(_Alignof(UrbixCell) == 8,       "UrbixCell must be 8-byte aligned");"""
+# Trailer is injected by build.rs *inside* the include guard (see build.rs);
+# cbindgen's `trailer` would land after `#endif`, so it is kept empty here.
 
 [export]
 # Only these types are exported; everything else is hidden from the header.

@@ -217,11 +217,13 @@ void urbix_set_draw_distance(struct UrbixEngine *engine, uint32_t radius);
  * `engine` must be a valid, non-null handle from [`urbix_engine_create`].
  */
 void urbix_set_chunk_size(struct UrbixEngine *engine, uint16_t size);
+/* ---- Compatibility shims for old manual header ---- */
+#define URBIX_FLAG_STREET CellFlags_IS_STREET
+#define URBIX_FLAG_PARK CellFlags_IS_PARK
 
-#endif  /* URBIX_H */
-
-/* ---- Compile-time layout checks ---------------------------------------- */
+/* ---- Compile-time layout checks (inside include guard) ---- */
 _Static_assert(sizeof(UrbixChunkHeader) == 32, "UrbixChunkHeader must be 32 bytes");
 _Static_assert(sizeof(UrbixCell) == 40,      "UrbixCell must be 40 bytes");
 _Static_assert(_Alignof(UrbixChunkHeader) == 8, "UrbixChunkHeader must be 8-byte aligned");
 _Static_assert(_Alignof(UrbixCell) == 8,       "UrbixCell must be 8-byte aligned");
+#endif  /* URBIX_H */

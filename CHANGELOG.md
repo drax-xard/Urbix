@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-09-03
+
+### Fixed
+
+- **`tests/c_link_run.rs` profile & Linux portability**: replaced the fragile
+  `std::env::var("PROFILE")`/`CARGO_TARGET_DIR` lookup with
+  `cfg(debug_assertions)` and added `linux` link args (`-ldl -lm -pthread`) so
+  the C link-and-run test is robust on clean `cargo test --release` and on
+  Linux CI, not just macOS.
+- **`include/urbix.h` include-guard**: `build.rs` now injects the
+  `_Static_assert` layout checks and the `URBIX_FLAG_STREET`/`URBIX_FLAG_PARK`
+  compat shims *inside* `#ifndef URBIX_H` (cbindgen's `trailer` lands after the
+  guard). Double-inclusion is now correct and old C consumers keep building.
+- **`build.rs` robustness**: uses absolute `crate_dir`-joined paths for
+  `cbindgen.toml`/`include/urbix.h`, is idempotent on re-runs, and is
+  best-effort — on config/generation failure it emits `cargo:warning` and keeps
+  the checked-in header instead of hard-failing (offline/vendored builds).
+
 ## [0.5.0] — 2026-09-03
 
 ### Added

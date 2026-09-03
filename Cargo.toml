@@ -1,6 +1,6 @@
 [package]
 name = "urbix"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 description = "A platform-agnostic and language-agnostic engine for generating an explorable, infinite procedural city"
 license = "MIT"
@@ -17,6 +17,10 @@ path = "src/main.rs"
 
 [dependencies]
 
+# Build-time: regenerates `include/urbix.h` from `src/ffi.rs`/`src/data.rs`.
+# The checked-in header is always usable; `build.rs` is best-effort and emits
+# `cargo:warning` instead of failing if generation is unavailable (offline /
+# vendored builds without network). Kept pinned to 0.29.x.
 [build-dependencies]
 cbindgen = "0.29"
 
