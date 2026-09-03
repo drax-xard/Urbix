@@ -57,6 +57,15 @@ pub mod domain {
 /// `domain` is an extra byte separating distinct *uses* of the hash (heights,
 /// palettes, interior ids, ...). Changing any one of them scrambles the output.
 ///
+/// ## Coordinates are 64-bit
+///
+/// `x`/`y` are `i64` because the city is infinite: a 32-bit cell coordinate
+/// would overflow once a player wanders beyond ~2^26 chunks, corrupting the
+/// hash (and crashing in debug builds). Using `i64` keeps generation correct
+/// across the entire reachable world. For an `i32`-range value, the output is
+/// byte-for-byte identical to the old `i32` signature (both sign-extend the
+/// value into `u64`), so widening breaks no existing determinism.
+///
 /// ## Determinism
 ///
 /// This function is pure and deterministic: the same arguments always yield
@@ -74,16 +83,16 @@ pub mod domain {
 /// assert_ne!(hash_coords(3, 7, 445566, 1), hash_coords(3, 7, 445566, 2));
 /// ```
 #[must_use]
-pub fn hash_coords(x: i32, y: i32, seed: u64, domain: u8) -> u64 {
+pub fn hash_coords(x: i64, y: i64, seed: u64, domain: u8) -> u64 {
     // Fold every input into a single 64-bit accumulator. Each field is
     // multiplied by a distinct odd constant so that small changes (a single
     // coordinate step, a different domain) spread across the whole value.
-    // The coordinate casts to i64-as-u64 preserve sign so negative chunks
-    // (west/south of origin) hash differently from positive ones.
+    // The coordinate cast to u64 preserves sign so negative chunks (west/south
+    // of origin) hash differently from positive ones.
     let mut acc = seed
         ^ (domain as u64).wrapping_mul(0x6a09_e667_f3bc_c909)
-        ^ (x as i64 as u64).wrapping_mul(0xbf58_476d_1ce4_e5b9)
-        ^ (y as i64 as u64).wrapping_mul(0x94d0_49bb_1331_11eb);
+        ^ (x as u64).wrapping_mul(0xbf58_476d_1ce4_e5b9)
+        ^ (y as u64).wrapping_mul(0x94d0_49bb_1331_11eb);
 
     // SplitMix64 finalizer: a sequence of xor-shift and multiply steps
     // avalanche the state so the output's low bits depend on all input bits.
@@ -111,7 +120,7 @@ pub fn hash_coords(x: i32, y: i32, seed: u64, domain: u8) -> u64 {
 /// assert_eq!(t, hash_unit(3, 7, 445566, 1));
 /// ```
 #[must_use]
-pub fn hash_unit(x: i32, y: i32, seed: u64, domain: u8) -> f32 {
+pub fn hash_unit(x: i64, y: i64, seed: u64, domain: u8) -> f32 {
     // Take the high 24 bits of the mix to get a decently-spread f32 in [0,1).
     // Dividing by 2^24 keeps the result strictly below 1.0.
     (hash_coords(x, y, seed, domain) >> 40) as f32 / (1u32 << 24) as f32
@@ -126,8 +135,8 @@ mod tests {
         assert_eq!(hash_coords(3, 7, 445566, 1), hash_coords(3, 7, 445566, 1));
         assert_eq!(hash_coords(-5, 12, 99, 0), hash_coords(-5, 12, 99, 0));
         assert_eq!(
-            hash_coords(i32::MAX, i32::MIN, u64::MAX, 255),
-            hash_coords(i32::MAX, i32::MIN, u64::MAX, 255)
+            hash_coords(i64::MAX, i64::MIN, u64::MAX, 255),
+            hash_coords(i64::MAX, i64::MIN, u64::MAX, 255)
         );
     }
 
@@ -162,5 +171,49 @@ mod tests {
         // as a theoretical possibility, we just check a few common cases).
         assert_ne!(hash_coords(0, 0, 0, 0), 0);
         assert_ne!(hash_coords(1, 1, 1, 1), 0);
+    }
+
+    #[test]
+    fn i32_range_values_match_legacy_sign_extension() {
+        // Widening from i32 to i64 must not change the result for values that
+        // fit in i32: the legacy path folded `x as i64 as u64` (sign-extend),
+        // which is byte-identical to folding `x as u64` on the i64 arg. Rebuild
+        // the legacy i32 formula here and require an exact match as a
+        // regression guard for the documented backward-compat guarantee.
+        fn legacy32(x: i32, y: i32, s: u64, d: u8) -> u64 {
+            let c1 = 0x6a09_e667_f3bc_c909u64;
+            let c2 = 0xbf58_476d_1ce4_e5b9u64;
+            let c3 = 0x94d0_49bb_1331_11ebu64;
+            let g = 0x9e37_79b9_7f4a_7c15u64;
+            let mut acc = s
+                ^ (d as u64).wrapping_mul(c1)
+                ^ (x as i64 as u64).wrapping_mul(c2)
+                ^ (y as i64 as u64).wrapping_mul(c3);
+            acc = acc.wrapping_add(g);
+            acc = (acc ^ (acc >> 30)).wrapping_mul(c2);
+            acc = (acc ^ (acc >> 27)).wrapping_mul(c3);
+            acc ^ (acc >> 31)
+        }
+        for (x, y, s, d) in [
+            (0, 0, 0, 0),
+            (3, -7, 445566, 1),
+            (-45, 200, 99, 5),
+            (i32::MIN, i32::MAX, u64::MAX, 9),
+        ] {
+            assert_eq!(hash_coords(x as i64, y as i64, s, d), legacy32(x, y, s, d));
+        }
+    }
+
+    #[test]
+    fn wide_coordinates_do_not_collapse() {
+        // Very large coordinates (beyond the old i32 range) still produce
+        // varied, deterministic output rather than wrapping into collisions.
+        let a = hash_coords(1i64 << 40, 0, 7, 2);
+        let b = hash_coords((1i64 << 40) + 1, 0, 7, 2);
+        assert_ne!(a, b);
+        assert_ne!(
+            hash_coords(i64::MIN, 0, 7, 2),
+            hash_coords(i64::MAX, 0, 7, 2)
+        );
     }
 }

@@ -225,10 +225,20 @@ impl ChunkBuffer {
     }
 
     /// Decode the on-wire header from the buffer's leading bytes.
+    ///
+    /// ## Panics
+    ///
+    /// Panics if the buffer holds fewer bytes than a `ChunkHeader` (a defensive
+    /// guard against malformed buffers, e.g. over FFI).
     #[must_use]
     pub fn header(&self) -> ChunkHeader {
-        debug_assert!(self.data.len() >= size_of::<ChunkHeader>());
-        // SAFETY: buffer always starts with a valid header written by `new`.
+        assert!(
+            self.data.len() >= size_of::<ChunkHeader>(),
+            "buffer shorter than a ChunkHeader (len {})",
+            self.data.len()
+        );
+        // SAFETY: length checked above; the read is unaligned so it stays valid
+        // regardless of allocation alignment. The header was written by `new`.
         unsafe { std::ptr::read_unaligned(self.data.as_ptr() as *const ChunkHeader) }
     }
 
@@ -253,15 +263,21 @@ impl ChunkBuffer {
     ///
     /// ## Panics
     ///
-    /// Panics if `index >= cell_count()`.
+    /// Panics if `index >= cell_count()`, or if the buffer's actual byte
+    /// length is inconsistent with the header (a defensive guard against
+    /// malformed buffers handed in from outside, e.g. over FFI).
     #[must_use]
     pub fn get_cell(&self, index: usize) -> Cell {
         assert!(index < self.cell_count(), "cell index out of range");
         let off = self.cell_region_offset() + index * size_of::<Cell>();
-        // SAFETY: the buffer always holds exactly cell_count * 40 bytes of
-        // cells after a 32-byte header, so [off, off+40) is in bounds. The
-        // read is unaligned so it stays valid regardless of allocation
-        // alignment.
+        let end = off + size_of::<Cell>();
+        assert!(
+            end <= self.data.len(),
+            "buffer is shorter than its header claims (off {off}, len {})",
+            self.data.len()
+        );
+        // SAFETY: bounds checked above; the read is unaligned so it stays valid
+        // regardless of allocation alignment.
         unsafe { std::ptr::read_unaligned(self.data.as_ptr().add(off) as *const Cell) }
     }
 
@@ -269,13 +285,21 @@ impl ChunkBuffer {
     ///
     /// ## Panics
     ///
-    /// Panics if `index >= cell_count()`.
+    /// Panics if `index >= cell_count()`, or if the buffer's actual byte
+    /// length is inconsistent with the header (a defensive guard against
+    /// malformed buffers handed in from outside, e.g. over FFI).
     pub fn set_cell(&mut self, index: usize, cell: Cell) {
         assert!(index < self.cell_count(), "cell index out of range");
         let off = self.cell_region_offset() + index * size_of::<Cell>();
-        // SAFETY: in-bounds as in `get_cell`; written unaligned so it is valid
-        // for any allocation alignment. `Cell` is POD and contains no
-        // references, so copying its bytes is safe.
+        let end = off + size_of::<Cell>();
+        assert!(
+            end <= self.data.len(),
+            "buffer is shorter than its header claims (off {off}, len {})",
+            self.data.len()
+        );
+        // SAFETY: bounds checked above; written unaligned so it is valid for
+        // any allocation alignment. `Cell` is POD and contains no references,
+        // so copying its bytes is safe.
         unsafe {
             std::ptr::write_unaligned(self.data.as_mut_ptr().add(off) as *mut Cell, cell);
         }
@@ -354,5 +378,31 @@ mod tests {
         assert_eq!(buf.get_cell(1).height, 0.0);
         assert_eq!(buf.cell_count(), 4);
         assert_eq!(buf.cells().count(), 4);
+    }
+
+    #[test]
+    #[should_panic(expected = "shorter")]
+    fn get_cell_rejects_truncated_buffer() {
+        let mut buf = ChunkBuffer::new(ChunkId::new(0, 0), 4, 42);
+        // Shrink the backing vec so the header's cell_count (16) no longer
+        // matches the actual bytes held — the accessor must refuse to read OOB.
+        buf.data.truncate(size_of::<ChunkHeader>() + 40);
+        let _ = buf.get_cell(15);
+    }
+
+    #[test]
+    #[should_panic(expected = "shorter")]
+    fn set_cell_rejects_truncated_buffer() {
+        let mut buf = ChunkBuffer::new(ChunkId::new(0, 0), 4, 42);
+        buf.data.truncate(size_of::<ChunkHeader>() + 40);
+        let cell = Cell {
+            height: 1.0,
+            zone_affinity: [0.0; ZONE_COUNT],
+            palette_id: 0,
+            flags: CellFlags::NONE,
+            _pad: 0,
+            interior_id: 0,
+        };
+        buf.set_cell(15, cell);
     }
 }

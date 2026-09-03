@@ -191,10 +191,16 @@ impl ChunkCache {
 }
 
 /// Chebyshev distance between two `ChunkId`s.
+///
+/// The component differences are computed in `i64` so that two chunk
+/// coordinates at the extremes of the `i32` range (e.g. `i32::MIN` and
+/// `i32::MAX`) produce their true ~4.29b distance instead of overflowing and
+/// (in debug builds) panicking.
 fn chebyshev(a: &ChunkId, b: &ChunkId) -> u32 {
-    let dx = (a.cx - b.cx).unsigned_abs();
-    let dy = (a.cy - b.cy).unsigned_abs();
-    dx.max(dy)
+    let dx = i64::from(a.cx).abs_diff(i64::from(b.cx));
+    let dy = i64::from(a.cy).abs_diff(i64::from(b.cy));
+    // Max possible |delta| across i32 is 2^32-1, which fits in u32.
+    dx.max(dy) as u32
 }
 
 #[cfg(test)]
@@ -309,5 +315,18 @@ mod tests {
         assert_eq!(chebyshev(&b, &a), 5);
         // Same point.
         assert_eq!(chebyshev(&ChunkId::new(7, -3), &ChunkId::new(7, -3)), 0);
+        // Extremes of the i32 range: the true span (2^32-1) must not overflow.
+        assert_eq!(
+            chebyshev(&ChunkId::new(i32::MIN, 0), &ChunkId::new(i32::MAX, 0)),
+            u32::MAX
+        );
+        // Mixed-sign extremes on both axes.
+        assert_eq!(
+            chebyshev(
+                &ChunkId::new(i32::MIN, i32::MIN),
+                &ChunkId::new(i32::MAX, i32::MAX)
+            ),
+            u32::MAX
+        );
     }
 }

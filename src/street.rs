@@ -48,8 +48,8 @@ use crate::zones::ZoneParams;
 /// assert!(!layout_block(1, 1, &params).contains(CellFlags::IS_STREET));
 /// ```
 #[must_use]
-pub fn layout_block(cell_x: i32, cell_y: i32, params: &ZoneParams) -> CellFlags {
-    let size = params.block_size.max(1) as i32;
+pub fn layout_block(cell_x: i64, cell_y: i64, params: &ZoneParams) -> CellFlags {
+    let size = i64::from(params.block_size.max(1));
     let on_vertical = cell_x.rem_euclid(size) == 0;
     let on_horizontal = cell_y.rem_euclid(size) == 0;
     if on_vertical || on_horizontal {

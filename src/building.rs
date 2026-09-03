@@ -50,7 +50,7 @@ use crate::zones::ZoneParams;
 /// # let _ = hash_unit(0, 0, 0, 0);
 /// ```
 #[must_use]
-pub fn assign_building(cell_x: i32, cell_y: i32, params: &ZoneParams, seed: u64) -> (f32, u8) {
+pub fn assign_building(cell_x: i64, cell_y: i64, params: &ZoneParams, seed: u64) -> (f32, u8) {
     // Density gate: hash a [0,1) roll for this cell; if it exceeds the zone's
     // density the lot stays empty. Distinct domain so it doesn't correlate
     // with the height or palette draws.

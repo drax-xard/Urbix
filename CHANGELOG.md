@@ -7,8 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-09-03
+
 ### Added
 
+- **`IS_PARK` wire flag now populated**: non-street cells whose Park district
+  affinity dominates (argmax of the affinity vector, ties toward lower index)
+  receive `CellFlags::IS_PARK`. Previously the flag was documented in the wire
+  format but never set, so downstream consumers could not distinguish parkland
+  from empty lots. Implementation in `chunk::generate_chunk`; a new `dominant_zone`
+  helper resolves the argmax deterministically.
 - **Milestone 4 — Cache & Engine**:
   - `src/cache.rs`: `ChunkCache` — distance-based LRU cache for `ChunkBuffer`s
     keyed by `ChunkId`. Evicts chunks whose Chebyshev distance from the
@@ -31,6 +39,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with just the `png` feature, so the library stays dependency-free). Flags:
   `--seed`, `--center-cx`, `--center-cy`, `--extent`, `--chunk-size`, `--mode`,
   `--out`.
+
+### Fixed
+
+- **Coordinate overflow (Milestone 3)**: internals that folded world coordinates
+  through the pre-hash widen (`hash_coords`/`hash_unit`), per-cell generators
+  (`street::layout_block`, `building::assign_building`), and `generate_chunk`'s
+  world-cell computation (`cx * chunk_size + local`) now operate on `i64`.
+  Previously, an infinite city could overflow `i32` at `|cx| >= 2^26`, panicking
+  in debug builds and wrapping in release. Hashes are byte-identical for
+  coordinates within the old `i32` range (sign-extension), so no existing city
+  data changes.
+- **Chunk distance overflow (Milestone 4)**: `ChunkCache::chebyshev` computed
+  component differences in `i32`, which underflowed for opposite-sign extremes
+  (e.g. `i32::MIN` vs `i32::MAX`). Differences are now computed in `i64`, so the
+  true ~4.3B distance is reported instead of a panic/wrap.
+- **Malformed-buffer hardening (Milestone 1, pre-FFI)**: `ChunkBuffer`'s
+  `header()`/`get_cell()`/`set_cell()` now validate the backing buffer's actual
+  byte length against the header's `cell_count` before reading/writing, instead
+  of trusting the header blindly. Important groundwork for the Milestone 5 FFI
+  surface where buffers may be constructed off-`#[repr(C)]` data.
 
 ## [0.3.0] — 2026-09-02
 

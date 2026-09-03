@@ -88,10 +88,11 @@ impl VoronoiDiagram {
         let sites = (0..site_count)
             .map(|i| {
                 let idx = i as u64;
-                // Independent deterministic samples for x and y.
-                let xh = hash_coords(idx as i32, 0, seed, domain::SITE_X);
-                let yh = hash_coords(idx as i32, 0, seed, domain::SITE_Y);
-                let zh = hash_coords(idx as i32, 0, seed, domain::SITE_ZONE);
+                // Independent deterministic samples for x and y. The index is
+                // tiny, so the i64 coordinate is just the site's ordinal.
+                let xh = hash_coords(idx as i64, 0, seed, domain::SITE_X);
+                let yh = hash_coords(idx as i64, 0, seed, domain::SITE_Y);
+                let zh = hash_coords(idx as i64, 0, seed, domain::SITE_ZONE);
                 VoronoiSite {
                     x: to_span(xh),
                     y: to_span(yh),

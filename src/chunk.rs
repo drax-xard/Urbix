@@ -31,7 +31,7 @@ use crate::data::{Cell, CellFlags, ChunkBuffer, ChunkId, InteriorId};
 use crate::hash::{domain, hash_coords};
 use crate::region::VoronoiDiagram;
 use crate::street;
-use crate::zones::zone_params;
+use crate::zones::{zone_params, ZoneType};
 
 /// Generate the full contents of one chunk deterministically.
 ///
@@ -61,7 +61,7 @@ pub fn generate_chunk(
     config: &WorldConfig,
     voronoi: &VoronoiDiagram,
 ) -> ChunkBuffer {
-    let chunk_size = i32::from(config.chunk_size);
+    let chunk_size = i64::from(config.chunk_size);
     let seed = config.seed;
     let mut buf = ChunkBuffer::new(ChunkId::new(cx, cy), config.chunk_size, seed);
 
@@ -70,14 +70,25 @@ pub fn generate_chunk(
         for local_x in 0..chunk_size {
             // Absolute world cell coordinates: stable across chunks, so the
             // generated cell at a given world position never changes.
-            let world_x = cx * chunk_size + local_x;
-            let world_z = cy * chunk_size + local_y;
+            // Computed in i64 so large chunk indices cannot overflow (the city
+            // is infinite; cx*chunk_size + local would overflow i32).
+            let world_x = i64::from(cx) * chunk_size + local_x;
+            let world_z = i64::from(cy) * chunk_size + local_y;
 
-            let affinity = voronoi.query(f64::from(world_x), f64::from(world_z));
+            let affinity = voronoi.query(world_x as f64, world_z as f64);
             let params = zone_params(&affinity);
 
             // Streets first; a street cell never becomes a building.
-            let flags = street::layout_block(world_x, world_z, &params);
+            let mut flags = street::layout_block(world_x, world_z, &params);
+
+            // A cell dominated by the Park district (and not a street) is
+            // flagged as greenery, giving the public `IS_PARK` wire flag real
+            // meaning instead of remaining a never-set constant.
+            if !flags.contains(CellFlags::IS_STREET)
+                && dominant_zone(&affinity) == crate::zones::ZoneType::Park
+            {
+                flags = flags.insert(CellFlags::IS_PARK);
+            }
 
             let mut cell = Cell {
                 height: 0.0,
@@ -113,8 +124,26 @@ pub fn generate_chunk(
 /// `0` means "no interior", so built cells (height > 0) always take a nonzero
 /// key. Uses a distinct hash domain so the id does not correlate with height
 /// or palette draws.
-fn interior_id_for(world_x: i32, world_z: i32, seed: u64) -> InteriorId {
+fn interior_id_for(world_x: i64, world_z: i64, seed: u64) -> InteriorId {
     hash_coords(world_x, world_z, seed, domain::INTERIOR)
+}
+
+/// The zone with the highest affinity for a cell.
+///
+/// Ties resolve toward the lower variant index, so it is deterministic and
+/// matches `examples/viz.rs`'s notion of the dominant zone. Returns [`ZoneType`]
+/// rather than an index so callers get a type-checked answer.
+fn dominant_zone(affinity: &[f32; crate::zones::ZONE_COUNT]) -> ZoneType {
+    let mut best = ZoneType::Downtown;
+    let mut best_w = affinity[best as usize];
+    for zone in ZoneType::all().into_iter().skip(1) {
+        let w = affinity[zone as usize];
+        if w > best_w {
+            best = zone;
+            best_w = w;
+        }
+    }
+    best
 }
 
 #[cfg(test)]
@@ -190,14 +219,14 @@ mod tests {
         // never of which chunk generated it. Recompute each cell's street
         // status from the same continuous zone params and require a match.
         let (cfg, voronoi) = fixture();
-        let n = i32::from(cfg.chunk_size);
+        let n = i64::from(cfg.chunk_size);
         for (cx, cy) in [(0, 0), (1, 0), (0, 1), (-1, -1)] {
             let buf = generate_chunk(cx, cy, &cfg, &voronoi);
             let mut index = 0;
             for local_y in 0..n {
                 for local_x in 0..n {
-                    let wx = cx * n + local_x;
-                    let wz = cy * n + local_y;
+                    let wx = i64::from(cx) * n + local_x;
+                    let wz = i64::from(cy) * n + local_y;
                     let cell = buf.get_cell(index);
                     let expected = crate::street::layout_block(
                         wx,
@@ -263,5 +292,48 @@ mod tests {
             downtown_mean > residential_mean,
             "downtown ({downtown_mean}) not taller than residential ({residential_mean})"
         );
+    }
+
+    #[test]
+    fn park_dominated_cells_are_flagged() {
+        // The `IS_PARK` flag must be set exactly on non-street cells whose Park
+        // affinity (index 4) dominates, and must never be set elsewhere.
+        let cfg = WorldConfig {
+            seed: 445566,
+            voronoi_site_count: 24,
+            ..Default::default()
+        };
+        let voronoi = VoronoiDiagram::generate(cfg.seed, cfg.voronoi_site_count);
+        const SPREAD: [i32; 9] = [-300, -150, -60, -20, 0, 20, 60, 150, 300];
+
+        let mut park_cells = 0usize;
+        let mut flagged = 0usize;
+        for &cx in &SPREAD {
+            for &cy in &SPREAD {
+                let buf = generate_chunk(cx, cy, &cfg, &voronoi);
+                for cell in buf.cells() {
+                    // Use the same dominance rule as `generate_chunk`.
+                    let is_park = dominant_zone(&cell.zone_affinity) == ZoneType::Park;
+                    let is_street = cell.flags.contains(CellFlags::IS_STREET);
+                    let has_flag = cell.flags.contains(CellFlags::IS_PARK);
+                    if is_park {
+                        park_cells += 1;
+                        assert_eq!(
+                            has_flag, !is_street,
+                            "park flag wrong at street={is_street}"
+                        );
+                        if has_flag {
+                            flagged += 1;
+                        }
+                    } else {
+                        assert!(!has_flag, "IS_PARK set on non-park-dominant cell");
+                    }
+                }
+            }
+        }
+        // The sample must actually contain park-dominant cells, and at least
+        // one must be flagged (streets in parks genuinely stay unflagged).
+        assert!(park_cells > 0, "no park-dominant cells sampled");
+        assert!(flagged > 0, "no IS_PARK flag was ever set");
     }
 }
