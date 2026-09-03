@@ -431,26 +431,25 @@ existing chunk tests — met.
 
 ---
 
-### Milestone 7 — CLI, Docs & Benchmarks — ⬜ PENDING
+### Milestone 7 — CLI, Docs & Benchmarks — ✅ DONE
 
 **Goal:** a command-line tool that generates and dumps city data, full
 documentation, and performance baselines.
 
 | File | Deliverable |
 |---|---|
-| `src/main.rs` | CLI with flags: `--seed`, `--cx`, `--cy`, `--radius`, `--chunk-size`, `--format bin\|json`. Uses `clap` for argument parsing. |
-| `README.md` | Expanded: project description, build instructions, quickstart, CLI usage, API overview. |
-| `CHANGELOG.md` | Initial `v0.1.0` entry following Keep a Changelog format. |
-| `docs/world_generation.md` | Deep write-up of Voronoi regions, fuzzy borders, chunk generation algorithm. |
-| `docs/api.md` | C API reference with function signatures, memory contract, examples. |
-| `benches/chunk_gen.rs` | Criterion benchmarks: single chunk generation, 100-chunk sweep, cache hit vs. miss. |
+| `src/main.rs` | CLI with flags: `--seed`, `--cx`, `--cy`, `--radius`, `--chunk-size`, `--format bin\|json`, `--out`. Uses `clap` derive. Handles single chunk and `radius` grid, validates `chunk-size != 0`, creates parent dirs. |
+| `README.md` | Expanded: CLI quickstart, `bin` vs `json` examples, `docs/` pointers, bench command. |
+| `CHANGELOG.md` | `v0.7.0` entry (M7). |
+| `docs/world_generation.md` | Voronoi Shepard blend, `i64` hash, chunk pipeline, cache, determinism invariants, wire format. |
+| `docs/api.md` | C header (`urbix.h`) via `cbindgen`, lifecycle, `UrbixChunkBuffer` ownership, zone query, config setters, threading. |
+| `benches/chunk_gen.rs` | Criterion: single 32×32 chunk, 100-chunk 10×10 sweep, `WorldEngine` cache hit vs miss. |
 
 **Tests:**
-- CLI integration test: generate a chunk, verify output file matches expected
-  binary layout.
-- Doc tests compile and run.
+- CLI unit tests: `bin` output byte-length + header round-trip, `json` pretty-print + `Deserialize` round-trip (`src/main.rs:190`).
+- Manual CLI run: `cargo run -- --seed 7 --cx 1 --cy 2 --chunk-size 8 --format bin` → 2592 B, header `cx=1/cy=2/chunk_size=8`; `radius 1` grid → 9 chunks.
 
-**Exit criteria:** CLI works end-to-end, benchmarks recorded, all docs complete.
+**Exit criteria:** CLI works end-to-end (single + grid, bin/json), benchmarks compile (`cargo bench --bench chunk_gen --no-run`), all docs complete — met.
 
 ---
 

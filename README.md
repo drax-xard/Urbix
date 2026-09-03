@@ -32,7 +32,7 @@ The full design lives in [`Urbix_Project.md`](Urbix_Project.md); in short:
 ## Status
 
 Tracked milestone-by-milestone in `Urbix_Project.md` §7 (✅ done / ⬜ pending).
-Current version: `0.6.0` (see `CHANGELOG.md`).
+Current version: `0.7.0` (see `CHANGELOG.md`).
 
 | Milestone | Status |
 |---|---|
@@ -42,7 +42,7 @@ Current version: `0.6.0` (see `CHANGELOG.md`).
 | M4 — Cache & engine facade | ✅ Done (0.4.0) |
 | M5 — FFI & binary wire format | ✅ Done (0.5.0, audit 0.5.1) |
 | M6 — Interior hooks | ✅ Done (0.6.0) |
-| M7 — CLI, docs & benchmarks | ⬜ Pending |
+| M7 — CLI, docs & benchmarks | ✅ Done (0.7.0) |
 
 Each chunk is produced by: querying the continuous Voronoi zone field at the
 cell's absolute world coordinates → resolving blended zone parameters → laying
@@ -72,8 +72,9 @@ then packing the results into flat `#[repr(C)]` cell records.
   `URBIX_FLAG_STREET`/`URBIX_FLAG_PARK` are preserved.
 - **Bounded memory.** `ChunkCache` keeps chunks keyed by `ChunkId` and evicts
   by Chebyshev distance from the current center, with an optional hard capacity.
-- **Dependency-free library.** The core crate has no runtime dependencies;
-  the only external crate (`image`) is dev-only and used by the visualizer.
+- **Lean dependencies.** Core generation is `hash` + `zones` + `region` with no
+  heavy deps; `clap`/`serde` power the CLI, `criterion`/`image` are dev-only
+  (benchmarks/visualizer).
 
 ## Visualizer
 
@@ -92,7 +93,7 @@ P6 PPM (`.ppm`) and a PNG (`.png`). Run with `--help` for the full flag list.
 
 ## Usage
 
-The library is in early development (currently `0.6.0`); the public surface is
+The library is in early development (currently `0.7.0`); the public surface is
 `WorldEngine` in Rust and the C ABI in `include/urbix.h` (see
 `Urbix_Project.md` §2.3-2.4 for the wire format):
 
@@ -107,7 +108,25 @@ urbix_engine_destroy(e);
 
 `examples/basic_usage.c` is the minimal C consumer (compile with `cc -I include`
 and link against `target/{debug,release}/liburbix.a`). `examples/viz.rs` is the
-visualizer below; `examples/cli_demo.rs` remains a stub for the walk-grid demo.
+visualizer below.
+
+### CLI
+
+```sh
+# single chunk, binary wire format
+cargo run -- --seed 445566 --cx 0 --cy 0 --format bin --out chunk_0_0.bin
+# 5×5 grid around (0,0), JSON
+cargo run -- --seed 7 --cx 0 --cy 0 --radius 2 --format json --out ./out
+cargo run -- --help
+```
+
+Flags: `--seed` (u64), `--cx/--cy` (i32), `--radius` (u32, 0=single), `--chunk-size` (u16),
+`--format bin|json` (default `bin`), `--out` (file for single, dir for grid).
+Binary output is exactly `ChunkBuffer::as_bytes()` (header + cells) and can be
+read with `ChunkHeader`/`Cell` or via the FFI header.
+
+For deep dives see `docs/world_generation.md` (Voronoi/ chunk pipeline) and
+`docs/api.md` (C ABI + memory contract).
 
 ## Verification
 
@@ -116,6 +135,7 @@ cargo build --all-targets
 cargo test
 cargo clippy --all-targets
 cargo fmt --check
+cargo bench --bench chunk_gen  # criterion: single chunk, 100-sweep, cache hit/miss
 ```
 
 Note: Rust here is installed via rustup but not on the default `PATH`; source it

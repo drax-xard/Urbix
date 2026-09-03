@@ -25,6 +25,8 @@
 
 use std::mem::{align_of, offset_of, size_of};
 
+use serde::{Deserialize, Serialize};
+
 /// Number of zone-affinity weights stored per cell. Sourced from
 /// [`crate::zones::ZONE_COUNT`] so the wire format never drifts from the zone
 /// definition.
@@ -34,7 +36,7 @@ pub use crate::zones::ZONE_COUNT;
 ///
 /// `#[repr(C)]` and hashable so it can serve as both an FFI-visible record and
 /// an LRU-cache key.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(C)]
 pub struct ChunkId {
     /// Chunk column index.
@@ -71,7 +73,7 @@ pub type InteriorId = u64;
 /// Implemented as a small manual bitfield to avoid extra dependencies while
 /// staying `#[repr(C)]`-friendly. A `CellFlags` value is opaque bits; use the
 /// `IS_*` constants and the `contains`/setters to read and write it.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(transparent)]
 pub struct CellFlags(u8);
 
@@ -109,7 +111,7 @@ impl CellFlags {
 /// Field order and padding match the C reference exactly so the struct can be
 /// written straight to the wire and read by foreign consumers. See
 /// `Urbix_Project.md` §2.3.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[repr(C)]
 pub struct Cell {
     /// Building height in world units; `0` for street/open cells.
@@ -144,7 +146,7 @@ const _: () = {
 };
 
 /// Header of a chunk buffer, matching the C reference layout.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[repr(C)]
 pub struct ChunkHeader {
     /// Chunk column index.

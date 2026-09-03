@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-09-03
+
+### Added
+
+- **CLI** (Milestone 7): `src/main.rs` now parses `clap` flags `--seed`,
+  `--cx`, `--cy`, `--radius`, `--chunk-size`, `--format bin|json`, `--out` and
+  drives `WorldEngine`. Single chunk writes one file (`chunk_<cx>_<cy>.bin`
+  / `.json` default), `radius` writes a `(2r+1)²` grid to a directory.
+  Binary output is raw `ChunkBuffer::as_bytes()`; JSON pretty-prints
+  `{header, cells}` via `serde` (`Cell`/`ChunkHeader` now `Serialize`/
+  `Deserialize`). Includes unit tests for bin layout + JSON round-trip.
+- **Documentation** (Milestone 7): `docs/world_generation.md` (Voronoi Shepard
+  blend, `i64` coordinates, chunk pipeline, cache, wire format) and
+  `docs/api.md` (C header via `cbindgen`, lifecycle, `UrbixChunkBuffer`
+  ownership, zone query, config).
+- **Benchmarks** (Milestone 7): `benches/chunk_gen.rs` criterion groups —
+  single 32×32 chunk, 100-chunk 10×10 sweep, `WorldEngine` cache hit vs miss
+  (`criterion 0.5`).
+
+### Changed
+
+- **`Cargo.toml` dependencies**: added `clap` (derive), `serde`/`serde_json`,
+  `anyhow`; `criterion` dev-dependency and `[[bench]]` for `chunk_gen`.
+  `README.md` now documents CLI quickstart and `cargo bench --bench chunk_gen`.
+
 ## [0.6.0] — 2026-09-03
 
 ### Added

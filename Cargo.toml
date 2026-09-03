@@ -1,6 +1,6 @@
 [package]
 name = "urbix"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 description = "A platform-agnostic and language-agnostic engine for generating an explorable, infinite procedural city"
 license = "MIT"
@@ -16,6 +16,10 @@ name = "urbix"
 path = "src/main.rs"
 
 [dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 # Build-time: regenerates `include/urbix.h` from `src/ffi.rs`/`src/data.rs`.
 # The checked-in header is always usable; `build.rs` is best-effort and emits
@@ -27,5 +31,10 @@ cbindgen = "0.29"
 # Dev-only: used by `examples/viz.rs` to write PNGs. Kept as a dev-dependency
 # so the library crate itself stays dependency-free; the PPM writer has no
 # dependencies at all. Only the PNG codec is enabled to keep the dev build lean.
+[[bench]]
+name = "chunk_gen"
+harness = false
+
 [dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
