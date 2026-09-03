@@ -148,6 +148,37 @@ impl WorldEngine {
         self.cache.set_draw_distance(dd);
     }
 
+    /// Change the cells-per-side chunk size for subsequent generation.
+    ///
+    /// Cached chunks were generated at the previous size — their cell counts
+    /// and on-wire layout no longer match what new chunks will produce — so
+    /// the cache is cleared, and the new size takes effect on the next
+    /// [`generate_chunk`](Self::generate_chunk) call.
+    ///
+    /// ## Panics
+    ///
+    /// Panics if `size` is zero (a chunk must contain at least one cell).
+    ///
+    /// ## Example
+    ///
+    /// ```
+    /// use urbix::engine::WorldEngine;
+    ///
+    /// let mut engine = WorldEngine::new(445566);
+    /// engine.set_chunk_size(16);
+    /// assert_eq!(engine.config().chunk_size, 16);
+    /// let chunk = engine.generate_chunk(0, 0);
+    /// assert_eq!(chunk.header().chunk_size, 16);
+    /// assert_eq!(chunk.cell_count(), 16 * 16);
+    /// ```
+    pub fn set_chunk_size(&mut self, size: u16) {
+        assert!(size > 0, "chunk size must be non-zero");
+        self.config.chunk_size = size;
+        // All cached buffers were built at the old size and are no longer
+        // consistent with the new size; drop them to avoid mixing layouts.
+        self.cache.clear();
+    }
+
     /// Update the engine's center chunk coordinate.
     ///
     /// Takes effect on the next eviction cycle.
@@ -313,5 +344,42 @@ mod tests {
         engine.set_center(10, 10);
         let _ = engine.generate_chunk(10, 10);
         assert_eq!(engine.cache_len(), 1);
+    }
+
+    #[test]
+    fn set_chunk_size_applies_to_later_generation() {
+        let mut engine = WorldEngine::new(7);
+        // One chunk at the default size.
+        let _ = engine.generate_chunk(0, 0);
+        assert_eq!(engine.config().chunk_size, 32);
+
+        engine.set_chunk_size(64);
+        assert_eq!(engine.config().chunk_size, 64);
+        let chunk = engine.generate_chunk(0, 0);
+        assert_eq!(chunk.header().chunk_size, 64);
+        assert_eq!(chunk.cell_count(), 64 * 64);
+    }
+
+    #[test]
+    fn set_chunk_size_clears_cached_chunks() {
+        let mut engine = WorldEngine::new(7);
+        let _ = engine.generate_chunk(1, 2);
+        assert_eq!(engine.cache_len(), 1);
+
+        // The new size must not silently serve stale, old-size buffers.
+        engine.set_chunk_size(16);
+        assert_eq!(engine.cache_len(), 0);
+
+        // After regeneration the cache reflects the new size.
+        let chunk = engine.generate_chunk(1, 2);
+        assert_eq!(chunk.header().chunk_size, 16);
+        assert_eq!(engine.cache_len(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "chunk size must be non-zero")]
+    fn set_chunk_size_rejects_zero() {
+        let mut engine = WorldEngine::new(7);
+        engine.set_chunk_size(0);
     }
 }

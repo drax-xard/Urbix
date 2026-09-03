@@ -184,6 +184,16 @@ impl ChunkCache {
         self.map.values().map(|e| e.value.as_bytes().len()).sum()
     }
 
+    /// Drop all cached chunks, retaining the cache's configuration (center,
+    /// draw distance, capacity).
+    ///
+    /// Used when a setting that changes the shape or meaning of cached buffers
+    /// (such as chunk size) is updated, so stale chunks can't mix with newly
+    /// generated ones.
+    pub fn clear(&mut self) {
+        self.map.clear();
+    }
+
     /// Iterate over cached chunk ids in arbitrary order (for diagnostics).
     pub fn keys(&self) -> impl Iterator<Item = ChunkId> + '_ {
         self.map.keys().copied()

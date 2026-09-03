@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`README.md` project summary**: added sections covering objectives, milestone
   status, design choices, the visualizer tool, and a usage/verification
   walkthrough so the crate's intent and state are clear at a glance.
+- **`WorldEngine::set_chunk_size`** and **`ChunkCache::clear`** (pre-Milestone 5):
+  the engine can now change the cells-per-side chunk size at runtime. Cached
+  buffers were generated at the old size, so they are cleared to prevent stale,
+  differently-sized chunks from mixing with new output; the new size applies to
+  the next `generate_chunk`. `set_chunk_size(0)` panics.
 
 ## [0.4.0] — 2026-09-03
 
