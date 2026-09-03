@@ -39,6 +39,10 @@ exclude = [
     "PALETTE",
     "DENSITY",
     "INTERIOR",
+    "INTERIOR_SIZE_W",
+    "INTERIOR_SIZE_H",
+    "INTERIOR_FOG",
+    "INTERIOR_PALETTE",
 ]
 
 # Rename Rust names to the Urbix-prefixed names used in §2.3.

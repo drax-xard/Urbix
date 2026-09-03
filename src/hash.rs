@@ -48,6 +48,15 @@ pub mod domain {
     pub const DENSITY: u8 = 22;
     /// Interior id for a built cell (see `chunk.rs`).
     pub const INTERIOR: u8 = 23;
+
+    /// Interior room width (see `interior.rs`).
+    pub const INTERIOR_SIZE_W: u8 = 30;
+    /// Interior room depth (see `interior.rs`).
+    pub const INTERIOR_SIZE_H: u8 = 31;
+    /// Interior fog density (see `interior.rs`).
+    pub const INTERIOR_FOG: u8 = 32;
+    /// Interior palette selection (see `interior.rs`).
+    pub const INTERIOR_PALETTE: u8 = 33;
 }
 
 /// Hash a coordinate pair under a seed and domain into a `u64`.

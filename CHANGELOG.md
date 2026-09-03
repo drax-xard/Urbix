@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-09-03
+
+### Added
+
+- **Interior hooks** (Milestone 6): `src/interior.rs` now defines the hook
+  surface for future interior generation. `InteriorState` trait with
+  `fn generate(id: InteriorId, seed: u64) -> Self`, stub
+  `PlaceholderInteriorState` (deterministic `width`/`height` 6..14, `fog`,
+  `palette_id` derived from distinct hash domains `INTERIOR_SIZE_*`/`FOG`/
+  `PALETTE`), free function `generate_interior::<S>`, and bounded LRU
+  `InteriorCache<S>` (parallel to `ChunkCache` but keyed by `InteriorId` with
+  capacity-based eviction). `InteriorId` is already populated in every built
+  cell by `chunk.rs:interior_id_for` via `hash::domain::INTERIOR`.
+- **Hash domains `INTERIOR_SIZE_W/H`, `INTERIOR_FOG`, `INTERIOR_PALETTE`**
+  (`src/hash.rs:30`): four new domain bytes for interior property derivation.
+
+### Changed
+
+- **`cbindgen.toml` export allow-list**: excludes the four new
+  `INTERIOR_*` constants so they do not leak into `include/urbix.h`.
+
 ## [0.5.1] — 2026-09-03
 
 ### Fixed

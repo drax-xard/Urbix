@@ -405,15 +405,16 @@ public method surface.
 
 ---
 
-### Milestone 6 — Interior Hooks — ⬜ PENDING
+### Milestone 6 — Interior Hooks — ✅ DONE
 
 **Goal:** wire the interior subsystem so every built cell has a stable
 `InteriorId`, and the interface for future interior generation exists.
 
 | File | Deliverable |
 |---|---|
-| `src/interior.rs` | `InteriorState` trait: `fn generate(id: InteriorId, seed: u64) -> Self`. Stub implementation returns a placeholder state. `InteriorCache` struct (parallel to chunk cache but keyed by `InteriorId`). |
-| `src/data.rs` | `InteriorId` already present from Milestone 1; ensure it is populated in every `Cell` during chunk generation. |
+| `src/interior.rs` | `InteriorState` trait: `fn generate(id: InteriorId, seed: u64) -> Self`. `PlaceholderInteriorState` stub (deterministic `width`/`height`/`fog`/`palette` via distinct hash domains). `InteriorCache` struct (parallel to chunk cache but keyed by `InteriorId`, LRU capacity-based). Free function `generate_interior::<S>`. |
+| `src/data.rs` | `InteriorId` already present from Milestone 1; populated in every built cell by `chunk.rs:interior_id_for` via `hash::domain::INTERIOR`. |
+| `src/hash.rs` | Four new domains `INTERIOR_SIZE_W/H`, `INTERIOR_FOG`, `INTERIOR_PALETTE` for interior derivation. |
 
 **Design constraint:** interiors are a separate mini-world (own small grid,
 independent of outdoor chunks). The `InteriorState` trait defines the hook
@@ -421,11 +422,12 @@ surface; the actual generation logic is deferred.
 
 **Tests:**
 - `InteriorId` is deterministic: same cell coords + same seed → same id.
-- `generate_interior` on the stub returns a non-null placeholder.
+- `generate_interior` on the stub returns a non-null placeholder (6..14 dims).
 - Two calls with different seeds produce different placeholder states.
+- `InteriorCache` LRU insert/get/clear/capacity (mirrors `ChunkCache`).
 
 **Exit criteria:** trait compiles, stub passes tests, no regressions on
-existing chunk tests.
+existing chunk tests — met.
 
 ---
 

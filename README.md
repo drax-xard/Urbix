@@ -32,7 +32,7 @@ The full design lives in [`Urbix_Project.md`](Urbix_Project.md); in short:
 ## Status
 
 Tracked milestone-by-milestone in `Urbix_Project.md` §7 (✅ done / ⬜ pending).
-Current version: `0.5.1` (see `CHANGELOG.md`).
+Current version: `0.6.0` (see `CHANGELOG.md`).
 
 | Milestone | Status |
 |---|---|
@@ -41,7 +41,7 @@ Current version: `0.5.1` (see `CHANGELOG.md`).
 | M3 — Chunk generation core loop (streets + buildings) | ✅ Done (0.3.0) |
 | M4 — Cache & engine facade | ✅ Done (0.4.0) |
 | M5 — FFI & binary wire format | ✅ Done (0.5.0, audit 0.5.1) |
-| M6 — Interior hooks | ⬜ Pending |
+| M6 — Interior hooks | ✅ Done (0.6.0) |
 | M7 — CLI, docs & benchmarks | ⬜ Pending |
 
 Each chunk is produced by: querying the continuous Voronoi zone field at the
@@ -92,7 +92,7 @@ P6 PPM (`.ppm`) and a PNG (`.png`). Run with `--help` for the full flag list.
 
 ## Usage
 
-The library is in early development (currently `0.5.1`); the public surface is
+The library is in early development (currently `0.6.0`); the public surface is
 `WorldEngine` in Rust and the C ABI in `include/urbix.h` (see
 `Urbix_Project.md` §2.3-2.4 for the wire format):
 
