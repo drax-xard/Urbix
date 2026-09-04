@@ -146,11 +146,12 @@ pub fn interior_context_for(
     world_z: i64,
     cell: &crate::data::Cell,
 ) -> crate::layout::InteriorContext {
-    // Footprint: the residential block interior is `block_size - 1` cells wide
-    // and deep (the street grid lies on block boundaries), clamped to a sane
-    // minimum so interiors never render degenerate.
+    // Footprint: the lot spans the zone's street block. The block size is
+    // floored at 7 cells (the smallest footprint whose interior always keeps a
+    // 2x2 room window free even with a centered 2x2 circulation core), so tiny
+    // blocks like Downtown's 4-cell grid never render zero-room stubs.
     let params = config.blended_zone_params(&cell.zone_affinity);
-    let side = params.block_size.clamp(2, 32);
+    let side = params.block_size.clamp(7, 32);
     let door_side = door_side_for(world_x, world_z, params.block_size);
 
     config.interior_context(
@@ -214,6 +215,8 @@ fn dominant_zone(affinity: &[f32; crate::zones::ZONE_COUNT]) -> ZoneType {
 mod tests {
     use super::*;
     use crate::data::CellFlags;
+    use crate::interior::generate_layout;
+    use crate::layout::Tile;
 
     fn fixture() -> (WorldConfig, VoronoiDiagram) {
         let cfg = WorldConfig {
@@ -274,6 +277,46 @@ mod tests {
         // A 32x32 city chunk should contain both streets and buildings.
         let total = buf.cell_count();
         assert!(built > 0 && built < total);
+    }
+
+    #[test]
+    fn downtown_cells_never_render_zero_room_interiors() {
+        // Downtown's raw street block is 4 cells wide, which alone would give
+        // interiors too small for a single room. `interior_context_for` floors
+        // the footprint at 7x7 and the generator caps the core, so a built
+        // downtown lot keeps at least one room per storey. The bridge is tested
+        // on a synthetic pure-Downtown cell so the assertion never depends on
+        // a seed's street geometry.
+        let cfg = WorldConfig {
+            seed: 1234,
+            ..Default::default()
+        };
+        let mut affinity = [0.0f32; crate::zones::ZONE_COUNT];
+        affinity[crate::zones::ZoneType::Downtown as usize] = 1.0;
+        let cell = crate::data::Cell {
+            height: 48.0,
+            zone_affinity: affinity,
+            palette_id: 2,
+            flags: CellFlags::NONE,
+            _pad: 0,
+            interior_id: 1,
+        };
+        let ctx = interior_context_for(&cfg, 10, 10, &cell);
+        assert_eq!(ctx.zone, crate::zones::ZoneType::Downtown);
+        assert!(
+            ctx.footprint_w >= 7 && ctx.footprint_d >= 7,
+            "downtown footprint {}x{} below the roomable floor",
+            ctx.footprint_w,
+            ctx.footprint_d
+        );
+        let layout = generate_layout(cell.interior_id, &ctx, &cfg.blueprint_for(ctx.zone));
+        assert!(!layout.floors.is_empty());
+        for floor in &layout.floors {
+            assert!(
+                floor.tiles.contains(&Tile::Room),
+                "downtown floor has no rooms"
+            );
+        }
     }
 
     #[test]

@@ -6,11 +6,19 @@
 //! Wheel zooms, extent slider controls visible grid, mode toggles `hybrid` vs
 //! `affinity`, interior dots show `interior_id != 0`. HUD shows
 //! `generated_count` / `cache_len` proving bounded LRU.
+//!
+//! Click any cell to select it: the controls panel then reports the interior
+//! mini-world for the selected lot (zone, floors, entrance side, per-storey
+//! room/circulation stats, and an ASCII map of the current storey), exactly
+//! like `examples/cli_demo.rs` does headlessly.
 
 use eframe::egui;
+use urbix::chunk::interior_context_for;
 use urbix::config::WorldConfig;
 use urbix::data::{Cell, CellFlags, ZONE_COUNT};
 use urbix::engine::WorldEngine;
+use urbix::interior::generate_layout;
+use urbix::layout::{Floor, InteriorLayout, Tile};
 
 /// Fallback hues matching `WorldConfig::default().zone_hues` (promoted to config
 /// in Milestone 8). `colour_cell` prefers `WorldConfig::zone_hues` when available.
@@ -71,6 +79,17 @@ struct App {
     zoom: f32,
     mode: String,
     seed: u64,
+    selection: Option<Selection>,
+}
+
+/// A lot clicked in the map: its absolute world coordinates and the interior
+/// mini-world generated for it (recomputed once on selection).
+struct Selection {
+    world_x: i64,
+    world_z: i64,
+    layout: Option<InteriorLayout>,
+    /// Storey currently shown in the ASCII map (0 = ground).
+    floor: usize,
 }
 
 impl App {
@@ -87,8 +106,99 @@ impl App {
             zoom: 4.0,
             mode: "hybrid".to_string(),
             seed,
+            selection: None,
         }
     }
+
+    /// (Re)select the cell at absolute world coordinates and regenerate its
+    /// interior. Streets and bare lots select as "no interior".
+    fn select_cell(&mut self, world_x: i64, world_z: i64) {
+        let n = i64::from(self.engine.config().chunk_size);
+        let cx = world_x.div_euclid(n) as i32;
+        let cz = world_z.div_euclid(n) as i32;
+        let lx = world_x.rem_euclid(n);
+        let lz = world_z.rem_euclid(n);
+        let cell = self
+            .engine
+            .generate_chunk(cx, cz)
+            .get_cell((lz * n + lx) as usize);
+        let layout = if cell.height > 0.0 {
+            let ctx = interior_context_for(self.engine.config(), world_x, world_z, &cell);
+            let bp = self.engine.config().blueprint_for(ctx.zone);
+            Some(generate_layout(cell.interior_id, &ctx, &bp))
+        } else {
+            None
+        };
+        self.selection = Some(Selection {
+            world_x,
+            world_z,
+            layout,
+            floor: 0,
+        });
+    }
+}
+
+/// Legend glyph for a tile (shared with `examples/cli_demo.rs` / `viz.rs`).
+fn tile_glyph(tile: Tile, kind: u8) -> char {
+    match tile {
+        Tile::Void => '.',
+        Tile::Wall => '#',
+        Tile::Door => 'D',
+        Tile::Core => '+',
+        Tile::Corridor => ' ',
+        Tile::Room => char::from(b'a' + kind % 26),
+    }
+}
+
+/// One floor rendered as rows of legend glyphs.
+fn floor_rows(floor: &Floor) -> Vec<String> {
+    let w = usize::from(floor.width);
+    (0..usize::from(floor.depth))
+        .map(|z| {
+            let mut row = String::with_capacity(w);
+            for x in 0..w {
+                let i = z * w + x;
+                row.push(tile_glyph(floor.tiles[i], floor.kinds[i]));
+            }
+            row
+        })
+        .collect()
+}
+
+/// Compact interior summary shown in the side panel: the lot's context, the
+/// blueprint that shaped it, and one line of room/circulation stats per storey.
+fn selection_summary(sel: &Selection) -> String {
+    let mut out = format!("selected cell ({}, {})\n", sel.world_x, sel.world_z);
+    let layout = match &sel.layout {
+        Some(layout) => layout,
+        None => return out + "no building on this cell — no interior",
+    };
+    let ctx = &layout.context;
+    out.push_str(&format!(
+        "zone {:?}, footprint {}x{}, {} floor(s), entrance {:?}\n",
+        ctx.zone, ctx.footprint_w, ctx.footprint_d, ctx.floor_count, ctx.door_side
+    ));
+    for (f, floor) in layout.floors.iter().enumerate() {
+        let mut rooms = 0;
+        let mut corridors = 0;
+        let mut walls = 0;
+        let mut cores = 0;
+        let mut doors = 0;
+        for tile in &floor.tiles {
+            match tile {
+                Tile::Wall => walls += 1,
+                Tile::Door => doors += 1,
+                Tile::Core => cores += 1,
+                Tile::Corridor => corridors += 1,
+                Tile::Room => rooms += 1,
+                Tile::Void => {}
+            }
+        }
+        out.push_str(&format!(
+            "  floor {f}: {rooms} room tiles, {corridors} corridor, {walls} wall, {cores} core, {doors} door\n"
+        ));
+    }
+    out
 }
 
 impl eframe::App for App {
@@ -153,6 +263,23 @@ impl eframe::App for App {
                 self.engine.set_center(0, 0);
             }
             ui.small("WASD/Arrows pan, wheel zooms");
+            ui.separator();
+            let clear = self.selection.is_some() && ui.button("clear selection ✕").clicked();
+            if clear {
+                self.selection = None;
+            } else if let Some(sel) = &mut self.selection {
+                ui.monospace(format!("selected cell ({}, {})", sel.world_x, sel.world_z));
+                ui.monospace(selection_summary(sel));
+                if let Some(layout) = &sel.layout {
+                    if !layout.floors.is_empty() {
+                        let max = layout.floors.len() - 1;
+                        ui.add(egui::Slider::new(&mut sel.floor, 0..=max).text("storey"));
+                        ui.monospace(floor_rows(&layout.floors[sel.floor]).join("\n"));
+                    }
+                }
+            } else {
+                ui.small("click a cell to inspect its interior");
+            }
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -183,6 +310,22 @@ impl eframe::App for App {
             let cell_px = self.zoom;
             let origin = rect.min;
 
+            // A click selects the exterior cell under the cursor: convert the
+            // pixel offset back to a world coordinate (cell space begins at the
+            // top-left chunk's corner).
+            if response.clicked() {
+                if let Some(p) = response.interact_pointer_pos() {
+                    let gx = ((p.x - origin.x) / cell_px).floor() as i64;
+                    let gz = ((p.y - origin.y) / cell_px).floor() as i64;
+                    let span = i64::from(self.extent) * i64::from(cs);
+                    if gx >= 0 && gz >= 0 && gx < span && gz < span {
+                        let world_x = i64::from(start_cx) * i64::from(cs) + gx;
+                        let world_z = i64::from(start_cy) * i64::from(cs) + gz;
+                        self.select_cell(world_x, world_z);
+                    }
+                }
+            }
+
             for cy in 0..self.extent as i32 {
                 for cx in 0..self.extent as i32 {
                     let chunk = self.engine.generate_chunk(start_cx + cx, start_cy + cy);
@@ -211,6 +354,23 @@ impl eframe::App for App {
                             }
                         }
                     }
+                }
+            }
+            // Selection marker: outline the chosen cell in the same coordinate
+            // space as the map (drawn after the cells so it stays on top).
+            if let Some(sel) = &self.selection {
+                let gx = sel.world_x - i64::from(start_cx) * i64::from(cs);
+                let gz = sel.world_z - i64::from(start_cy) * i64::from(cs);
+                let span = i64::from(self.extent) * i64::from(cs);
+                if gx >= 0 && gz >= 0 && gx < span && gz < span {
+                    let r = egui::Rect::from_min_size(
+                        egui::pos2(
+                            origin.x + gx as f32 * cell_px,
+                            origin.y + gz as f32 * cell_px,
+                        ),
+                        egui::vec2(cell_px, cell_px),
+                    );
+                    painter.rect_stroke(r, 0.0, egui::Stroke::new(2.0_f32, egui::Color32::YELLOW));
                 }
             }
             // Chunk grid overlay.

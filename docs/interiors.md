@@ -48,7 +48,7 @@ override. It is a snapshot of the exterior lot the interior belongs to:
 | `zone_affinity` | blended `[f32; ZONE_COUNT]` — lets layouts blend near fuzzy borders |
 | `height` | exterior building height (world units); 0 = no building |
 | `floor_count` | floors derived from `height` (≥ 1 for a built lot) |
-| `footprint_w/d` | interior grid width/depth in tiles (block-derived) |
+| `footprint_w/d` | interior grid width/depth in tiles (block-derived, floored at 7×7) |
 | `palette_id` | exterior facade palette (rooms tint to match) |
 | `door_side` | `DoorSide` of the street-facing entrance (West/East/North/South) |
 | `seed` | world seed used throughout interior derivation |
@@ -191,7 +191,9 @@ Per floor, in order:
 2. **Circulation core** (`src/interior.rs:568`): a `blueprint.core_size`
    square of `Core` (stairs/elevator), position derived from
    `domain::LAYOUT_FLOOR`. All floors of a storey have one; it never touches
-   the wall ring.
+   the wall ring. The core is capped to about half the interior so a small
+   lot keeps room for at least one room plus circulation (small-zone lots
+   spawn as 6×6 grids, never as zero-room stubs).
 3. **Street entrance** (`src/interior.rs:335`): a `Door` on the wall ring
    facing `ctx.door_side`, at a hashed offset along that edge. The cell just
    inside it is reserved as `Corridor` (`src/interior.rs:360`) so the entrance
@@ -202,10 +204,13 @@ Per floor, in order:
    `roll_room` (`src/interior.rs:550`) and a size within its `min`/`max`
    bounds is drawn; `try_place_room` (`src/interior.rs:421`) then walks the
    size candidates closest to the roll and places the first that fits.
-   `room_fits` (`src/interior.rs:391`) requires the rectangle to be free and
-   its one-tile margin to contain no other room — the margin, plus the fact
-   rooms may hug walls and the core, is what keeps every room reachable.
-   Rooms are painted with their opaque `kind` tag (`src/interior.rs:457`).
+`room_fits` (`src/interior.rs:391`) requires the rectangle to be free and
+    its one-tile margin to contain no other room — the margin, plus the fact
+    rooms may hug walls and the core, is what keeps every room reachable.
+    Rooms are painted with their opaque `kind` tag (`src/interior.rs:457`).
+    When the rolled template cannot fit the remaining free area (typical on
+    small lots), placement retries once with the blueprint's smallest template,
+    so no lot degrades to a corridor-only shell.
 5. **Doors** (`src/interior.rs:474`): the `LAYOUT_DOOR` stream rotates each
    room's perimeter (k=1 onward, after the entrance at k=0) and turns the
    first facing margin cell into a `Door`, so every room has exactly one

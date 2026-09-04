@@ -5,6 +5,27 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Small lots no longer render zero-room towers**: Downtown's 4-cell street
+  blocks produced 4×4 interiors too small for any room template, so every
+  storey was just a cored wall shell. `chunk::interior_context_for` now floors
+  the interior footprint at 7×7 (`src/chunk.rs:149`), the generator caps the
+  circulation core to roughly half the inner area (`src/interior.rs:237`), and
+  room placement falls back to the smallest template when the rolled one
+  doesn't fit the remaining interior — so the smallest practical lots keep at
+  least one room per storey.
+
+### Changed
+
+- **Demons show interior maps** for a selected exterior cell: `cli_demo.rs`
+  inspects a specific cell headlessly (`--cx/--cy/--dx/--dy`, default picks the
+  tallest built cell in the chunk), `viz.rs` gained `--inspect <wx,wz>`, and
+  `interactive.rs` lets you click a lot on the map to view its interior
+  (zone, storey stats, and an ASCII map of a chosen storey) beside the grid.
+
 ## [0.9.0] — 2026-09-04
 
 ### Added

@@ -25,6 +25,8 @@
 //!
 //! ```text
 //! cargo run --example viz -- --seed 445566 --extent 16
+//! # ...also dump the interior of the lot at world (120, 400):
+//! cargo run --example viz -- --seed 445566 --inspect 120,400
 //! ```
 //!
 //! Flags (simple positional-key parser, hand-rolled until Milestone 7 wires up
@@ -37,12 +39,17 @@
 //! - `--chunk-size <u16>`    cells per chunk side (default 32)
 //! - `--mode <hybrid|affinity>` colouring (default hybrid)
 //! - `--out <path>`          output base path (default `out`)
+//! - `--inspect <wx,wz>`     print the interior report for the cell at absolute
+//!   world coordinates `(wx,wz)` after rendering (see `examples/cli_demo.rs`)
 
+use std::collections::BTreeMap;
 use std::process::ExitCode;
 
 use urbix::chunk::generate_chunk;
 use urbix::config::WorldConfig;
 use urbix::data::{Cell, CellFlags, ZONE_COUNT};
+use urbix::interior::generate_layout;
+use urbix::layout::{Floor, Tile};
 use urbix::region::VoronoiDiagram;
 
 /// Base hue (RGB before height brightening) for each district.
@@ -186,6 +193,137 @@ fn write_ppm(path: &str, width: u32, height: u32, pixels: &[u8]) -> std::io::Res
     std::fs::write(path, data)
 }
 
+/// Legend glyph for a tile (shared with `examples/cli_demo.rs`).
+fn tile_glyph(tile: Tile, kind: u8) -> char {
+    match tile {
+        Tile::Void => '.',
+        Tile::Wall => '#',
+        Tile::Door => 'D',
+        Tile::Core => '+',
+        Tile::Corridor => ' ',
+        Tile::Room => char::from(b'a' + kind % 26),
+    }
+}
+
+/// One floor rendered as rows of legend glyphs.
+fn floor_rows(floor: &Floor) -> Vec<String> {
+    let w = usize::from(floor.width);
+    (0..usize::from(floor.depth))
+        .map(|z| {
+            let mut row = String::with_capacity(w);
+            for x in 0..w {
+                let i = z * w + x;
+                row.push(tile_glyph(floor.tiles[i], floor.kinds[i]));
+            }
+            row
+        })
+        .collect()
+}
+
+/// Count `Room` tiles per opaque room-kind tag on one floor.
+fn room_tile_counts(floor: &Floor) -> BTreeMap<u8, usize> {
+    let mut counts = BTreeMap::new();
+    for i in 0..floor.tiles.len() {
+        if floor.tiles[i] == Tile::Room {
+            *counts.entry(floor.kinds[i]).or_insert(0) += 1;
+        }
+    }
+    counts
+}
+
+/// Full textual report on the interior of the cell at absolute world
+/// coordinates `(world_x, world_z)` — same output as `examples/cli_demo.rs`.
+#[must_use]
+pub fn interior_report(config: &WorldConfig, world_x: i64, world_z: i64, cell: &Cell) -> String {
+    let mut out = String::new();
+
+    let kind = if cell.flags.contains(CellFlags::IS_STREET) {
+        "street"
+    } else if cell.flags.contains(CellFlags::IS_PARK) {
+        "park"
+    } else {
+        "lot"
+    };
+    out.push_str(&format!(
+        "cell ({world_x},{world_z}) [{kind}] height {} u, palette {}, interior id {:#x}\n",
+        cell.height, cell.palette_id, cell.interior_id
+    ));
+
+    if cell.height <= 0.0 {
+        out.push_str("no building on this cell — no interior\n");
+        return out;
+    }
+
+    let ctx = urbix::chunk::interior_context_for(config, world_x, world_z, cell);
+    out.push_str(&format!(
+        "context: zone {:?}, footprint {}x{} tiles, {} floors, entrance {:?}\n",
+        ctx.zone, ctx.footprint_w, ctx.footprint_d, ctx.floor_count, ctx.door_side
+    ));
+
+    let bp = config.blueprint_for(ctx.zone);
+    out.push_str(&format!(
+        "blueprint: wall margin {}, core {} tiles, {} room template(s)\n",
+        bp.margin,
+        bp.core_size,
+        bp.room_slice().len()
+    ));
+    for room in bp.room_slice() {
+        out.push_str(&format!(
+            "  kind {:>2}: weight {:>4.1}, size {}..{} x {}..{}\n",
+            room.kind, room.weight, room.min_w, room.max_w, room.min_d, room.max_d
+        ));
+    }
+
+    let layout = generate_layout(cell.interior_id, &ctx, &bp);
+    out.push_str(&format!(
+        "{} storey(s), seed {}\n",
+        layout.floors.len(),
+        layout.seed
+    ));
+    for (f, floor) in layout.floors.iter().enumerate() {
+        out.push_str(&format!(
+            "-- floor {f} ({}x{} tiles)\n",
+            floor.width, floor.depth
+        ));
+        let mut walls = 0;
+        let mut doors = 0;
+        let mut cores = 0;
+        let mut corridors = 0;
+        let mut rooms = 0;
+        for tile in &floor.tiles {
+            match tile {
+                Tile::Wall => walls += 1,
+                Tile::Door => doors += 1,
+                Tile::Core => cores += 1,
+                Tile::Corridor => corridors += 1,
+                Tile::Room => rooms += 1,
+                Tile::Void => {}
+            }
+        }
+        out.push_str(&format!(
+            "  tiles: {rooms} rooms, {corridors} corridor, {walls} wall, {cores} core, {doors} door\n"
+        ));
+        let room_kinds = room_tile_counts(floor);
+        if room_kinds.is_empty() {
+            out.push_str("  rooms: (none)\n");
+        } else {
+            let summary = room_kinds
+                .iter()
+                .map(|(kind, n)| format!("kind {kind} x {n}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push_str(&format!("  rooms: {summary}\n"));
+        }
+        for row in floor_rows(floor) {
+            out.push_str("  ");
+            out.push_str(&row);
+            out.push('\n');
+        }
+    }
+    out.push_str("legend: # wall, + core, D door, ' ' corridor, a..z rooms, . void\n");
+    out
+}
+
 fn main() -> ExitCode {
     let args = parse_args();
     let seed = get(&args, "seed").and_then(|s| s.parse().ok()).unwrap_or(0);
@@ -206,6 +344,10 @@ fn main() -> ExitCode {
         _ => "hybrid",
     };
     let out_base = get(&args, "out").unwrap_or("out").to_string();
+    let inspect: Option<(i64, i64)> = get(&args, "inspect").and_then(|s| {
+        let (a, b) = s.split_once(',')?;
+        Some((a.trim().parse().ok()?, b.trim().parse().ok()?))
+    });
 
     if extent == 0 {
         eprintln!("error: --extent must be > 0");
@@ -244,6 +386,18 @@ fn main() -> ExitCode {
         eprintln!("error writing PNG: {e}");
         return ExitCode::from(1);
     }
+
+    if let Some((wx, wz)) = inspect {
+        let n = i64::from(config.chunk_size);
+        let cx = wx.div_euclid(n);
+        let cz = wz.div_euclid(n);
+        let lx = wx.rem_euclid(n);
+        let lz = wz.rem_euclid(n);
+        let chunk = generate_chunk(cx as i32, cz as i32, &config, &voronoi);
+        let cell = chunk.get_cell((lz * n + lx) as usize);
+        print!("{}", interior_report(&config, wx, wz, &cell));
+    }
+
     ExitCode::SUCCESS
 }
 

@@ -177,7 +177,8 @@ pub fn generate_interior<S: InteriorState>(id: InteriorId, ctx: &InteriorContext
 /// 4. Rooms rolled from `blueprint.room_slice()` (weighted by each template's
 ///    `weight`, sized within its `min`/`max` bounds) and placed greedily
 ///    against the free area, each with a one-tile margin so it opens onto a
-///    corridor channel.
+///    corridor channel. If the rolled template still doesn't fit (cramped
+///    lots), placement retries the blueprint's smallest template.
 /// 5. Every leftover free cell filled with `Corridor`, and a single `Door`
 ///    punched on each room's boundary where it meets circulation.
 ///
@@ -235,8 +236,13 @@ fn generate_floor(
     paint_wall_ring(&mut g);
 
     // Vertical circulation core: a filled square whose placement is hashed per
-    // floor, clamped inside the wall ring and one tile off every wall.
-    let core = blueprint.core_size.max(1);
+    // floor, clamped inside the wall ring and one tile off every wall. The core
+    // is also capped so it never swallows a small lot's interior: at most about
+    // half the inner area, leaving room for at least one room and circulation.
+    let core = blueprint
+        .core_size
+        .max(1)
+        .min(((gw.saturating_sub(2) as u8) / 2).max(1));
     let inner_w = (gw.saturating_sub(usize::from(core) + 1)).max(1);
     let inner_d = (gd.saturating_sub(usize::from(core) + 1)).max(1);
     let core_base = floor_hash(x_id, y_id, seed, floor, domain::LAYOUT_FLOOR);
@@ -282,8 +288,23 @@ fn generate_floor(
                 continue;
             }
             let roll = unit_draw(room_base, k);
-            let room = roll_room(rooms, roll);
-            if let Some(rect) = try_place_room(&mut g, ax, az, room, room_base, k) {
+            let mut room = roll_room(rooms, roll);
+            let mut rect = try_place_room(&mut g, ax, az, room, room_base, k);
+            // Fallback: on a cramped lot the rolled template is often too large
+            // for the remaining interior. Retry once with the smallest template
+            // so small lots always get rooms instead of corridor-only shells.
+            if rect.is_none() {
+                let smallest = rooms
+                    .iter()
+                    .min_by_key(|r| u16::from(r.min_w) * u16::from(r.min_d));
+                if let Some(s) = smallest {
+                    if !std::ptr::eq(room, s) {
+                        room = s;
+                        rect = try_place_room(&mut g, ax, az, room, room_base, k);
+                    }
+                }
+            }
+            if let Some(rect) = rect {
                 paint_room(&mut g, rect.0, rect.1, rect.2, rect.3, room.kind);
                 placed.push(rect);
             }
@@ -995,6 +1016,34 @@ mod tests {
                 DoorSide::North => assert!(hits(&|i| i / gw == 0)),
                 DoorSide::South => assert!(hits(&|i| i / gw == gd - 1)),
             }
+        }
+    }
+
+    #[test]
+    fn small_lot_still_gets_rooms() {
+        // Downtown's raw street block is 4 cells; the context bridge floors the
+        // footprint at 7x7 and the core is capped to half the interior, so even
+        // the smallest practical lot keeps a room window open on every storey.
+        let ctx = InteriorContext::new(
+            7,
+            ZoneType::Downtown,
+            [0.0; 5],
+            16.0,
+            4.0,
+            64,
+            7,
+            7,
+            2,
+            DoorSide::West,
+            42,
+        );
+        let layout = generate_layout(7, &ctx, &blueprint_defaults(ZoneType::Downtown));
+        assert!(!layout.floors.is_empty());
+        for floor in &layout.floors {
+            assert!(
+                floor.tiles.contains(&Tile::Room),
+                "7x7 lot floor has no rooms"
+            );
         }
     }
 
