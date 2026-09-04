@@ -5,6 +5,10 @@ edition = "2021"
 description = "A platform-agnostic and language-agnostic engine for generating an explorable, infinite procedural city"
 license = "MIT"
 readme = "README.md"
+repository = "https://github.com/drax-xard/Urbix"
+keywords = ["procedural", "city", "generation", "ffi", "infinite"]
+categories = ["game-development", "simulation"]
+exclude = ["/target", "/out*", "*.png", "*.ppm", "dist/"]
 
 [lib]
 name = "urbix"

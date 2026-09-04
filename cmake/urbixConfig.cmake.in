@@ -1,0 +1,18 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+check_required_components(urbix)
+
+# Consumers do: find_package(urbix CONFIG) then link via -lurbix or imported target.
+# Header is at ${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_INCLUDEDIR@/urbix.h
+# Libs at ${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_LIBDIR@/liburbix.*
+
+# Provide an INTERFACE target for convenience.
+if(NOT TARGET urbix::urbix)
+    add_library(urbix::urbix INTERFACE IMPORTED)
+    set_target_properties(urbix::urbix PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_INCLUDEDIR@"
+        INTERFACE_LINK_LIBRARIES "-lurbix"
+    )
+endif()

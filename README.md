@@ -91,6 +91,37 @@ It paints one pixel per cell and supports two colouring modes: `hybrid`
 and `affinity` (flat dominant-zone colour). It writes both a dependency-free
 P6 PPM (`.ppm`) and a PNG (`.png`). Run with `--help` for the full flag list.
 
+## Installation
+
+**Rust (crates.io):**
+```sh
+cargo add urbix@0.7
+```
+Docs at `docs.rs/urbix`, `WorldEngine` in Rust, `include/urbix.h` for C.
+
+**C — prebuilt tarballs (C-first, recommended):**
+Each GitHub Release (`v*`) publishes `urbix-<ver>-<target>.tar.gz/.zip` for
+`linux-x86_64`, `macos-aarch64`, `windows-x86_64` (see `release.yml`). Each
+contains `include/urbix.h`, `lib/liburbix.{a,so,dylib}` / `lib/urbix.lib` +
+`bin/urbix.dll`, `LICENSE`, `README.md`:
+```sh
+curl -L https://github.com/drax-xard/Urbix/releases/download/v0.7.1/urbix-0.7.1-linux-x86_64.tar.gz | tar xz
+cc -I urbix-0.7.1-linux-x86_64/include -c examples/basic_usage.c -o /tmp/basic_usage.o
+cc /tmp/basic_usage.o -L urbix-0.7.1-linux-x86_64/lib -lurbix -ldl -lm -pthread -o /tmp/basic_usage && /tmp/basic_usage
+# pkg-config (after make install or PKG_CONFIG_PATH)
+pkg-config --cflags --libs urbix
+# CMake
+cmake -S . -B build -DCMAKE_PREFIX_PATH=/tmp/install && cmake --build build
+# find_package(urbix CONFIG) → target urbix::urbix
+```
+
+**From source:**
+```sh
+cargo build --release  # also regenerates include/urbix.h via build.rs (cbindgen)
+cc -I include -c examples/basic_usage.c -o /tmp/basic_usage.o
+cc /tmp/basic_usage.o -L target/release -lurbix -ldl -lm -pthread -o /tmp/basic_usage  # Linux; macOS add -framework Security -framework CoreFoundation
+```
+
 ## Usage
 
 The library is in early development (currently `0.7.1`); the public surface is
@@ -106,8 +137,7 @@ urbix_chunk_free(buf);
 urbix_engine_destroy(e);
 ```
 
-`examples/basic_usage.c` is the minimal C consumer (compile with `cc -I include`
-and link against `target/{debug,release}/liburbix.a`). `examples/viz.rs` is the
+`examples/basic_usage.c` is the minimal C consumer. `examples/viz.rs` is the
 visualizer below.
 
 ### CLI
@@ -120,7 +150,7 @@ cargo run -- --seed 7 --cx 0 --cy 0 --radius 2 --format json --out ./out
 cargo run -- --help
 ```
 
-Flags: `--seed` (u64), `--cx/--cy` (i32), `--radius` (u32, 0=single), `--chunk-size` (u16),
+Flags: `--seed` (u64), `--cx/--cy` (i32), `--radius` (u32, 0=single, max 64), `--chunk-size` (u16, 1..=256),
 `--format bin|json` (default `bin`), `--out` (file for single, dir for grid).
 Binary output is exactly `ChunkBuffer::as_bytes()` (header + cells) and can be
 read with `ChunkHeader`/`Cell` or via the FFI header.

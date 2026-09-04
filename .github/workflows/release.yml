@@ -1,0 +1,102 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x86_64
+            archive: tar.gz
+          - os: macos-14
+            target: macos-aarch64
+            archive: tar.gz
+          - os: windows-latest
+            target: windows-x86_64
+            archive: zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release
+        shell: bash
+        run: |
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          cargo build --release --all-targets
+
+      - name: Smoke test
+        shell: bash
+        run: |
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          cargo test --release
+          cc -I include -c examples/basic_usage.c -o /tmp/basic_usage.o
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            cc /tmp/basic_usage.o -L target/release -lurbix -framework Security -framework CoreFoundation -o /tmp/basic_usage && /tmp/basic_usage
+          elif [[ "${{ runner.os }}" == "Windows" ]]; then
+            cc /tmp/basic_usage.o -L target/release -lurbix -lws2_32 -luserenv -o /tmp/basic_usage.exe && /tmp/basic_usage.exe
+          else
+            cc /tmp/basic_usage.o -L target/release -lurbix -ldl -lm -pthread -o /tmp/basic_usage && /tmp/basic_usage
+          fi
+
+      - name: Stage artifact
+        shell: bash
+        run: |
+          VER=${GITHUB_REF_NAME#v}
+          STAGE="dist/urbix-${VER}-${{ matrix.target }}"
+          mkdir -p "$STAGE/include" "$STAGE/lib" "$STAGE/bin"
+          cp include/urbix.h "$STAGE/include/"
+          cp LICENSE README.md CHANGELOG.md "$STAGE/" 2>/dev/null || true
+          # Staticlib / cdylib per platform
+          cp target/release/liburbix.a "$STAGE/lib/" 2>/dev/null || cp target/release/urbix.lib "$STAGE/lib/" 2>/dev/null || true
+          cp target/release/liburbix.so "$STAGE/lib/" 2>/dev/null || true
+          cp target/release/liburbix.dylib "$STAGE/lib/" 2>/dev/null || true
+          cp target/release/urbix.dll "$STAGE/bin/" 2>/dev/null || cp target/release/liburbix.dll "$STAGE/bin/" 2>/dev/null || true
+          # pkg-config and CMake (generated)
+          if [ -f "urbix.pc.in" ]; then
+            sed -e "s|@CMAKE_INSTALL_PREFIX@|/usr/local|g" -e "s|@CMAKE_INSTALL_LIBDIR@|lib|g" -e "s|@CMAKE_INSTALL_INCLUDEDIR@|include|g" -e "s|@PROJECT_VERSION@|${VER}|g" urbix.pc.in > "$STAGE/lib/pkgconfig/urbix.pc" 2>/dev/null || mkdir -p "$STAGE/lib/pkgconfig" && sed -e "s|@CMAKE_INSTALL_PREFIX@|/usr/local|g" -e "s|@CMAKE_INSTALL_LIBDIR@|lib|g" -e "s|@CMAKE_INSTALL_INCLUDEDIR@|include|g" -e "s|@PROJECT_VERSION@|${VER}|g" urbix.pc.in > "$STAGE/lib/pkgconfig/urbix.pc"
+          fi
+          # Binary
+          cp target/release/urbix "$STAGE/bin/" 2>/dev/null || cp target/release/urbix.exe "$STAGE/bin/" 2>/dev/null || true
+          ls -R "$STAGE"
+
+      - name: Pack artifact
+        shell: bash
+        run: |
+          VER=${GITHUB_REF_NAME#v}
+          STAGE="dist/urbix-${VER}-${{ matrix.target }}"
+          if [[ "${{ matrix.archive }}" == "zip" ]]; then
+            (cd dist && zip -r "urbix-${VER}-${{ matrix.target }}.zip" "urbix-${VER}-${{ matrix.target }}")
+            shasum -a 256 "dist/urbix-${VER}-${{ matrix.target }}.zip" > "dist/urbix-${VER}-${{ matrix.target }}.zip.sha256"
+          else
+            tar czf "dist/urbix-${VER}-${{ matrix.target }}.tar.gz" -C dist "urbix-${VER}-${{ matrix.target }}"
+            shasum -a 256 "dist/urbix-${VER}-${{ matrix.target }}.tar.gz" > "dist/urbix-${VER}-${{ matrix.target }}.tar.gz.sha256"
+          fi
+          ls -l dist/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: urbix-${{ matrix.target }}
+          path: dist/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/*

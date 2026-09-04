@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        shell: bash
+        run: |
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          cargo build --all-targets --release
+      - name: Test
+        shell: bash
+        run: |
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          cargo test --release
+      - name: Clippy
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          cargo clippy --all-targets -- -D warnings
+      - name: Smoke C link (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cc -I include -c examples/basic_usage.c -o /tmp/basic_usage.o
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            cc /tmp/basic_usage.o -L target/release -lurbix -framework Security -framework CoreFoundation -o /tmp/basic_usage
+          else
+            cc /tmp/basic_usage.o -L target/release -lurbix -ldl -lm -pthread -o /tmp/basic_usage
+          fi
+          /tmp/basic_usage
+      - name: Smoke C link (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cc -I include -c examples/basic_usage.c -o /tmp/basic_usage.o
+          cc /tmp/basic_usage.o -L target/release -lurbix -lws2_32 -luserenv -o /tmp/basic_usage.exe
+          /tmp/basic_usage.exe
+      - name: Header drift check
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          cargo build --release
+          git diff --exit-code include/urbix.h || (echo "include/urbix.h drift: run cargo build and commit" && exit 1)
