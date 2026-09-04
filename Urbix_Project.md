@@ -453,6 +453,30 @@ documentation, and performance baselines.
 
 ---
 
+### Milestone 8 — Modular Customization — ✅ DONE
+
+**Goal:** all non-procedural tunables are loaded from text files (`TOML`/`JSON`) or runtime parameters, so artists tune without recompiling.
+
+| File | Deliverable |
+|---|---|
+| `src/config.rs` | `WorldConfig` extended with `voronoi_span`, `shepard_power/epsilon`, `zone_weights`, `zones: [ZoneParams;5]`, `zone_hues`, `interior_width/height_range`; `is_valid` + `from_file`/`from_toml_str`/`from_json_str`, `blended_zone_params`/`zone_params_for`/`hue_for`. |
+| `src/zones.rs` | `ZoneParams` now `Serialize`/`Deserialize`; `zone_defaults` shim kept for compat, blending via `WorldConfig`. |
+| `src/region.rs` | `VoronoiDiagram::generate_with_config` uses `config.voronoi_span/shepherd_*`/`zone_weights`; `SPAN`/`SHEPARD_*`/`ZONE_WEIGHTS` kept as `#[allow(dead_code)]` defaults. |
+| `src/interior.rs` | `PlaceholderInteriorState::generate_with_config` uses `config.interior_*_range`. |
+| `src/engine.rs` | `WorldEngine::with_config` + new `set_config(WorldConfig)` (validates, regenerates Voronoi, clears cache). |
+| `src/ffi.rs` | `urbix_engine_create_with_config`, `urbix_set_config` (null/invalid → no-op, never unwind); `WorldConfig` + `ZoneParams` exported to `include/urbix.h` (ZoneParams injected before `WorldConfig` if cbindgen omits). |
+| `src/main.rs` | `--config <path>` (TOML/JSON sniffed by extension, fallback TOML→JSON), CLI flags override file (`--seed`, `--chunk-size`, `--draw-distance`, `--voronoi-site-count`), `validate_out`, `Format` enum, radius/chunk-size caps. |
+| `urbix.toml.example` / `urbix.json.example` | Full example configs matching `WorldConfig::default()` (all zones, hues, interior ranges). |
+| `build.rs` / `cbindgen.toml` | `ZoneParams` before `WorldConfig` in allow-list, manual injection of `ZoneParams` def if missing, asserts inside guard. |
+
+**Design:** `WorldConfig::default()` is byte-identical to pre-8.0 hardcoded values. Text file is base, CLI flags override. `is_valid` guards `voronoi_span 100..100_000`, `shepard` ranges, `zone_weights` sum ~1.0, per-zone `height_min<=max` etc. `WorldConfig` remains `#[repr(C)]` but bumped to `0.8.0` (size break, C consumers recompile header).
+
+**Tests:** `WorldConfig` TOML/JSON round-trip, `from_toml_overrides_seed`, `Voronoi` determinism still holds via `generate_with_config`, interior `generate_with_config`.
+
+**Exit criteria:** `cargo run -- --config urbix.toml.example` + `--seed` override produces correct `bin`/`json`; `WorldConfig::from_file` for both formats passes; no regressions — met.
+
+---
+
 ## 8. Future Extensions (explicitly deferred)
 
 These are deliberately out of scope for the initial build but are designed for

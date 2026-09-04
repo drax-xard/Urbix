@@ -16,6 +16,7 @@ header = """\
 [export]
 # Only these types are exported; everything else is hidden from the header.
 include = [
+    "ZoneParams",
     "UrbixEngine",
     "UrbixChunkBuffer",
     "UrbixZoneAffinity",
@@ -23,6 +24,7 @@ include = [
     "Cell",
     "CellFlags",
     "InteriorId",
+    "WorldConfig",
 ]
 exclude = [
     "ChunkId",

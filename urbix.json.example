@@ -1,0 +1,50 @@
+{
+  "seed": 445566,
+  "chunk_size": 32,
+  "draw_distance": 8,
+  "voronoi_site_count": 32,
+  "voronoi_span": 10000.0,
+  "shepard_power": 4.0,
+  "shepard_epsilon": 1e-8,
+  "zone_weights": [0.25, 0.30, 0.20, 0.15, 0.10],
+  "zone_hues": [[100, 150, 220], [96, 180, 90], [235, 160, 70], [150, 130, 115], [140, 205, 120]],
+  "interior_width_range": [6, 14],
+  "interior_height_range": [6, 14],
+  "zones": [
+    {
+      "height_min": 40.0,
+      "height_max": 200.0,
+      "density": 0.95,
+      "block_size": 4,
+      "palette_count": 6
+    },
+    {
+      "height_min": 4.0,
+      "height_max": 18.0,
+      "density": 0.80,
+      "block_size": 8,
+      "palette_count": 5
+    },
+    {
+      "height_min": 12.0,
+      "height_max": 60.0,
+      "density": 0.90,
+      "block_size": 5,
+      "palette_count": 7
+    },
+    {
+      "height_min": 6.0,
+      "height_max": 25.0,
+      "density": 0.70,
+      "block_size": 12,
+      "palette_count": 4
+    },
+    {
+      "height_min": 0.0,
+      "height_max": 2.0,
+      "density": 0.10,
+      "block_size": 16,
+      "palette_count": 3
+    }
+  ]
+}

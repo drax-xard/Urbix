@@ -53,6 +53,27 @@ fn main() {
         }
     };
 
+    // If cbindgen failed to emit ZoneParams (WorldConfig depends on it), inject
+    // the definition manually before WorldConfig. This keeps the header
+    // self-contained for C consumers (modular customization, Milestone 8).
+    const ZONE_PARAMS_DEF: &str = concat!(
+        "\ntypedef struct ZoneParams {\n",
+        "  float height_min;\n",
+        "  float height_max;\n",
+        "  float density;\n",
+        "  uint8_t block_size;\n",
+        "  uint8_t palette_count;\n",
+        "} ZoneParams;\n",
+    );
+    if !content.contains("typedef struct ZoneParams")
+        && content.contains("typedef struct WorldConfig")
+    {
+        if let Some(pos) = content.find("typedef struct WorldConfig") {
+            let (before, after) = content.split_at(pos);
+            content = format!("{}{}{}", before, ZONE_PARAMS_DEF, after);
+        }
+    }
+
     // cbindgen emits `#endif  /* URBIX_H */` as the final line for the guard.
     // Insert our additions immediately before it so they are inside the guard.
     const INJECT: &str =concat!(

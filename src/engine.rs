@@ -96,7 +96,7 @@ impl WorldEngine {
     /// ```
     #[must_use]
     pub fn with_config(config: WorldConfig) -> Self {
-        let voronoi = VoronoiDiagram::generate(config.seed, config.voronoi_site_count);
+        let voronoi = VoronoiDiagram::generate_with_config(&config);
         let center = ChunkId::new(0, 0);
         let cache = ChunkCache::new(center, config.draw_distance);
         Self {
@@ -177,6 +177,22 @@ impl WorldEngine {
         // All cached buffers were built at the old size and are no longer
         // consistent with the new size; drop them to avoid mixing layouts.
         self.cache.clear();
+    }
+
+    /// Replace the world configuration wholesale (modular customization).
+    ///
+    /// Validates via `WorldConfig::is_valid`, regenerates the Voronoi diagram
+    /// and clears the chunk cache so stale-size / stale-zone buffers cannot mix.
+    ///
+    /// ## Panics
+    ///
+    /// Panics if `config` is invalid.
+    pub fn set_config(&mut self, config: WorldConfig) {
+        assert!(config.is_valid(), "invalid WorldConfig");
+        self.config = config;
+        self.voronoi = VoronoiDiagram::generate_with_config(&self.config);
+        self.cache.clear();
+        self.cache.set_draw_distance(self.config.draw_distance);
     }
 
     /// Update the engine's center chunk coordinate.

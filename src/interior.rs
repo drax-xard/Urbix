@@ -25,6 +25,7 @@
 
 use std::collections::HashMap;
 
+use crate::config::WorldConfig;
 use crate::data::InteriorId;
 use crate::hash::{domain, hash_coords};
 
@@ -62,19 +63,20 @@ pub struct PlaceholderInteriorState {
     pub palette_id: u8,
 }
 
-impl InteriorState for PlaceholderInteriorState {
-    fn generate(id: InteriorId, seed: u64) -> Self {
-        // Derive dimensions and properties from distinct hash domains so they
-        // do not correlate. `id` is a u64; split into low/high 32-bit halves
-        // to avoid overlapping entropy (previous `id as i64`/`id>>32` overlapped).
+impl PlaceholderInteriorState {
+    /// Generate with a `WorldConfig` so interior size is tunable via file.
+    pub fn generate_with_config(id: InteriorId, seed: u64, config: &WorldConfig) -> Self {
         let x = (id & 0xFFFF_FFFF) as i64;
         let y = ((id >> 32) & 0xFFFF_FFFF) as i64;
 
-        // Width/height in 6..14 inclusive (9 values).
+        let w_range = config.interior_width_range;
+        let h_range = config.interior_height_range;
+        let w_span = (w_range[1] - w_range[0] + 1) as u64;
+        let h_span = (h_range[1] - h_range[0] + 1) as u64;
         let w_roll = hash_coords(x, y, seed, domain::INTERIOR_SIZE_W);
         let h_roll = hash_coords(x, y, seed, domain::INTERIOR_SIZE_H);
-        let width = 6 + (w_roll % 9) as u16;
-        let height = 6 + (h_roll % 9) as u16;
+        let width = w_range[0] + (w_roll % w_span) as u16;
+        let height = h_range[0] + (h_roll % h_span) as u16;
 
         let fog = (hash_coords(x, y, seed, domain::INTERIOR_FOG) % 256) as u8;
         let palette_id = (hash_coords(x, y, seed, domain::INTERIOR_PALETTE) % 8) as u8;
@@ -87,6 +89,12 @@ impl InteriorState for PlaceholderInteriorState {
             fog,
             palette_id,
         }
+    }
+}
+
+impl InteriorState for PlaceholderInteriorState {
+    fn generate(id: InteriorId, seed: u64) -> Self {
+        Self::generate_with_config(id, seed, &WorldConfig::default())
     }
 }
 

@@ -22,6 +22,7 @@
 //! stay cheap, and neighbouring chunks remain consistent because they query
 //! the same continuous field.
 
+use crate::config::WorldConfig;
 use crate::hash::domain;
 use crate::hash::hash_coords;
 use crate::zones::{ZoneType, ZONE_COUNT};
@@ -30,20 +31,24 @@ use crate::zones::{ZoneType, ZONE_COUNT};
 /// placed uniformly in `[-SPAN, SPAN] × [-SPAN, SPAN]`, so a world of roughly
 /// 20 000 × 20 000 units is covered while remaining small enough that any
 /// point inside the playable area has well-defined nearest sites.
+#[allow(dead_code)]
 const SPAN: f64 = 10_000.0;
 
 /// Exponent `p` in the Shepard inverse-distance weight `w = 1/d^p`. Higher
 /// values sharpen the cells toward a hard Voronoi diagram; lower values
 /// soften and round them. `4.0` gives distinct interiors with gentle borders.
+#[allow(dead_code)]
 const SHEPARD_POWER: f64 = 4.0;
 
 /// Tiny additive constant in the Shepard denominator that prevents
 /// division-by-zero when a query lands exactly on a site (or two sites are
 /// co-located). Its effect, letting that site's weight dominate the affinity,
 /// is exactly what we want at a site's centre.
+#[allow(dead_code)]
 const SHEPARD_EPSILON: f64 = 1e-8;
 
 /// Relative frequency of each zone when tagging sites (must sum to 1.0).
+#[allow(dead_code)]
 const ZONE_WEIGHTS: [f64; ZONE_COUNT] = [0.25, 0.30, 0.20, 0.15, 0.10];
 
 /// A single Voronoi site: a point in world space owning one `ZoneType`.
@@ -59,11 +64,14 @@ pub struct VoronoiSite {
 
 /// An immutable Voronoi diagram of district sites derived from a seed.
 ///
-/// Construct with [`VoronoiDiagram::generate`]; the map is fully determined by
-/// `(seed, site_count)` and is intended to live for the whole engine run.
+/// Construct with [`VoronoiDiagram::generate`] or [`VoronoiDiagram::generate_with_config`];
+/// the map is fully determined by the seed and site configuration and is
+/// intended to live for the whole engine run.
 #[derive(Clone, Debug, PartialEq)]
 pub struct VoronoiDiagram {
     sites: Vec<VoronoiSite>,
+    shepard_power: f64,
+    shepard_epsilon: f64,
 }
 
 impl VoronoiDiagram {
@@ -71,7 +79,9 @@ impl VoronoiDiagram {
     ///
     /// Every site's position and zone come from the same seed stream, so the
     /// same `(seed, site_count)` always yields the same diagram. `site_count`
-    /// should be in the supported 16–64 band (see `config.rs`).
+    /// should be in the supported 16–64 band (see `config.rs`). This is a
+    /// convenience wrapper around [`Self::generate_with_config`] using
+    /// `WorldConfig::default()` values for span/power/weights.
     ///
     /// ## Example
     ///
@@ -85,22 +95,41 @@ impl VoronoiDiagram {
     /// ```
     #[must_use]
     pub fn generate(seed: u64, site_count: u16) -> Self {
+        let cfg = WorldConfig {
+            seed,
+            voronoi_site_count: site_count,
+            ..Default::default()
+        };
+        Self::generate_with_config(&cfg)
+    }
+
+    /// Generate sites using a full `WorldConfig` (modular customization,
+    /// Milestone 8). Uses `config.voronoi_span`, `shepard_power`,
+    /// `shepard_epsilon`, and `zone_weights` instead of the hardcoded defaults.
+    #[must_use]
+    pub fn generate_with_config(config: &WorldConfig) -> Self {
+        let seed = config.seed;
+        let site_count = config.voronoi_site_count;
+        let span = config.voronoi_span;
+        let weights = &config.zone_weights;
         let sites = (0..site_count)
             .map(|i| {
                 let idx = i as u64;
-                // Independent deterministic samples for x and y. The index is
-                // tiny, so the i64 coordinate is just the site's ordinal.
                 let xh = hash_coords(idx as i64, 0, seed, domain::SITE_X);
                 let yh = hash_coords(idx as i64, 0, seed, domain::SITE_Y);
                 let zh = hash_coords(idx as i64, 0, seed, domain::SITE_ZONE);
                 VoronoiSite {
-                    x: to_span(xh),
-                    y: to_span(yh),
-                    zone: pick_zone(zh),
+                    x: to_span_with(xh, span),
+                    y: to_span_with(yh, span),
+                    zone: pick_zone_with(zh, weights),
                 }
             })
             .collect();
-        Self { sites }
+        Self {
+            sites,
+            shepard_power: config.shepard_power,
+            shepard_epsilon: config.shepard_epsilon,
+        }
     }
 
     /// Borrow the diagram's sites.
@@ -142,7 +171,7 @@ impl VoronoiDiagram {
             let d2 = dx * dx + dy * dy;
             // The epsilon guard avoids division by zero when the query sits
             // exactly on a site; that term then dominates as expected.
-            let w = 1.0 / (d2.powf(SHEPARD_POWER * 0.5) + SHEPARD_EPSILON);
+            let w = 1.0 / (d2.powf(self.shepard_power * 0.5) + self.shepard_epsilon);
             weighted[site.zone as usize] += w;
         }
 
@@ -164,21 +193,31 @@ impl VoronoiDiagram {
     }
 }
 
-/// Map a 53-bit-fraction-encoded hash to a coordinate in `[-SPAN, SPAN]`.
+/// Map a 53-bit-fraction-encoded hash to a coordinate in `[-span, span]`.
+#[allow(dead_code)]
 fn to_span(h: u64) -> f64 {
+    to_span_with(h, SPAN)
+}
+
+fn to_span_with(h: u64, span: f64) -> f64 {
     let t = (h >> 11) as f64 / ((1u64 << 53) as f64);
-    -SPAN + t * (2.0 * SPAN)
+    -span + t * (2.0 * span)
 }
 
 /// Choose a zone by weighted random draw driven by a hash value.
 ///
 /// Walks the cumulative `ZONE_WEIGHTS` distribution; the hash's top bits pick
 /// where in `[0, 1)` we land, so the outcome is purely a function of the input.
+#[allow(dead_code)]
 fn pick_zone(h: u64) -> ZoneType {
+    pick_zone_with(h, &ZONE_WEIGHTS)
+}
+
+fn pick_zone_with(h: u64, weights: &[f64; ZONE_COUNT]) -> ZoneType {
     let t = (h >> 11) as f64 / ((1u64 << 53) as f64);
     let mut acc = 0.0f64;
     for zone in ZoneType::all() {
-        acc += ZONE_WEIGHTS[zone as usize];
+        acc += weights[zone as usize];
         if t < acc {
             return zone;
         }

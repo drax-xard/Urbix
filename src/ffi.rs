@@ -27,6 +27,7 @@
 
 use std::ptr;
 
+use crate::config::WorldConfig;
 use crate::data::ChunkBuffer;
 use crate::engine::WorldEngine;
 use crate::zones::ZONE_COUNT;
@@ -186,6 +187,51 @@ pub unsafe extern "C" fn urbix_set_chunk_size(engine: *mut UrbixEngine, size: u1
     // SAFETY: caller guarantees a valid, non-concurrently-used handle.
     let engine = unsafe { &mut *(engine as *mut WorldEngine) };
     engine.set_chunk_size(size);
+}
+
+/// Construct an engine from a fully-specified [`WorldConfig`].
+///
+/// Returns null if `config` is null or `!config.is_valid()`.
+///
+/// ## Safety
+///
+/// `config` must be a valid pointer to a `WorldConfig`, or null.
+#[no_mangle]
+pub unsafe extern "C" fn urbix_engine_create_with_config(
+    config: *const WorldConfig,
+) -> *mut UrbixEngine {
+    if config.is_null() {
+        return ptr::null_mut();
+    }
+    // SAFETY: caller guarantees `config` points to a valid WorldConfig.
+    let cfg = unsafe { std::ptr::read(config) };
+    if !cfg.is_valid() {
+        return ptr::null_mut();
+    }
+    let engine = WorldEngine::with_config(cfg);
+    Box::into_raw(Box::new(engine)) as *mut UrbixEngine
+}
+
+/// Replace an engine's configuration wholesale (modular customization).
+///
+/// Regenerates the Voronoi diagram and clears the chunk cache. No-ops on null
+/// handles or invalid configs; never panics across the FFI boundary.
+///
+/// ## Safety
+///
+/// `engine` must be a valid handle, `config` a valid `WorldConfig` pointer.
+#[no_mangle]
+pub unsafe extern "C" fn urbix_set_config(engine: *mut UrbixEngine, config: *const WorldConfig) {
+    if engine.is_null() || config.is_null() {
+        return;
+    }
+    // SAFETY: caller guarantees both pointers are valid.
+    let cfg = unsafe { std::ptr::read(config) };
+    if !cfg.is_valid() {
+        return;
+    }
+    let engine = unsafe { &mut *(engine as *mut WorldEngine) };
+    engine.set_config(cfg);
 }
 
 #[cfg(test)]

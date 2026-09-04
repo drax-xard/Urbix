@@ -21,6 +21,8 @@
 //! - Blending: `zone_params(affinity: &[f32; 5]) -> ZoneParams`, interpolating
 //!   parameters from a fuzzy affinity vector produced by `region.rs`.
 
+use serde::{Deserialize, Serialize};
+
 /// The number of distinct zone types.
 pub const ZONE_COUNT: usize = 5;
 
@@ -73,7 +75,7 @@ impl ZoneType {
 /// FFI layer and be interpolated across a fuzzy [zone-affinity] vector.
 ///
 /// [zone-affinity]: crate::zones::zone_params
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[repr(C)]
 pub struct ZoneParams {
     /// Minimum building height (world units) for the zone.

@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-09-03
+
+### Added
+
+- **Modular customization** (Milestone 8): all non-procedural tunables are now
+  loaded from text files or runtime parameters. `WorldConfig` extended with
+  `voronoi_span`, `shepard_power/epsilon`, `zone_weights`, `zones: [ZoneParams;5]`,
+  `zone_hues`, `interior_width/height_range` (all `Serialize`/`Deserialize`,
+  `#[repr(C)]` bump to `0.8.0`, C header `WorldConfig` now larger). `Default`
+  remains byte-identical to pre-8.0 hardcoded values.
+  - `WorldConfig::from_file` / `from_toml_str` / `from_json_str` / `from_str_with_path`
+    sniff `TOML` vs `JSON` by extension (fallback TOML→JSON), `is_valid` now guards
+    `voronoi_span 100..100_000`, `shepard` ranges, `zone_weights` sum ~1.0,
+    per-zone `height_min<=max` etc., interior ranges.
+  - `WorldConfig::blended_zone_params`, `zone_params_for`, `hue_for`.
+  - `VoronoiDiagram::generate_with_config` uses `config.voronoi_span`/`shepard_*`/
+    `zone_weights`; `WorldEngine::with_config` + new `set_config(WorldConfig)`
+    (validates, regenerates Voronoi, clears cache).
+  - `ZoneParams` now `Serialize`/`Deserialize`; `interior::PlaceholderInteriorState::generate_with_config`.
+  - `urbix.toml.example` / `urbix.json.example` full example configs.
+  - CLI `--config <path>` (TOML or JSON) with file-as-base, CLI flags
+    (`--seed`, `--chunk-size`, `--draw-distance`, `--voronoi-site-count`)
+    override file; `Format` enum, radius/chunk-size caps, `--out` file-vs-dir
+    validation.
+  - FFI `urbix_engine_create_with_config`, `urbix_set_config` (null/invalid → no-op,
+    never unwind) and `WorldConfig`/`ZoneParams` exported to `include/urbix.h`
+    (ZoneParams injected before `WorldConfig` if cbindgen omits).
+
+### Changed
+
+- **`Cargo.toml`**: added `toml = "0.8"` for `TOML` support.
+- **`cbindgen.toml`**: `ZoneParams` before `WorldConfig` in allow-list, `INTERIOR_*`
+  constants excluded, `WorldConfig` now exported.
+- **`build.rs`**: best-effort header gen now injects `ZoneParams` def if missing and
+  keeps asserts inside guard.
+- **`Urbix_Project.md`**: Milestone 8 marked ✅ DONE.
+
 ## [0.7.1] — 2026-09-03
 
 ### Fixed

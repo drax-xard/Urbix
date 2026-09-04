@@ -31,7 +31,7 @@ use crate::data::{Cell, CellFlags, ChunkBuffer, ChunkId, InteriorId};
 use crate::hash::{domain, hash_coords};
 use crate::region::VoronoiDiagram;
 use crate::street;
-use crate::zones::{zone_params, ZoneType};
+use crate::zones::ZoneType;
 
 /// Generate the full contents of one chunk deterministically.
 ///
@@ -76,7 +76,7 @@ pub fn generate_chunk(
             let world_z = i64::from(cy) * chunk_size + local_y;
 
             let affinity = voronoi.query(world_x as f64, world_z as f64);
-            let params = zone_params(&affinity);
+            let params = config.blended_zone_params(&affinity);
 
             // Streets first; a street cell never becomes a building.
             let mut flags = street::layout_block(world_x, world_z, &params);
@@ -231,7 +231,7 @@ mod tests {
                     let expected = crate::street::layout_block(
                         wx,
                         wz,
-                        &crate::zones::zone_params(&cell.zone_affinity),
+                        &cfg.blended_zone_params(&cell.zone_affinity),
                     );
                     let street_match = CellFlags::IS_STREET.contains(cell.flags)
                         == CellFlags::IS_STREET.contains(expected);

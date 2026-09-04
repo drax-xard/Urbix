@@ -12,6 +12,8 @@ use urbix::config::WorldConfig;
 use urbix::data::{Cell, CellFlags, ZONE_COUNT};
 use urbix::engine::WorldEngine;
 
+/// Fallback hues matching `WorldConfig::default().zone_hues` (promoted to config
+/// in Milestone 8). `colour_cell` prefers `WorldConfig::zone_hues` when available.
 const ZONE_HUES: [[u8; 3]; ZONE_COUNT] = [
     [100, 150, 220],
     [96, 180, 90],
@@ -33,12 +35,17 @@ fn dominant_zone(cell: &Cell) -> usize {
     best
 }
 
-fn colour_cell(cell: &Cell, mode: &str) -> [u8; 3] {
+fn colour_cell(cell: &Cell, mode: &str, config: &WorldConfig) -> [u8; 3] {
     if cell.flags.contains(CellFlags::IS_STREET) {
         return ROAD_RGB;
     }
     let zone = dominant_zone(cell);
-    let hue = ZONE_HUES[zone];
+    // Prefer config's hues (modular customization); fallback to compiled-in.
+    let hue = config
+        .zone_hues
+        .get(zone)
+        .copied()
+        .unwrap_or(ZONE_HUES[zone]);
     if mode == "affinity" {
         return hue;
     }
@@ -183,7 +190,7 @@ impl eframe::App for App {
                         for lx in 0..cs {
                             let idx = (ly * cs + lx) as usize;
                             let cell = chunk.get_cell(idx);
-                            let rgb = colour_cell(&cell, &self.mode);
+                            let rgb = colour_cell(&cell, &self.mode, self.engine.config());
                             let x = origin.x + (cx * cs + lx) as f32 * cell_px;
                             let y = origin.y + (cy * cs + ly) as f32 * cell_px;
                             let r = egui::Rect::from_min_size(

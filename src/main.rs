@@ -26,9 +26,9 @@ enum Format {
 #[derive(Parser, Debug)]
 #[command(name = "urbix", version, about = "Generate Urbix city chunks")]
 struct Args {
-    /// World seed (default 0)
-    #[arg(long, default_value_t = 0)]
-    seed: u64,
+    /// World seed (overrides file/default)
+    #[arg(long)]
+    seed: Option<u64>,
 
     /// Chunk column to generate (center when --radius > 0)
     #[arg(long, default_value_t = 0)]
@@ -45,6 +45,19 @@ struct Args {
     /// Override chunk size (cells per side, 1..=256, default from WorldConfig)
     #[arg(long)]
     chunk_size: Option<u16>,
+
+    /// Override draw distance (chunks, default from config)
+    #[arg(long)]
+    draw_distance: Option<u32>,
+
+    /// Override Voronoi site count (16..=64)
+    #[arg(long)]
+    voronoi_site_count: Option<u16>,
+
+    /// Config file (TOML or JSON) for modular customization (Milestone 8).
+    /// CLI flags override file values.
+    #[arg(long)]
+    config: Option<PathBuf>,
 
     /// Output format: `bin` (raw wire bytes) or `json` (header + cells)
     #[arg(long, value_enum, default_value_t = Format::Bin)]
@@ -89,12 +102,23 @@ fn main() -> anyhow::Result<()> {
             .ok_or_else(|| anyhow::anyhow!("--cy - --radius underflows i32"))?;
     }
 
-    let mut config = WorldConfig {
-        seed: args.seed,
-        ..Default::default()
+    // Load base config from file (if any), otherwise default. CLI flags override file.
+    let mut config = if let Some(path) = &args.config {
+        WorldConfig::from_file(path)?
+    } else {
+        WorldConfig::default()
     };
+    if let Some(seed) = args.seed {
+        config.seed = seed;
+    }
     if let Some(cs) = args.chunk_size {
         config.chunk_size = cs;
+    }
+    if let Some(dd) = args.draw_distance {
+        config.draw_distance = dd;
+    }
+    if let Some(vsc) = args.voronoi_site_count {
+        config.voronoi_site_count = vsc;
     }
     if !config.is_valid() {
         anyhow::bail!("invalid WorldConfig: {:?}", config);
@@ -300,11 +324,14 @@ mod tests {
     #[test]
     fn cli_rejects_oversized_radius() {
         let args = Args {
-            seed: 0,
+            seed: Some(0),
             cx: 0,
             cy: 0,
             radius: 100,
             chunk_size: None,
+            draw_distance: None,
+            voronoi_site_count: None,
+            config: None,
             format: Format::Bin,
             out: None,
         };

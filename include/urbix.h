@@ -54,6 +54,87 @@ typedef struct UrbixZoneAffinity {
 } UrbixZoneAffinity;
 
 /**
+ * A `#[repr(C)]` snapshot of every tunable that shapes world generation.
+ *
+ * The struct holds only plain integer/float data so it is trivially
+ * FFI-safe and can be passed by pointer to and from C. Construct it with
+ * [`WorldConfig::default`] and override the fields you care about, or build
+ * a fresh one via `..Default::default()`. For file-based tuning, use
+ * [`WorldConfig::from_file`] (TOML or JSON).
+ *
+ * ## Example
+ *
+ * ```
+ * use urbix::config::WorldConfig;
+ *
+ * let cfg = WorldConfig {
+ *     seed: 445566,
+ *     ..Default::default()
+ * };
+ * assert_eq!(cfg.seed, 445566);
+ * assert!(cfg.is_valid());
+ * ```
+ */
+
+typedef struct ZoneParams {
+  float height_min;
+  float height_max;
+  float density;
+  uint8_t block_size;
+  uint8_t palette_count;
+} ZoneParams;
+typedef struct WorldConfig {
+    /**
+     * World seed; the same seed always yields the same city.
+     */
+    uint64_t seed;
+    /**
+     * Cells per chunk side. Must be > 0; defaults to 32.
+     */
+    uint16_t chunk_size;
+    /**
+     * Chunk Chebyshev radius kept in cache before eviction. Must be > 0.
+     */
+    uint32_t draw_distance;
+    /**
+     * Number of district sites in the Voronoi map. Typically 24–48.
+     */
+    uint16_t voronoi_site_count;
+    /**
+     * Half-extent of Voronoi site distribution ([-span, span]²). Default 10_000.
+     */
+    double voronoi_span;
+    /**
+     * Shepard exponent `p` in `1/d^p`. Default 4.0.
+     */
+    double shepard_power;
+    /**
+     * Shepard epsilon guard for `d=0`. Default 1e-8.
+     */
+    double shepard_epsilon;
+    /**
+     * Weighted frequency for tagging Voronoi sites per zone. Must sum ~1.0.
+     */
+    double zone_weights[ZONE_COUNT];
+    /**
+     * Per-zone parameters (height, density, block, palette).
+     */
+    ZoneParams zones[ZONE_COUNT];
+    /**
+     * Per-zone RGB hues for visualization (promoted from viz).
+     */
+    uint8_t zone_hues[ZONE_COUNT][3];
+    /**
+     * Interior room width range [min, max] (inclusive, 6..14 default).
+     */
+    uint16_t interior_width_range[2];
+    /**
+     * Interior room height range [min, max] (inclusive, 6..14 default).
+     */
+    uint16_t interior_height_range[2];
+} WorldConfig;
+
+/**
  * Header of a chunk buffer, matching the C reference layout.
  */
 typedef struct UrbixChunkHeader {
@@ -148,6 +229,12 @@ typedef struct UrbixCell {
 } UrbixCell;
 
 /**
+ * Default hues used by `examples/viz.rs` / `interactive.rs` (promoted to config
+ * in Milestone 8 so artists tune without recompiling).
+ */
+#define DEFAULT_ZONE_HUES { { 100, 150, 220, }, { 96, 180, 90, }, { 235, 160, 70, }, { 150, 130, 115, }, { 140, 205, 120, }, }
+
+/**
  * Construct an engine with the given seed and default configuration.
  *
  * Returns an opaque handle the caller owns and must release with
@@ -217,6 +304,29 @@ void urbix_set_draw_distance(struct UrbixEngine *engine, uint32_t radius);
  * `engine` must be a valid, non-null handle from [`urbix_engine_create`].
  */
 void urbix_set_chunk_size(struct UrbixEngine *engine, uint16_t size);
+
+/**
+ * Construct an engine from a fully-specified [`WorldConfig`].
+ *
+ * Returns null if `config` is null or `!config.is_valid()`.
+ *
+ * ## Safety
+ *
+ * `config` must be a valid pointer to a `WorldConfig`, or null.
+ */
+struct UrbixEngine *urbix_engine_create_with_config(const struct WorldConfig *config);
+
+/**
+ * Replace an engine's configuration wholesale (modular customization).
+ *
+ * Regenerates the Voronoi diagram and clears the chunk cache. No-ops on null
+ * handles or invalid configs; never panics across the FFI boundary.
+ *
+ * ## Safety
+ *
+ * `engine` must be a valid handle, `config` a valid `WorldConfig` pointer.
+ */
+void urbix_set_config(struct UrbixEngine *engine, const struct WorldConfig *config);
 /* ---- Compatibility shims for old manual header ---- */
 #define URBIX_FLAG_STREET CellFlags_IS_STREET
 #define URBIX_FLAG_PARK CellFlags_IS_PARK

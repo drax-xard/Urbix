@@ -47,8 +47,8 @@ use urbix::region::VoronoiDiagram;
 
 /// Base hue (RGB before height brightening) for each district.
 ///
-/// The crate does not yet ship a palette table (`ZoneParams` only stores a
-/// palette *count*), so the visualizer defines its own stable per-zone colours.
+/// Promoted to `WorldConfig::zone_hues` in Milestone 8 so artists tune without
+/// recompiling; this fallback matches `WorldConfig::default().zone_hues`.
 const ZONE_HUES: [[u8; 3]; ZONE_COUNT] = [
     [100, 150, 220], // Downtown    — steel blue
     [96, 180, 90],   // Residential — tree green

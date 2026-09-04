@@ -32,7 +32,7 @@ The full design lives in [`Urbix_Project.md`](Urbix_Project.md); in short:
 ## Status
 
 Tracked milestone-by-milestone in `Urbix_Project.md` §7 (✅ done / ⬜ pending).
-Current version: `0.7.1` (see `CHANGELOG.md`).
+Current version: `0.8.0` (see `CHANGELOG.md`).
 
 | Milestone | Status |
 |---|---|
@@ -43,6 +43,7 @@ Current version: `0.7.1` (see `CHANGELOG.md`).
 | M5 — FFI & binary wire format | ✅ Done (0.5.0, audit 0.5.1) |
 | M6 — Interior hooks | ✅ Done (0.6.0) |
 | M7 — CLI, docs & benchmarks | ✅ Done (0.7.0) |
+| M8 — Modular customization | ✅ Done (0.8.0) |
 
 Each chunk is produced by: querying the continuous Voronoi zone field at the
 cell's absolute world coordinates → resolving blended zone parameters → laying
@@ -72,9 +73,15 @@ then packing the results into flat `#[repr(C)]` cell records.
   `URBIX_FLAG_STREET`/`URBIX_FLAG_PARK` are preserved.
 - **Bounded memory.** `ChunkCache` keeps chunks keyed by `ChunkId` and evicts
   by Chebyshev distance from the current center, with an optional hard capacity.
+- **Modular customization.** All artist-tunable data (per-zone `ZoneParams`,
+  `ZONE_WEIGHTS`, Voronoi `span`/`power`/`epsilon`, `zone_hues`, interior
+  `width/height` ranges) live in `WorldConfig` and can be loaded from
+  `TOML`/`JSON` (`urbix.toml.example` / `urbix.json.example`) via
+  `WorldConfig::from_file` or `urbix --config`; CLI flags override file.
+  `WorldConfig::default()` is byte-identical to pre-8.0 hardcoded values.
 - **Lean dependencies.** Core generation is `hash` + `zones` + `region` with no
-  heavy deps; `clap`/`serde` power the CLI, `criterion`/`image` are dev-only
-  (benchmarks/visualizer).
+  heavy deps; `clap`/`serde`/`toml` power the CLI/file-input, `criterion`/`image`
+  are dev-only (benchmarks/visualizer).
 
 ## Visualizer
 
@@ -95,7 +102,7 @@ P6 PPM (`.ppm`) and a PNG (`.png`). Run with `--help` for the full flag list.
 
 **Rust (crates.io):**
 ```sh
-cargo add urbix@0.7
+cargo add urbix@0.8
 ```
 Docs at `docs.rs/urbix`, `WorldEngine` in Rust, `include/urbix.h` for C.
 
@@ -105,9 +112,9 @@ Each GitHub Release (`v*`) publishes `urbix-<ver>-<target>.tar.gz/.zip` for
 contains `include/urbix.h`, `lib/liburbix.{a,so,dylib}` / `lib/urbix.lib` +
 `bin/urbix.dll`, `LICENSE`, `README.md`:
 ```sh
-curl -L https://github.com/drax-xard/Urbix/releases/download/v0.7.1/urbix-0.7.1-linux-x86_64.tar.gz | tar xz
-cc -I urbix-0.7.1-linux-x86_64/include -c examples/basic_usage.c -o /tmp/basic_usage.o
-cc /tmp/basic_usage.o -L urbix-0.7.1-linux-x86_64/lib -lurbix -ldl -lm -pthread -o /tmp/basic_usage && /tmp/basic_usage
+curl -L https://github.com/drax-xard/Urbix/releases/download/v0.8.0/urbix-0.8.0-linux-x86_64.tar.gz | tar xz
+cc -I urbix-0.8.0-linux-x86_64/include -c examples/basic_usage.c -o /tmp/basic_usage.o
+cc /tmp/basic_usage.o -L urbix-0.8.0-linux-x86_64/lib -lurbix -ldl -lm -pthread -o /tmp/basic_usage && /tmp/basic_usage
 # pkg-config (after make install or PKG_CONFIG_PATH)
 pkg-config --cflags --libs urbix
 # CMake
@@ -124,7 +131,7 @@ cc /tmp/basic_usage.o -L target/release -lurbix -ldl -lm -pthread -o /tmp/basic_
 
 ## Usage
 
-The library is in early development (currently `0.7.1`); the public surface is
+The library is in early development (currently `0.8.0`); the public surface is
 `WorldEngine` in Rust and the C ABI in `include/urbix.h` (see
 `Urbix_Project.md` §2.3-2.4 for the wire format):
 
@@ -143,17 +150,22 @@ visualizer below.
 ### CLI
 
 ```sh
-# single chunk, binary wire format
+# single chunk, binary wire format (defaults from WorldConfig)
 cargo run -- --seed 445566 --cx 0 --cy 0 --format bin --out chunk_0_0.bin
-# 5×5 grid around (0,0), JSON
-cargo run -- --seed 7 --cx 0 --cy 0 --radius 2 --format json --out ./out
+# via file + CLI override (text file or runtime params)
+cargo run -- --config urbix.toml.example --seed 7 --cx 0 --cy 0 --radius 2 --format json --out ./out
+# JSON alternative
+cargo run -- --config urbix.json.example --cx 1 --cy 2 --chunk-size 8 --format bin
 cargo run -- --help
 ```
 
-Flags: `--seed` (u64), `--cx/--cy` (i32), `--radius` (u32, 0=single, max 64), `--chunk-size` (u16, 1..=256),
-`--format bin|json` (default `bin`), `--out` (file for single, dir for grid).
+Flags: `--config <path>` (TOML or JSON, sniffed by extension), `--seed` (u64),
+`--cx/--cy` (i32), `--radius` (u32, 0=single, max 64), `--chunk-size` (u16, 1..=256),
+`--draw-distance`/`--voronoi-site-count` overrides, `--format bin|json` (default `bin`),
+`--out` (file for single, dir for grid). File values are base, CLI flags override.
 Binary output is exactly `ChunkBuffer::as_bytes()` (header + cells) and can be
-read with `ChunkHeader`/`Cell` or via the FFI header.
+read with `ChunkHeader`/`Cell` or via the FFI header. Example files:
+`urbix.toml.example` / `urbix.json.example`.
 
 For deep dives see `docs/world_generation.md` (Voronoi/ chunk pipeline) and
 `docs/api.md` (C ABI + memory contract).
