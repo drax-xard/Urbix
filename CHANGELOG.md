@@ -5,11 +5,11 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.9.0] — 2026-09-04
 
 ### Added
 
-- **Interior layout data model** (Milestone 9, scaffolding): the exterior→interior
+- **Interior layout generation** (Milestone 9): the exterior→interior
   bridge that lets a generated interior react to the lot it belongs to.
   - `src/layout.rs`: `InteriorContext` (`#[repr(C)]` snapshot of a built lot's
     zone, blended affinity, height, floor count, footprint, palette, seed; floors
@@ -18,9 +18,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (the generated mini-world), and the per-zone blueprint schema
     `Blueprint`/`BlueprintRoom` — fixed-size `#[repr(C)]`, serde-tunable tables
     defaulting to `blueprint_defaults(zone)`.
-  - `interior::generate_layout(id, ctx, blueprint)` — deterministic, walled
-    baseline grid (wall ring, circulation core, one corridor) exercising the
-    context plumbing end-to-end before the richer room-placement algorithm.
+  - `interior::generate_layout(id, ctx, blueprint)` — the Milestone 9
+    room-placement generator: per storey a sealed wall ring, a hashed
+    circulation core, a street-facing entrance `Door` on `ctx.door_side` (with
+    its inner cell reserved as corridor), weighted room rolls from the
+    blueprint tables placed greedily inside a one-tile navigable margin (rooms
+    may hug walls and the core, never each other), corridor fill of leftover
+    cells, and one `Door` per room punched onto its facing margin cell.
+    `floor_hash` folds the storey index in, so floors vary independently while
+    staying reproducible per `(id, floor, seed)`.
+  - `DoorSide` (`West/East/North/South`, `#[repr(u8)]`); `InteriorContext`
+    gains `door_side`; both serde-serialized for round-trip parity.
+  - `chunk::interior_context_for(config, world_x, world_z, cell)` now also
+    picks the entrance side: `chunk::door_side_for(world_x, world_z,
+    block_size)` selects the street the lot abuts (ties toward
+    West/East/North/South).
   - `InteriorState` trait now takes the context: `fn generate(id, ctx) -> Self`
     instead of `fn generate(id, seed)`. `PlaceholderInteriorState` sizes itself
     from the context footprint/floors. `generate_interior` signature updated.
@@ -36,6 +48,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `ZoneType` now derives `Serialize`/`Deserialize` (needed by the context).
+
+### Docs
+
+- `docs/interiors.md` — interior generation & blueprint reference (data model,
+  defaults, config override chain, consumption), linked from `README.md`.
 
 ## [0.8.0] — 2026-09-03
 

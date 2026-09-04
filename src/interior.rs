@@ -22,17 +22,19 @@
 //!
 //! An interior is a *separate mini-world* keyed by `InteriorId`, generated and
 //! cached independently of outdoor chunks. Full room layout (rooms, corridors,
-//! doors, furniture) is driven by the per-zone [`crate::layout::Blueprint`]
-//! tables; the baseline generator in this module produces a deterministic,
-//! walled grid from the context and blueprint so the surface is exercisable
-//! end-to-end before the richer algorithm lands.
+//! doors) is driven by the per-zone [`crate::layout::Blueprint`] tables, and the
+//! whole floor is posed from the context (zone, floors, footprint, entrance
+//! side) deterministically, so a skyscraper, a home, and a warehouse read
+//! differently.
 
 use std::collections::HashMap;
 
 use crate::config::WorldConfig;
 use crate::data::InteriorId;
-use crate::hash::{domain, hash_coords};
-use crate::layout::{Blueprint, Floor, InteriorContext, InteriorLayout, Tile};
+use crate::hash::{domain, hash_coords, hash_unit};
+use crate::layout::{
+    Blueprint, BlueprintRoom, DoorSide, Floor, InteriorContext, InteriorLayout, Tile,
+};
 
 /// Hook trait for a generated interior.
 ///
@@ -137,7 +139,7 @@ impl InteriorState for PlaceholderInteriorState {
 ///
 /// ```
 /// use urbix::interior::{generate_interior, PlaceholderInteriorState};
-/// use urbix::layout::{InteriorContext, blueprint_defaults};
+/// use urbix::layout::{DoorSide, InteriorContext, blueprint_defaults};
 /// use urbix::zones::ZoneType;
 ///
 /// let ctx = InteriorContext {
@@ -149,6 +151,7 @@ impl InteriorState for PlaceholderInteriorState {
 ///     footprint_w: 8,
 ///     footprint_d: 8,
 ///     palette_id: 1,
+///     door_side: DoorSide::West,
 ///     seed: 445566,
 /// };
 /// let state = generate_interior::<PlaceholderInteriorState>(42, &ctx);
@@ -159,20 +162,27 @@ pub fn generate_interior<S: InteriorState>(id: InteriorId, ctx: &InteriorContext
     S::generate(id, ctx)
 }
 
-/// Generate a deterministic, walled [`InteriorLayout`] baseline from an
-/// exterior context and a zone blueprint (Milestone 9).
+/// Generate a deterministic, walled [`InteriorLayout`] from an exterior context
+/// and a zone blueprint (Milestone 9).
 ///
-/// This is the *data-model* generator: it turns a lot's context (zone, floors,
-/// footprint) plus its blueprint into one [`Floor`] grid per storey. Each floor
-/// is carved as a ring of exterior `Wall` tiles with a concrete `Corridor` and
-/// `Core` (stairs/elevator) painted from the context hash — everything placed
-/// deterministically. It deliberately produces a *conservative, sealed* result
-/// (no tile leaks out of the footprint) that the richer room-placement
-/// algorithm and renderers build on.
+/// Turns a lot's context (zone, floors, footprint, entrance side) plus its
+/// blueprint into one [`Floor`] grid per storey. Each floor is carved as:
 ///
-/// The full blueprint-driven room carving (rooms/doors/furniture from the
-/// weighted table) is a follow-on step; this establishes the stable output shape
-/// and exercises the context plumbing end-to-end.
+/// 1. A sealed ring of exterior `Wall` tiles (nothing leaks out of the
+///    footprint).
+/// 2. A hashed vertical-circulation `Core` square (stairs/elevator), sized by
+///    `blueprint.core_size`.
+/// 3. A street-facing entrance: a `Door` on the lot edge recorded in
+///    `ctx.door_side`.
+/// 4. Rooms rolled from `blueprint.room_slice()` (weighted by each template's
+///    `weight`, sized within its `min`/`max` bounds) and placed greedily
+///    against the free area, each with a one-tile margin so it opens onto a
+///    corridor channel.
+/// 5. Every leftover free cell filled with `Corridor`, and a single `Door`
+///    punched on each room's boundary where it meets circulation.
+///
+/// Everything is a pure function of `hash(id, floor, seed, domain)`, so the
+/// same lot always yields the same interiors and distinct storeys/seeds differ.
 #[must_use]
 pub fn generate_layout(
     id: InteriorId,
@@ -183,72 +193,10 @@ pub fn generate_layout(
     let (x_id, y_id) = split_id(id);
 
     // Number of floors defaults to the context; a degenerate footprint still
-    // yields a usable single floor so the result is never empty.
+    // yields a usable single (sealed) floor so the result is never empty.
     let floor_count = ctx.floor_count.max(1);
     let floors = (0..floor_count)
-        .map(|_floor| {
-            let mut g = Floor::empty(ctx.footprint_w, ctx.footprint_d);
-
-            // Outer wall ring: seal the footprint so nothing leaks outside.
-            if g.width >= 3 && g.depth >= 3 {
-                let w = g.width - 1;
-                let d = g.depth - 1;
-                for x in 0..=w {
-                    let i0 = g.index(x, 0);
-                    let id_ = g.index(x, d);
-                    g.tiles[i0] = Tile::Wall;
-                    g.tiles[id_] = Tile::Wall;
-                }
-                for z in 0..=d {
-                    let i0 = g.index(0, z);
-                    let iw = g.index(w, z);
-                    g.tiles[i0] = Tile::Wall;
-                    g.tiles[iw] = Tile::Wall;
-                }
-            } else {
-                // Degenerate footprint: mark the whole grid solid so the
-                // interior never exposes an unwalled void.
-                g.tiles.fill(Tile::Wall);
-            }
-
-            // Vertical circulation core: a filled square near the centre whose
-            // position is hashed from the id + floor. Clamp inside the wall ring.
-            let core = blueprint.core_size.max(1);
-            let inner_span_w = g.width.saturating_sub(core + 1).max(1);
-            let inner_span_d = g.depth.saturating_sub(core + 1).max(1);
-            let cx_lo = hash_coords(x_id, y_id, seed, domain::LAYOUT_FLOOR) as usize;
-            let cx = 1u8 + (cx_lo % usize::from(inner_span_w)) as u8;
-            let cz = 1u8 + ((cx_lo >> 16) % usize::from(inner_span_d)) as u8;
-            paint_core(&mut g, cx, cz, core);
-
-            // One concrete corridor from the core to the west edge (door at the
-            // boundary) so there is a guaranteed navigable path.
-            if g.width >= 3 && g.depth >= 3 {
-                let mut z = cz;
-                let z_end = cz + core.saturating_sub(1);
-                while z <= z_end {
-                    let idoor = g.index(0, z);
-                    let icorr = g.index(1, z);
-                    g.tiles[idoor] = Tile::Door;
-                    g.tiles[icorr] = Tile::Corridor;
-                    z += 1;
-                }
-                let cx_clamped = cx.min(g.width - 2);
-                let i_cx = g.index(cx_clamped, cz);
-                g.tiles[i_cx] = Tile::Corridor;
-            }
-
-            // Record the room-kind tag where the floor is a corridor/room tile,
-            // using the first blueprint room as the default interior tag.
-            let default_kind = blueprint.room_slice().first().map_or(0, |r| r.kind);
-            for (i, t) in g.tiles.iter().enumerate() {
-                if matches!(t, Tile::Corridor | Tile::Room | Tile::Door) {
-                    g.kinds[i] = default_kind;
-                }
-            }
-
-            g
-        })
+        .map(|f| generate_floor(x_id, y_id, seed, f, ctx, blueprint))
         .collect::<Vec<_>>();
 
     InteriorLayout {
@@ -257,6 +205,362 @@ pub fn generate_layout(
         context: *ctx,
         floors,
     }
+}
+
+/// Generate the `floor`-th storey of an interior.
+///
+/// See [`generate_layout`] for the full carving pipeline. `x_id`/`y_id` are the
+/// interior id's coordinate halves and `seed` the world seed; every draw mixes
+/// in the floor number so adjacent storeys vary independently.
+#[must_use]
+fn generate_floor(
+    x_id: i64,
+    y_id: i64,
+    seed: u64,
+    floor: u8,
+    ctx: &InteriorContext,
+    blueprint: &Blueprint,
+) -> Floor {
+    let mut g = Floor::empty(ctx.footprint_w, ctx.footprint_d);
+    let gw = usize::from(g.width);
+    let gd = usize::from(g.depth);
+
+    // Degenerate footprint (no interior): seal it solid so an unwalled void is
+    // never exposed.
+    if g.width < 3 || g.depth < 3 {
+        g.tiles.fill(Tile::Wall);
+        return g;
+    }
+
+    paint_wall_ring(&mut g);
+
+    // Vertical circulation core: a filled square whose placement is hashed per
+    // floor, clamped inside the wall ring and one tile off every wall.
+    let core = blueprint.core_size.max(1);
+    let inner_w = (gw.saturating_sub(usize::from(core) + 1)).max(1);
+    let inner_d = (gd.saturating_sub(usize::from(core) + 1)).max(1);
+    let core_base = floor_hash(x_id, y_id, seed, floor, domain::LAYOUT_FLOOR);
+    let cx = 1u8 + (core_base % inner_w as u64) as u8;
+    let cz = 1u8 + ((core_base >> 16) % inner_d as u64) as u8;
+    paint_core(&mut g, cx, cz, core);
+
+    // Street-facing entrance on the lot edge recorded in the context. The cell
+    // just inside the door is reserved as corridor (rooms may hug it but never
+    // claim it), so the street access always connects to the interior.
+    let entrance_base = floor_hash(x_id, y_id, seed, floor, domain::LAYOUT_DOOR);
+    punch_entrance_door(&mut g, ctx.door_side, entrance_base);
+    reserve_entrance(&mut g, ctx.door_side, entrance_base);
+
+    // Weighted room placement against the free area.
+    let rooms = blueprint.room_slice();
+    if !rooms.is_empty() {
+        let room_base = floor_hash(x_id, y_id, seed, floor, domain::LAYOUT_ROOM);
+
+        // Candidate anchors: every free interior cell, visited in a
+        // deterministic pseudo-random order (Fisher–Yates on the hash stream).
+        let mut anchors: Vec<(u8, u8)> = Vec::new();
+        for z in 1..gd - 1 {
+            for x in 1..gw - 1 {
+                if g.tiles[z * gw + x] == Tile::Void {
+                    anchors.push((x as u8, z as u8));
+                }
+            }
+        }
+        for i in (1..anchors.len()).rev() {
+            let j = pick(room_base, i, i + 1);
+            anchors.swap(i, j);
+        }
+
+        let mut placed: Vec<(u8, u8, u8, u8)> = Vec::new();
+        for (k, (ax, az)) in anchors.into_iter().enumerate() {
+            // Bound the work on very large footprints; 128 fills any sane home.
+            if k >= 128 {
+                break;
+            }
+            let idx = usize::from(az) * gw + usize::from(ax);
+            if g.tiles[idx] != Tile::Void {
+                continue;
+            }
+            let roll = unit_draw(room_base, k);
+            let room = roll_room(rooms, roll);
+            if let Some(rect) = try_place_room(&mut g, ax, az, room, room_base, k) {
+                paint_room(&mut g, rect.0, rect.1, rect.2, rect.3, room.kind);
+                placed.push(rect);
+            }
+        }
+
+        // A door from each room onto circulation (k = 1 draws independently of
+        // the entrance pick at k = 0 on the same door stream).
+        let door_base = floor_hash(x_id, y_id, seed, floor, domain::LAYOUT_DOOR);
+        for rect in placed {
+            room_door(&mut g, rect, door_base);
+        }
+    }
+
+    // Corridor fill: every leftover free cell becomes circulation, so the
+    // one-tile margin around each room (and around the core) is a navigable
+    // channel connecting everything, including the street-facing entrance.
+    for z in 1..gd - 1 {
+        for x in 1..gw - 1 {
+            let idx = z * gw + x;
+            if g.tiles[idx] == Tile::Void {
+                g.tiles[idx] = Tile::Corridor;
+            }
+        }
+    }
+
+    g
+}
+
+/// Paint the sealed outer wall ring of a floor grid.
+fn paint_wall_ring(g: &mut Floor) {
+    let gw = usize::from(g.width);
+    let gd = usize::from(g.depth);
+    let last_w = gw - 1;
+    let last_d = gd - 1;
+    for x in 0..=last_w {
+        g.tiles[x] = Tile::Wall;
+        g.tiles[last_d * gw + x] = Tile::Wall;
+    }
+    for z in 0..=last_d {
+        g.tiles[z * gw] = Tile::Wall;
+        g.tiles[z * gw + last_w] = Tile::Wall;
+    }
+}
+
+/// Place the street-facing entrance: a single `Door` on the outer wall ring on
+/// `side`, at a hashed offset along that edge. The interior beside the door is
+/// guaranteed to become `Corridor` (rooms keep a margin off the wall), so the
+/// entrance always connects to circulation.
+fn punch_entrance_door(g: &mut Floor, side: DoorSide, base: u64) {
+    let gw = usize::from(g.width);
+    let gd = usize::from(g.depth);
+    let idx = match side {
+        DoorSide::West => {
+            let z = 1 + pick(base, 0, gd - 2);
+            z * gw
+        }
+        DoorSide::East => {
+            let z = 1 + pick(base, 0, gd - 2);
+            z * gw + gw - 1
+        }
+        DoorSide::North => 1 + pick(base, 0, gw - 2),
+        DoorSide::South => {
+            let x = 1 + pick(base, 0, gw - 2);
+            (gd - 1) * gw + x
+        }
+    };
+    g.tiles[idx] = Tile::Door;
+    g.kinds[idx] = 0;
+}
+
+/// Reserve the interior cell directly behind the entrance `Door` as `Corridor`,
+/// using the same hashed offset as [`punch_entrance_door`] so both agree on
+/// which cell is the doorway.
+fn reserve_entrance(g: &mut Floor, side: DoorSide, base: u64) {
+    let gw = usize::from(g.width);
+    let gd = usize::from(g.depth);
+    let idx = match side {
+        DoorSide::West => {
+            let z = 1 + pick(base, 0, gd - 2);
+            z * gw + 1
+        }
+        DoorSide::East => {
+            let z = 1 + pick(base, 0, gd - 2);
+            z * gw + (gw - 2)
+        }
+        DoorSide::North => {
+            let x = 1 + pick(base, 0, gw - 2);
+            gw + x
+        }
+        DoorSide::South => {
+            let x = 1 + pick(base, 0, gw - 2);
+            (gd - 2) * gw + x
+        }
+    };
+    g.tiles[idx] = Tile::Corridor;
+    g.kinds[idx] = 0;
+}
+
+/// Whether a `w×d` room with top-left corner `(x0, z0)` fits: the rectangle
+/// itself must be free `Void`, and every cell in a one-tile margin around it
+/// must not be an already-placed room. The margin is what becomes the corridor
+/// channel keeping each room reachable. Exterior `Wall` (rooms may hug the
+/// block perimeter), the circulation `Core` (a room can open straight onto
+/// it), and an entrance `Door` are all valid margin neighbours.
+fn room_fits(g: &Floor, x0: i64, z0: i64, w: u8, d: u8) -> bool {
+    let gw = usize::from(g.width);
+    let gd = usize::from(g.depth);
+    let (w, d) = (i64::from(w), i64::from(d));
+    for z in z0..z0 + d {
+        for x in x0..x0 + w {
+            if x < 0 || z < 0 || x >= gw as i64 || z >= gd as i64 {
+                return false;
+            }
+            if g.tiles[z as usize * gw + x as usize] != Tile::Void {
+                return false;
+            }
+        }
+    }
+    for z in z0 - 1..=z0 + d {
+        for x in x0 - 1..=x0 + w {
+            if x < 0 || z < 0 || x >= gw as i64 || z >= gd as i64 {
+                continue;
+            }
+            if g.tiles[z as usize * gw + x as usize] == Tile::Room {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Try to place `room` with top-left at `(ax, az)`, rolling a size within the
+/// template's bounds and falling back to the closest fit. On success paints the
+/// room and returns its rect `(x0, z0, w, d)`.
+fn try_place_room(
+    g: &mut Floor,
+    ax: u8,
+    az: u8,
+    room: &BlueprintRoom,
+    base: u64,
+    k: usize,
+) -> Option<(u8, u8, u8, u8)> {
+    if room.max_w == 0 || room.max_d == 0 {
+        return None;
+    }
+    let span_w = u32::from(room.max_w - room.min_w) + 1;
+    let span_d = u32::from(room.max_d - room.min_d) + 1;
+    let tw = room.min_w + (unit_draw(base, k * 2) * span_w as f32) as u8;
+    let td = room.min_d + (unit_draw(base, k * 2 + 1) * span_d as f32) as u8;
+
+    // Try every size in the template bounds, closest to the roll first.
+    let mut combos: Vec<(u8, u8)> = (room.min_w..=room.max_w)
+        .flat_map(|w| (room.min_d..=room.max_d).map(move |d| (w, d)))
+        .collect();
+    combos.sort_by_key(|&(w, d)| {
+        (
+            i64::from(w).abs_diff(i64::from(tw)) + i64::from(d).abs_diff(i64::from(td)),
+            w,
+            d,
+        )
+    });
+    for (w, d) in combos {
+        if room_fits(g, i64::from(ax), i64::from(az), w, d) {
+            return Some((ax, az, w, d));
+        }
+    }
+    None
+}
+
+/// Stamp a `w×d` rect of tiles as `Room` carrying `kind`.
+fn paint_room(g: &mut Floor, x0: u8, z0: u8, w: u8, d: u8, kind: u8) {
+    let gw = usize::from(g.width);
+    for z in usize::from(z0)..usize::from(z0) + usize::from(d) {
+        for x in usize::from(x0)..usize::from(x0) + usize::from(w) {
+            let i = z * gw + x;
+            g.tiles[i] = Tile::Room;
+            g.kinds[i] = kind;
+        }
+    }
+}
+
+/// Punch a single `Door` on a room's boundary: walk the room's perimeter in a
+/// deterministic rotation of the hash stream and turn the first margin cell the
+/// room faces into a `Door` (the margin is pure circulation by construction).
+/// The door lives in the corridor channel, so the room itself stays intact, the
+/// opening always leads to circulation, and nested rooms of any size remain
+/// fully walled.
+fn room_door(g: &mut Floor, rect: (u8, u8, u8, u8), base: u64) {
+    let gw = usize::from(g.width);
+    let gd = usize::from(g.depth);
+    let (x0, z0, w, d) = (
+        usize::from(rect.0),
+        usize::from(rect.1),
+        usize::from(rect.2),
+        usize::from(rect.3),
+    );
+    let mut perimeter: Vec<usize> = Vec::with_capacity(2 * (w + d));
+    for x in x0..x0 + w {
+        perimeter.push(z0 * gw + x);
+        perimeter.push((z0 + d - 1) * gw + x);
+    }
+    for z in z0 + 1..z0 + d - 1 {
+        perimeter.push(z * gw + x0);
+        perimeter.push(z * gw + x0 + w - 1);
+    }
+    if perimeter.is_empty() {
+        return;
+    }
+    let rot = pick(base, 1, perimeter.len());
+    perimeter.rotate_left(rot);
+    for idx in perimeter {
+        let (x, z) = (idx % gw, idx / gw);
+        let (x, z) = (x as i64, z as i64);
+        for (nx, nz) in [(x + 1, z), (x - 1, z), (x, z + 1), (x, z - 1)] {
+            if nx < 0 || nz < 0 || nx >= gw as i64 || nz >= gd as i64 {
+                continue;
+            }
+            let ni = nz as usize * gw + nx as usize;
+            match g.tiles[ni] {
+                // The margin cell touching the room becomes the doorway; it may
+                // already be a door punched for the street access.
+                Tile::Corridor | Tile::Core | Tile::Door => {
+                    g.tiles[ni] = Tile::Door;
+                    g.kinds[ni] = 0;
+                    return;
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Hash for one storey: folds `floor` into the coordinate stream so each level
+/// of a building draws independently of the others.
+fn floor_hash(x: i64, y: i64, seed: u64, floor: u8, domain: u8) -> u64 {
+    hash_coords(
+        x ^ i64::from(floor).wrapping_mul(0x9e37_79b9_7f4a_7c15u64 as i64),
+        y,
+        seed,
+        domain,
+    )
+}
+
+/// A deterministic unit draw in `[0, 1)` at index `k` of a `base` hash stream.
+fn unit_draw(base: u64, k: usize) -> f32 {
+    hash_unit(base as i64, k as i64, 0, 0)
+}
+
+/// A deterministic index into `[0, n)` using a `base` hash stream and index `k`.
+fn pick(base: u64, k: usize, n: usize) -> usize {
+    if n == 0 {
+        0
+    } else {
+        (hash_coords(base as i64, k as i64, 0, 0) % n as u64) as usize
+    }
+}
+
+/// Weighted room roll over the blueprint's live room templates.
+///
+/// The roll is a unit draw; the template whose cumulative weight first reaches
+/// it is chosen, so higher-`weight` templates are picked proportionally more
+/// often. Non-positive weights never win; an all-non-positive table falls back
+/// to the first template.
+fn roll_room(rooms: &[BlueprintRoom], roll: f32) -> &BlueprintRoom {
+    debug_assert!(!rooms.is_empty());
+    let total: f32 = rooms.iter().map(|r| r.weight.max(0.0)).sum();
+    if total <= 0.0 {
+        return &rooms[0];
+    }
+    let mut t = roll.clamp(0.0, 0.999_999_9) * total;
+    for r in rooms {
+        t -= r.weight.max(0.0);
+        if t <= 0.0 {
+            return r;
+        }
+    }
+    &rooms[rooms.len() - 1]
 }
 
 /// Paint a filled `core×core` square of `Tile::Core` tiles centred near
@@ -415,7 +719,7 @@ mod tests {
     use super::*;
     use crate::data::InteriorId;
     use crate::hash::{domain, hash_coords};
-    use crate::layout::{blueprint_defaults, InteriorContext};
+    use crate::layout::{blueprint_defaults, DoorSide, InteriorContext};
     use crate::zones::ZoneType;
 
     fn interior_id_for(world_x: i64, world_z: i64, seed: u64) -> InteriorId {
@@ -434,6 +738,7 @@ mod tests {
             8,
             8,
             1,
+            DoorSide::West,
             seed,
         )
     }
@@ -450,6 +755,7 @@ mod tests {
             12,
             12,
             2,
+            DoorSide::East,
             seed,
         )
     }
@@ -500,8 +806,25 @@ mod tests {
         assert_ne!(c, d);
     }
 
+    /// An 8×8 residential two-storey lot, built on an arbitrary entrance side.
+    fn lot_ctx(id: InteriorId, side: DoorSide, seed: u64) -> InteriorContext {
+        InteriorContext::new(
+            id,
+            ZoneType::Residential,
+            [0.0; 5],
+            8.0,
+            4.0,
+            64,
+            8,
+            8,
+            1,
+            side,
+            seed,
+        )
+    }
+
     #[test]
-    fn baseline_layout_is_deterministic_and_walled() {
+    fn layout_is_deterministic_and_walled() {
         let ctx = tower_ctx(7, 42);
         let bp = crate::layout::blueprint_defaults(ctx.zone);
         let a = generate_layout(7, &ctx, &bp);
@@ -518,9 +841,182 @@ mod tests {
                 floor.tiles.contains(&Tile::Core),
                 "tower floor missing circulation core"
             );
+            assert!(
+                floor.tiles.contains(&Tile::Door),
+                "tower floor missing an entrance/room door"
+            );
         }
         assert_eq!(a.id, 7);
         assert_eq!(a.seed, 42);
+    }
+
+    #[test]
+    fn rooms_are_placed_walled_sealed_and_reachable() {
+        let ctx = lot_ctx(42, DoorSide::West, 445566);
+        let bp = crate::layout::blueprint_defaults(ctx.zone);
+        let layout = generate_layout(42, &ctx, &bp);
+        assert_eq!(layout.floors.len(), 2);
+
+        for floor in &layout.floors {
+            let gw = usize::from(floor.width);
+            let gd = usize::from(floor.depth);
+            // Sealed: the outer ring is exterior wall, except for the
+            // street-facing entrance (a deliberate Door opening).
+            for x in 0..gw {
+                assert!(
+                    matches!(floor.tiles[x], Tile::Wall | Tile::Door),
+                    "top edge not sealed"
+                );
+                assert!(
+                    matches!(floor.tiles[(gd - 1) * gw + x], Tile::Wall | Tile::Door),
+                    "bottom edge not sealed"
+                );
+            }
+            for z in 0..gd {
+                assert!(matches!(floor.tiles[z * gw], Tile::Wall | Tile::Door));
+                assert!(matches!(
+                    floor.tiles[z * gw + gw - 1],
+                    Tile::Wall | Tile::Door
+                ));
+            }
+            // Rooms exist, every room as a whole is reachable from circulation
+            // (a room may be larger than a corridor can border on all sides
+            // internally, so reachability is a flood fill through the room's
+            // own tiles), and kind tags are only set on room tiles (and match
+            // the residential blueprint).
+            let total = gw * gd;
+            let mut visited = vec![false; total];
+            let mut rooms = 0usize;
+            for start in 0..total {
+                if visited[start] || floor.tiles[start] != Tile::Room {
+                    continue;
+                }
+                rooms += 1;
+                let mut stack = vec![start];
+                visited[start] = true;
+                let mut touches_circulation = false;
+                while let Some(i) = stack.pop() {
+                    let x = i % gw;
+                    let z = i / gw;
+                    for (dx, dz) in [(1i64, 0i64), (-1, 0), (0, 1), (0, -1)] {
+                        let nx = x as i64 + dx;
+                        let nz = z as i64 + dz;
+                        if nx < 0 || nz < 0 || nx >= gw as i64 || nz >= gd as i64 {
+                            continue;
+                        }
+                        let ni = nz as usize * gw + nx as usize;
+                        match floor.tiles[ni] {
+                            Tile::Room if !visited[ni] => {
+                                visited[ni] = true;
+                                stack.push(ni);
+                            }
+                            Tile::Corridor | Tile::Door | Tile::Core => {
+                                touches_circulation = true;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                assert!(
+                    touches_circulation,
+                    "room starting at ({},{}) is isolated",
+                    start % gw,
+                    start / gw
+                );
+            }
+            assert!(rooms > 0, "no rooms placed on this floor");
+            for i in 0..total {
+                if floor.tiles[i] == Tile::Room {
+                    assert!(
+                        (20..=23).contains(&floor.kinds[i]),
+                        "room kind {} not from the residential blueprint",
+                        floor.kinds[i]
+                    );
+                } else {
+                    assert_eq!(
+                        floor.kinds[i], 0,
+                        "kind set on non-room tile {:?}",
+                        floor.tiles[i]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn interiors_vary_across_floors_and_seeds() {
+        let bp = crate::layout::blueprint_defaults(ZoneType::Downtown);
+        let tower = generate_layout(9, &tower_ctx(9, 42), &bp);
+        assert!(tower.floors.len() >= 2);
+        let all_same = tower
+            .floors
+            .windows(2)
+            .all(|pair| pair[0].tiles == pair[1].tiles);
+        assert!(!all_same, "every storey of the tower is identical");
+
+        let a = generate_layout(
+            1,
+            &home_ctx(1, 1),
+            &crate::layout::blueprint_defaults(ZoneType::Residential),
+        );
+        let b = generate_layout(
+            1,
+            &home_ctx(1, 2),
+            &crate::layout::blueprint_defaults(ZoneType::Residential),
+        );
+        assert_ne!(
+            a, b,
+            "different world seeds must generate different interiors"
+        );
+    }
+
+    #[test]
+    fn entrance_door_faces_the_context_side() {
+        let bp = crate::layout::blueprint_defaults(ZoneType::Residential);
+        for side in [
+            DoorSide::West,
+            DoorSide::East,
+            DoorSide::North,
+            DoorSide::South,
+        ] {
+            let floor = &generate_layout(1, &lot_ctx(7, side, 99), &bp).floors[0];
+            let gw = usize::from(floor.width);
+            let gd = usize::from(floor.depth);
+            let hits = |pred: &dyn Fn(usize) -> bool| {
+                floor
+                    .tiles
+                    .iter()
+                    .enumerate()
+                    .any(|(i, t)| *t == Tile::Door && pred(i))
+            };
+            match side {
+                DoorSide::West => assert!(hits(&|i| i % gw == 0)),
+                DoorSide::East => assert!(hits(&|i| i % gw == gw - 1)),
+                DoorSide::North => assert!(hits(&|i| i / gw == 0)),
+                DoorSide::South => assert!(hits(&|i| i / gw == gd - 1)),
+            }
+        }
+    }
+
+    #[test]
+    fn degenerate_footprint_is_sealed() {
+        let ctx = InteriorContext::new(
+            1,
+            ZoneType::Park,
+            [0.0; 5],
+            8.0,
+            4.0,
+            64,
+            2,
+            2,
+            0,
+            DoorSide::North,
+            7,
+        );
+        let layout = generate_layout(1, &ctx, &crate::layout::blueprint_defaults(ZoneType::Park));
+        for floor in &layout.floors {
+            assert!(floor.tiles.iter().all(|t| *t == Tile::Wall));
+        }
     }
 
     #[test]

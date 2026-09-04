@@ -67,6 +67,25 @@ pub const DEFAULT_MAX_FLOORS: u8 = 64;
 // InteriorContext — exterior lot snapshot fed to the generator
 // ---------------------------------------------------------------------------
 
+/// Which of the four lot edges faces a street: the main entrance is placed on
+/// that side so an interior always opens toward the road.
+///
+/// Derived at chunk generation time from the cell's position within its street
+/// block (the nearest boundary road), then recorded in [`InteriorContext`] so
+/// the generator and renderers agree without re-deriving it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum DoorSide {
+    /// Main entrance on the west edge (negative x).
+    West = 0,
+    /// Main entrance on the east edge (positive x).
+    East = 1,
+    /// Main entrance on the north edge (negative z).
+    North = 2,
+    /// Main entrance on the south edge (positive z).
+    South = 3,
+}
+
 /// Snapshot of the exterior lot an interior belongs to.
 ///
 /// This is the "information from the exterior map" the generator reacts to:
@@ -98,6 +117,8 @@ pub struct InteriorContext {
     pub footprint_d: u8,
     /// Exterior facade palette id (rooms tinted to match the building).
     pub palette_id: u8,
+    /// Lot edge facing a street; the main entrance is placed on this side.
+    pub door_side: DoorSide,
     /// World seed used throughout interior derivation.
     pub seed: u64,
 }
@@ -128,6 +149,7 @@ impl InteriorContext {
         footprint_w: u8,
         footprint_d: u8,
         palette_id: u8,
+        door_side: DoorSide,
         seed: u64,
     ) -> Self {
         let floor_count = if height <= 0.0 {
@@ -146,6 +168,7 @@ impl InteriorContext {
             footprint_w,
             footprint_d,
             palette_id,
+            door_side,
             seed,
         }
     }
@@ -341,7 +364,7 @@ pub fn default_blueprints() -> [Blueprint; crate::zones::ZONE_COUNT] {
 /// `tiles[floor]` has `width * depth` entries in row-major order (x-major then
 /// z-major, matching `ChunkBuffer`'s cell iteration). `room_kinds` carries the
 /// opaque [`BlueprintRoom::kind`] for each `Room` tile (one entry per tile,
-/// meaningful only where the tile is `Room` or `Corridor`; else 0).
+/// meaningful only where the tile is `Room`; else 0).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Floor {
     /// Grid width in tiles.
@@ -418,6 +441,7 @@ mod tests {
             8,
             8,
             1,
+            DoorSide::West,
             42,
         );
         assert_eq!(ctx.floor_count, 2);
@@ -427,14 +451,37 @@ mod tests {
     #[test]
     fn context_floor_count_respects_cap() {
         // 120u at 4u/floor = 30 floors, capped to 8.
-        let ctx =
-            InteriorContext::new(1, ZoneType::Downtown, [0.0; 5], 120.0, 4.0, 8, 10, 10, 2, 5);
+        let ctx = InteriorContext::new(
+            1,
+            ZoneType::Downtown,
+            [0.0; 5],
+            120.0,
+            4.0,
+            8,
+            10,
+            10,
+            2,
+            DoorSide::East,
+            5,
+        );
         assert_eq!(ctx.floor_count, 8);
     }
 
     #[test]
     fn unbuilt_lot_has_zero_floors() {
-        let ctx = InteriorContext::new(1, ZoneType::Park, [0.0; 5], 0.0, 4.0, 64, 4, 4, 0, 5);
+        let ctx = InteriorContext::new(
+            1,
+            ZoneType::Park,
+            [0.0; 5],
+            0.0,
+            4.0,
+            64,
+            4,
+            4,
+            0,
+            DoorSide::South,
+            5,
+        );
         assert_eq!(ctx.floor_count, 0);
         assert!(!ctx.is_built());
     }

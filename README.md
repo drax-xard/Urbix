@@ -31,8 +31,8 @@ The full design lives in [`Urbix_Project.md`](Urbix_Project.md); in short:
 
 ## Status
 
-Tracked milestone-by-milestone in `Urbix_Project.md` §7 (✅ done / ⬜ pending).
-Current version: `0.8.0` (see `CHANGELOG.md`).
+Tracked milestone-by-milestone in `Urbix_Project.md` §7 (✅ done / 🔨 in
+progress / ⬜ pending). Current version: `0.9.0` (see `CHANGELOG.md`).
 
 | Milestone | Status |
 |---|---|
@@ -44,6 +44,20 @@ Current version: `0.8.0` (see `CHANGELOG.md`).
 | M6 — Interior hooks | ✅ Done (0.6.0) |
 | M7 — CLI, docs & benchmarks | ✅ Done (0.7.0) |
 | M8 — Modular customization | ✅ Done (0.8.0) |
+| M9 — Interior layout generation | ✅ Done (0.9.0) |
+
+M9 completes data-driven interior layout generation: each built lot gets an
+`InteriorContext` (zone, blended affinity, footprint, height→floor derivation,
+palette, street-facing entrance side, seed) that interiors react to, and a
+per-zone `Blueprint` rule table (room templates, weights, min/max sizes —
+`#[repr(C)]`, tunable via `WorldConfig`) drives the layout. The generator
+exposes `InteriorState::generate(id, ctx)` against a tile-grid mini-world
+(`layout.rs`: `Tile`/`Floor`/`InteriorLayout`): per storey it seals a wall
+ring, places the circulation core and a street-facing `Door` (the edge the lot
+faces is picked to match the street it abuts), rolls rooms from the blueprint
+weighted tables, greedily places each within a navigable margin, then fills
+leftover cells as `Corridor` and punches a `Door` at every room's opening. See
+[`docs/interiors.md`](docs/interiors.md) for the full algorithm.
 
 Each chunk is produced by: querying the continuous Voronoi zone field at the
 cell's absolute world coordinates → resolving blended zone parameters → laying
@@ -79,6 +93,9 @@ then packing the results into flat `#[repr(C)]` cell records.
   `TOML`/`JSON` (`urbix.toml.example` / `urbix.json.example`) via
   `WorldConfig::from_file` or `urbix --config`; CLI flags override file.
   `WorldConfig::default()` is byte-identical to pre-8.0 hardcoded values.
+  Since M9, this extends to interiors: `WorldConfig` carries a per-zone
+  `Blueprint` table (fixed-size `#[repr(C)]`, serde-tuned room templates —
+  `interior_floor_height`, `interior_max_floors`, `interior_blueprints`).
 - **Lean dependencies.** Core generation is `hash` + `zones` + `region` with no
   heavy deps; `clap`/`serde`/`toml` power the CLI/file-input, `criterion`/`image`
   are dev-only (benchmarks/visualizer).
@@ -131,7 +148,7 @@ cc /tmp/basic_usage.o -L target/release -lurbix -ldl -lm -pthread -o /tmp/basic_
 
 ## Usage
 
-The library is in early development (currently `0.8.0`); the public surface is
+The library is in early development (currently `0.9.0`); the public surface is
 `WorldEngine` in Rust and the C ABI in `include/urbix.h` (see
 `Urbix_Project.md` §2.3-2.4 for the wire format):
 
@@ -167,8 +184,9 @@ Binary output is exactly `ChunkBuffer::as_bytes()` (header + cells) and can be
 read with `ChunkHeader`/`Cell` or via the FFI header. Example files:
 `urbix.toml.example` / `urbix.json.example`.
 
-For deep dives see `docs/world_generation.md` (Voronoi/ chunk pipeline) and
-`docs/api.md` (C ABI + memory contract).
+For deep dives see `docs/world_generation.md` (Voronoi/ chunk pipeline),
+`docs/api.md` (C ABI + memory contract), and `docs/interiors.md` (interior
+generation & blueprint tables).
 
 ## Verification
 

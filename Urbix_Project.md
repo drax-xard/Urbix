@@ -477,7 +477,7 @@ documentation, and performance baselines.
 
 ---
 
-### Milestone 9 — Interior Layout Generation — 🔨 IN PROGRESS
+### Milestone 9 — Interior Layout Generation — ✅ DONE
 
 **Goal:** a data-driven interior generator that reacts to the exterior map: a
 residentially-derived home vs a downtown tower produce distinguishable
@@ -485,21 +485,31 @@ interiors.
 
 | File | Deliverable |
 |---|---|
-| `src/layout.rs` | `InteriorContext` (zone, affinity, height→floors, footprint, palette, seed; `#[repr(C)]`); `Tile` (`#[repr(u8)]`); `Floor`/`InteriorLayout`; `Blueprint`/`BlueprintRoom` fixed-size `#[repr(C)]`, serde-tunable per-zone rule tables; `blueprint_defaults(zone)`. |
-| `src/interior.rs` | `InteriorState::generate(id, ctx)` (context-aware); deterministic baseline `generate_layout(id, ctx, blueprint)`; `InteriorCache` unchanged. |
+| `src/layout.rs` | `InteriorContext` (zone, affinity, height→floors, footprint, palette, `door_side`, seed; `#[repr(C)]`); `Tile` (`#[repr(u8)]`); `Floor`/`InteriorLayout`; `Blueprint`/`BlueprintRoom` fixed-size `#[repr(C)]`, serde-tunable per-zone rule tables; `blueprint_defaults(zone)`. |
+| `src/interior.rs` | `InteriorState::generate(id, ctx)` (context-aware); room-placement `generate_layout(id, ctx, blueprint)`: sealed wall ring, hashed circulation core, street-facing entrance (`ctx.door_side`), weighted room rolls + greedy placement, corridor fill, room doors; `InteriorCache` unchanged. |
 | `src/config.rs` | `WorldConfig.interior_floor_height`, `.interior_max_floors`, `.interior_blueprints` (serde-defaulted); `blueprint_for`, `interior_context`. |
-| `src/chunk.rs` | `interior_context_for(config, cell)` reconstructs a cell's context (dominant zone + block footprint). |
+| `src/chunk.rs` | `interior_context_for(config, world_x, world_z, cell)` reconstructs a cell's context (dominant zone + block footprint); `door_side_for` picks the street the lot faces. |
 | `src/hash.rs` | Domains `LAYOUT_PICK/FLOOR/ROOM/ROOM_SIZE/DOOR/FURNITURE`. |
 
-**Subtask 9.1 (done):** signatures + blueprint schema — see `CHANGELOG`
-`[Unreleased]`. The room-placement algorithm (carving rooms/corridors/doors from
-the weighted room tables, per-floor variation, entrance facing the street) is
-the remaining work.
+**Subtasks:**
+- **9.1 (done):** signatures + blueprint schema — see `CHANGELOG` `[Unreleased]`.
+- **9.2 (done):** weighted room-placement algorithm — per storey: seal the wall
+  ring, place the core and a street-facing entrance door (reserving its inner
+  cell as corridor), roll rooms from the weighted blueprint tables and place
+  each greedily inside a one-tile navigable margin (walls and the core may sit
+  in the margin, no other room may), stamp every room with its opaque `kind`,
+  fill leftover cells as `Corridor`, and punch one `Door` per room onto its
+  facing margin cell — all deterministic per `(id, floor, seed, domain)`.
+  See `docs/interiors.md` §7.
 
 **Tests:**
 - Context floor-count derivation (height→floors incl. ceiling + cap).
 - `generate_layout` determinism; walled floor grids; tower has more floors than
-  home; each floor has a circulation core.
+  home; each floor has a circulation core + door.
+- Rooms placed on every floor, sealed ring (wall/door only), every room
+  reachable from circulation, kinds only on rooms and from the zone blueprint;
+  floors and seeds vary; entrance door faces the staked `door_side`;
+  degenerate footprints stay sealed.
 - Blueprint defaults cover all zones; `room_slice` matches `room_count`.
 - Config round-trip still green with old files (serde defaults).
 

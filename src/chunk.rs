@@ -29,6 +29,7 @@ use crate::building;
 use crate::config::WorldConfig;
 use crate::data::{Cell, CellFlags, ChunkBuffer, ChunkId, InteriorId};
 use crate::hash::{domain, hash_coords};
+use crate::layout::DoorSide;
 use crate::region::VoronoiDiagram;
 use crate::street;
 use crate::zones::ZoneType;
@@ -133,11 +134,16 @@ fn interior_id_for(world_x: i64, world_z: i64, seed: u64) -> InteriorId {
 /// The wire `Cell` does not store the context explicitly (it carries the zone
 /// affinity, height, palette, and interior id), so this recomputes the
 /// exterior→interior bridge deterministically from those fields plus the
-/// config's floor mapping. This is what a consumer regenerates when it wants an
-/// interior for a cell. Only meaningful when `cell.height > 0`.
+/// config's floor mapping. `world_x`/`world_z` are the cell's absolute
+/// coordinates: the context's entrance side (which lot edge faces a street) is
+/// derived from where the cell sits within its street block. This is what a
+/// consumer regenerates when it wants an interior for a cell. Only meaningful
+/// when `cell.height > 0`.
 #[must_use]
 pub fn interior_context_for(
     config: &crate::config::WorldConfig,
+    world_x: i64,
+    world_z: i64,
     cell: &crate::data::Cell,
 ) -> crate::layout::InteriorContext {
     // Footprint: the residential block interior is `block_size - 1` cells wide
@@ -145,6 +151,7 @@ pub fn interior_context_for(
     // minimum so interiors never render degenerate.
     let params = config.blended_zone_params(&cell.zone_affinity);
     let side = params.block_size.clamp(2, 32);
+    let door_side = door_side_for(world_x, world_z, params.block_size);
 
     config.interior_context(
         cell.interior_id,
@@ -154,8 +161,35 @@ pub fn interior_context_for(
         side,
         side,
         cell.palette_id,
+        door_side,
         config.seed,
     )
+}
+
+/// Which edge of the cell's lot faces the nearest street.
+///
+/// The street grid lies on block boundaries spaced `block_size` cells apart, so
+/// the distance to each of the four surrounding roads is the cell's offset
+/// within its block. Whichever is nearest (ties resolving toward West, East,
+/// North, South) is the entrance side: the main door faces a road.
+fn door_side_for(world_x: i64, world_z: i64, block_size: u8) -> DoorSide {
+    let b = i64::from(block_size.max(1));
+    let rx = world_x.rem_euclid(b);
+    let rz = world_z.rem_euclid(b);
+    let (dw, de) = (rx, b - rx);
+    let (dn, ds) = (rz, b - rz);
+    let x_axis = dw.min(de) <= dn.min(ds);
+    if x_axis {
+        if dw <= de {
+            DoorSide::West
+        } else {
+            DoorSide::East
+        }
+    } else if dn <= ds {
+        DoorSide::North
+    } else {
+        DoorSide::South
+    }
 }
 
 /// The zone with the highest affinity for a cell.

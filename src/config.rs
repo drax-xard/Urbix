@@ -381,8 +381,8 @@ impl WorldConfig {
     ///
     /// The context is the exterior→interior bridge: it derives the floor count
     /// from the building height using this config's `interior_floor_height` /
-    /// `interior_max_floors`, and records the footprint, zone, and palette so
-    /// the generator reacts to them deterministically.
+    /// `interior_max_floors`, and records the footprint, zone, palette, and
+    /// entrance side so the generator reacts to them deterministically.
     #[must_use]
     #[allow(clippy::too_many_arguments)] // thin wrapper over the flat context record
     pub fn interior_context(
@@ -394,6 +394,7 @@ impl WorldConfig {
         footprint_w: u8,
         footprint_d: u8,
         palette_id: u8,
+        door_side: crate::layout::DoorSide,
         seed: u64,
     ) -> InteriorContext {
         InteriorContext::new(
@@ -406,6 +407,7 @@ impl WorldConfig {
             footprint_w,
             footprint_d,
             palette_id,
+            door_side,
             seed,
         )
     }
