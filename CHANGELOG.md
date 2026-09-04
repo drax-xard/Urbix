@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tallest built cell in the chunk), `viz.rs` gained `--inspect <wx,wz>`, and
   `interactive.rs` lets you click a lot on the map to view its interior
   (zone, storey stats, and an ASCII map of a chosen storey) beside the grid.
+- **New `examples/examples.md`** documents how to run and flag every example.
 
 ## [0.9.0] — 2026-09-04
 

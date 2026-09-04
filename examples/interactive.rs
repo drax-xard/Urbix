@@ -283,7 +283,8 @@ impl eframe::App for App {
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            let (rect, response) = ui.allocate_exact_size(ui.available_size(), egui::Sense::drag());
+            let (rect, response) =
+                ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
             // Drag panning (10 px ≈ 1 chunk at zoom 4).
             if response.dragged() {
                 let delta = response.drag_delta();
