@@ -10,6 +10,8 @@
   "zone_hues": [[100, 150, 220], [96, 180, 90], [235, 160, 70], [150, 130, 115], [140, 205, 120]],
   "interior_width_range": [6, 14],
   "interior_height_range": [6, 14],
+  "interior_floor_height": 4.0,
+  "interior_max_floors": 64,
   "zones": [
     {
       "height_min": 40.0,

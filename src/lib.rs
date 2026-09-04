@@ -48,6 +48,7 @@ pub mod engine;
 pub mod ffi;
 pub mod hash;
 pub mod interior;
+pub mod layout;
 pub mod region;
 pub mod street;
 pub mod zones;

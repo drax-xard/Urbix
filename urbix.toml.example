@@ -3,6 +3,21 @@
 # Copy to `urbix.toml` and edit, then run:
 #   cargo run -- --config urbix.toml --seed 445566 --cx 0 --cy 0 --format bin
 # CLI flags (`--seed`, `--chunk-size`, etc.) override file values.
+#
+# Interior blueprint tables (Milestone 9): the per-zone `interior_blueprints`
+# array is optional — when omitted, `WorldConfig::default()` tables are used
+# (see `layout.rs:blueprint_defaults`). To customize one, provide the full
+# 8-room fixed array for that zone, e.g.:
+#
+#   [[interior_blueprints]]
+#   margin = 1
+#   core_size = 2
+#   room_count = 4
+#   [[interior_blueprints.rooms]]
+#   kind = 20; weight = 4.0; min_w = 3; max_w = 5; min_d = 3; max_d = 5
+#   [[interior_blueprints.rooms]]
+#   kind = 21; weight = 3.0; min_w = 2; max_w = 3; min_d = 2; max_d = 3
+#   ... (8 rooms total)
 
 seed = 445566
 chunk_size = 32
@@ -15,6 +30,9 @@ zone_weights = [0.25, 0.30, 0.20, 0.15, 0.10]
 zone_hues = [[100, 150, 220], [96, 180, 90], [235, 160, 70], [150, 130, 115], [140, 205, 120]]
 interior_width_range = [6, 14]
 interior_height_range = [6, 14]
+interior_floor_height = 4.0
+interior_max_floors = 64
+# interior_blueprints omitted → defaults
 
 [[zones]]
 height_min = 40.0

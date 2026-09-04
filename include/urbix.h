@@ -12,6 +12,59 @@
 #include <stdlib.h>
 
 /**
+ * Interior layout blueprint selection (see `layout.rs` / `InteriorContext`).
+ */
+#define LAYOUT_PICK 40
+
+/**
+ * Interior per-floor layout variation (see `layout.rs`).
+ */
+#define LAYOUT_FLOOR 41
+
+/**
+ * Interior room-kind selection (see `layout.rs`).
+ */
+#define LAYOUT_ROOM 42
+
+/**
+ * Interior room size (width/depth) draw (see `layout.rs`).
+ */
+#define LAYOUT_ROOM_SIZE 43
+
+/**
+ * Interior door placement (see `layout.rs`).
+ */
+#define LAYOUT_DOOR 44
+
+/**
+ * Interior furniture slot density (see `layout.rs`).
+ */
+#define LAYOUT_FURNITURE 45
+
+/**
+ * Maximum room templates a single zone [`Blueprint`] can hold.
+ *
+ * The blueprint is a fixed-size `#[repr(C)]` record so it can live inside
+ * `WorldConfig` and cross the FFI; `room_count` marks how many of the
+ * `MAX_BLUEPRINT_ROOMS` slots are live. 8 comfortably fits all five zones'
+ * defaults (largest is Downtown at 4).
+ */
+#define MAX_BLUEPRINT_ROOMS 8
+
+/**
+ * Number of `InteriorLayout` floors assumed for worlds units per storey when
+ * deriving `floor_count` from building height. Kept as a compile-time default;
+ * `WorldConfig.interior_floor_height` overrides it at runtime.
+ */
+#define DEFAULT_FLOOR_HEIGHT 4.0
+
+/**
+ * Number of `InteriorLayout` floors cap when deriving `floor_count` from
+ * building height. `WorldConfig.interior_max_floors` overrides it at runtime.
+ */
+#define DEFAULT_MAX_FLOORS 64
+
+/**
  * The number of distinct zone types.
  */
 #define ZONE_COUNT 5
@@ -52,6 +105,73 @@ typedef struct UrbixZoneAffinity {
      */
     float weights[ZONE_COUNT];
 } UrbixZoneAffinity;
+
+/**
+ * One room template within a zone's [`Blueprint`].
+ *
+ * A plain data record so room tables are artist-tunable via `WorldConfig`.
+ * `kind` is an arbitrary tag the consumer maps to a rendered room (e.g. 0 =
+ * living, 1 = kitchen, 2 = bedroom, 3 = office, ...); the engine only treats
+ * non-circulation room tiles as `Room` and stores this tag alongside the tile
+ * grid for the consumer to interpret.
+ */
+typedef struct BlueprintRoom {
+    /**
+     * Opaque room-kind tag (semantics belong to the consumer / renderer).
+     */
+    uint8_t kind;
+    /**
+     * Relative selection weight when rolling a room for this zone.
+     */
+    float weight;
+    /**
+     * Minimum room grid width in tiles (inclusive).
+     */
+    uint8_t min_w;
+    /**
+     * Maximum room grid width in tiles (inclusive).
+     */
+    uint8_t max_w;
+    /**
+     * Minimum room grid depth in tiles (inclusive).
+     */
+    uint8_t min_d;
+    /**
+     * Maximum room grid depth in tiles (inclusive).
+     */
+    uint8_t max_d;
+} BlueprintRoom;
+
+/**
+ * The per-zone rule table driving interior layout for that zone.
+ *
+ * Mirrors [`crate::zones::ZoneParams`] for interior generation: plain,
+ * `#[repr(C)]`, `Serialize`/`Deserialize` data loaded from `WorldConfig`
+ * (TOML/JSON) so artists tune interiors without new code. `Default` per zone
+ * gives a sensible starting table ([`blueprint_defaults`]).
+ *
+ * The engine treats these as *rules* — the follow-on `layout` algorithm reads
+ * them to carve rooms. The current milestone uses them to drive a
+ * deterministic baseline grid: the core placement and the default room tag.
+ */
+typedef struct Blueprint {
+    /**
+     * Structural margin: ring of `Wall` tiles around each floor grid.
+     */
+    uint8_t margin;
+    /**
+     * Width of the vertical-circulation core (stairs/elevator) in tiles.
+     */
+    uint8_t core_size;
+    /**
+     * Number of live entries in `rooms` (`0..=MAX_BLUEPRINT_ROOMS`).
+     */
+    uint8_t room_count;
+    /**
+     * Room templates weighted for this zone; only `room_count` are live.
+     */
+    struct BlueprintRoom rooms[MAX_BLUEPRINT_ROOMS];
+} Blueprint;
 
 /**
  * A `#[repr(C)]` snapshot of every tunable that shapes world generation.
@@ -132,6 +252,18 @@ typedef struct WorldConfig {
      * Interior room height range [min, max] (inclusive, 6..14 default).
      */
     uint16_t interior_height_range[2];
+    /**
+     * World units per storey: converts building height to floor count.
+     */
+    float interior_floor_height;
+    /**
+     * Maximum number of interior floors when deriving from height.
+     */
+    uint8_t interior_max_floors;
+    /**
+     * Per-zone interior layout rule tables (Milestone 9 blueprint schema).
+     */
+    struct Blueprint interior_blueprints[ZONE_COUNT];
 } WorldConfig;
 
 /**

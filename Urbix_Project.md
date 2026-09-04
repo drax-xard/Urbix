@@ -477,6 +477,34 @@ documentation, and performance baselines.
 
 ---
 
+### Milestone 9 — Interior Layout Generation — 🔨 IN PROGRESS
+
+**Goal:** a data-driven interior generator that reacts to the exterior map: a
+residentially-derived home vs a downtown tower produce distinguishable
+interiors.
+
+| File | Deliverable |
+|---|---|
+| `src/layout.rs` | `InteriorContext` (zone, affinity, height→floors, footprint, palette, seed; `#[repr(C)]`); `Tile` (`#[repr(u8)]`); `Floor`/`InteriorLayout`; `Blueprint`/`BlueprintRoom` fixed-size `#[repr(C)]`, serde-tunable per-zone rule tables; `blueprint_defaults(zone)`. |
+| `src/interior.rs` | `InteriorState::generate(id, ctx)` (context-aware); deterministic baseline `generate_layout(id, ctx, blueprint)`; `InteriorCache` unchanged. |
+| `src/config.rs` | `WorldConfig.interior_floor_height`, `.interior_max_floors`, `.interior_blueprints` (serde-defaulted); `blueprint_for`, `interior_context`. |
+| `src/chunk.rs` | `interior_context_for(config, cell)` reconstructs a cell's context (dominant zone + block footprint). |
+| `src/hash.rs` | Domains `LAYOUT_PICK/FLOOR/ROOM/ROOM_SIZE/DOOR/FURNITURE`. |
+
+**Subtask 9.1 (done):** signatures + blueprint schema — see `CHANGELOG`
+`[Unreleased]`. The room-placement algorithm (carving rooms/corridors/doors from
+the weighted room tables, per-floor variation, entrance facing the street) is
+the remaining work.
+
+**Tests:**
+- Context floor-count derivation (height→floors incl. ceiling + cap).
+- `generate_layout` determinism; walled floor grids; tower has more floors than
+  home; each floor has a circulation core.
+- Blueprint defaults cover all zones; `room_slice` matches `room_count`.
+- Config round-trip still green with old files (serde defaults).
+
+---
+
 ## 8. Future Extensions (explicitly deferred)
 
 These are deliberately out of scope for the initial build but are designed for

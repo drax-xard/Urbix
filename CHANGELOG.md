@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Interior layout data model** (Milestone 9, scaffolding): the exterior→interior
+  bridge that lets a generated interior react to the lot it belongs to.
+  - `src/layout.rs`: `InteriorContext` (`#[repr(C)]` snapshot of a built lot's
+    zone, blended affinity, height, floor count, footprint, palette, seed; floors
+    derived from height via `interior_floor_height`), `Tile` (`#[repr(u8)]` grid
+    cell kinds: void/wall/door/core/corridor/room), `Floor` / `InteriorLayout`
+    (the generated mini-world), and the per-zone blueprint schema
+    `Blueprint`/`BlueprintRoom` — fixed-size `#[repr(C)]`, serde-tunable tables
+    defaulting to `blueprint_defaults(zone)`.
+  - `interior::generate_layout(id, ctx, blueprint)` — deterministic, walled
+    baseline grid (wall ring, circulation core, one corridor) exercising the
+    context plumbing end-to-end before the richer room-placement algorithm.
+  - `InteriorState` trait now takes the context: `fn generate(id, ctx) -> Self`
+    instead of `fn generate(id, seed)`. `PlaceholderInteriorState` sizes itself
+    from the context footprint/floors. `generate_interior` signature updated.
+  - `WorldConfig` gains `interior_floor_height`, `interior_max_floors`,
+    `interior_blueprints: [Blueprint; ZONE_COUNT]` (serde-defaulted for
+    backward compat), plus `blueprint_for(zone)` and
+    `interior_context(...)` helpers. New hash domains `LAYOUT_PICK/FLOOR/ROOM/
+    ROOM_SIZE/DOOR/FURNITURE`.
+  - `chunk::interior_context_for(config, cell)` reconstructs the context for a
+    built cell (dominant zone + block footprint), so consumers can regenerate
+    any cell's interior from the wire data.
+
+### Changed
+
+- `ZoneType` now derives `Serialize`/`Deserialize` (needed by the context).
+
 ## [0.8.0] — 2026-09-03
 
 ### Added

@@ -57,6 +57,19 @@ pub mod domain {
     pub const INTERIOR_FOG: u8 = 32;
     /// Interior palette selection (see `interior.rs`).
     pub const INTERIOR_PALETTE: u8 = 33;
+
+    /// Interior layout blueprint selection (see `layout.rs` / `InteriorContext`).
+    pub const LAYOUT_PICK: u8 = 40;
+    /// Interior per-floor layout variation (see `layout.rs`).
+    pub const LAYOUT_FLOOR: u8 = 41;
+    /// Interior room-kind selection (see `layout.rs`).
+    pub const LAYOUT_ROOM: u8 = 42;
+    /// Interior room size (width/depth) draw (see `layout.rs`).
+    pub const LAYOUT_ROOM_SIZE: u8 = 43;
+    /// Interior door placement (see `layout.rs`).
+    pub const LAYOUT_DOOR: u8 = 44;
+    /// Interior furniture slot density (see `layout.rs`).
+    pub const LAYOUT_FURNITURE: u8 = 45;
 }
 
 /// Hash a coordinate pair under a seed and domain into a `u64`.

@@ -128,6 +128,36 @@ fn interior_id_for(world_x: i64, world_z: i64, seed: u64) -> InteriorId {
     hash_coords(world_x, world_z, seed, domain::INTERIOR)
 }
 
+/// Reconstruct the [`InteriorContext`] for a built `Cell` from config.
+///
+/// The wire `Cell` does not store the context explicitly (it carries the zone
+/// affinity, height, palette, and interior id), so this recomputes the
+/// exterior→interior bridge deterministically from those fields plus the
+/// config's floor mapping. This is what a consumer regenerates when it wants an
+/// interior for a cell. Only meaningful when `cell.height > 0`.
+#[must_use]
+pub fn interior_context_for(
+    config: &crate::config::WorldConfig,
+    cell: &crate::data::Cell,
+) -> crate::layout::InteriorContext {
+    // Footprint: the residential block interior is `block_size - 1` cells wide
+    // and deep (the street grid lies on block boundaries), clamped to a sane
+    // minimum so interiors never render degenerate.
+    let params = config.blended_zone_params(&cell.zone_affinity);
+    let side = params.block_size.clamp(2, 32);
+
+    config.interior_context(
+        cell.interior_id,
+        dominant_zone(&cell.zone_affinity),
+        &cell.zone_affinity,
+        cell.height,
+        side,
+        side,
+        cell.palette_id,
+        config.seed,
+    )
+}
+
 /// The zone with the highest affinity for a cell.
 ///
 /// Ties resolve toward the lower variant index, so it is deterministic and

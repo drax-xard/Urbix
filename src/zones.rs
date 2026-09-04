@@ -31,7 +31,7 @@ pub const ZONE_COUNT: usize = 5;
 /// The order of variants is fixed and matches the affinity-vector layout in
 /// [`ZoneParams`] and [`zone_params`]: index `i` corresponds to variant `i`,
 /// so `zone_affinity[ZoneType::Downtown as usize]` is Downtown's weight.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum ZoneType {
     /// Dense, tall skyscrapers.

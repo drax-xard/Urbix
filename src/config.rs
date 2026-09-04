@@ -29,7 +29,27 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::data::InteriorId;
+use crate::layout::{blueprint_defaults, default_blueprints, Blueprint, InteriorContext};
 use crate::zones::{ZoneParams, ZoneType, ZONE_COUNT};
+
+/// Serde `default` fn for [`WorldConfig::interior_floor_height`].
+#[must_use]
+pub const fn default_interior_floor_height() -> f32 {
+    crate::layout::DEFAULT_FLOOR_HEIGHT
+}
+
+/// Serde `default` fn for [`WorldConfig::interior_max_floors`].
+#[must_use]
+pub const fn default_interior_max_floors() -> u8 {
+    crate::layout::DEFAULT_MAX_FLOORS
+}
+
+/// Serde `default` fn for [`WorldConfig::interior_blueprints`].
+#[must_use]
+pub fn default_interior_blueprints() -> [Blueprint; ZONE_COUNT] {
+    default_blueprints()
+}
 
 /// Default hues used by `examples/viz.rs` / `interactive.rs` (promoted to config
 /// in Milestone 8 so artists tune without recompiling).
@@ -88,6 +108,15 @@ pub struct WorldConfig {
     pub interior_width_range: [u16; 2],
     /// Interior room height range [min, max] (inclusive, 6..14 default).
     pub interior_height_range: [u16; 2],
+    /// World units per storey: converts building height to floor count.
+    #[serde(default = "default_interior_floor_height")]
+    pub interior_floor_height: f32,
+    /// Maximum number of interior floors when deriving from height.
+    #[serde(default = "default_interior_max_floors")]
+    pub interior_max_floors: u8,
+    /// Per-zone interior layout rule tables (Milestone 9 blueprint schema).
+    #[serde(default = "default_interior_blueprints")]
+    pub interior_blueprints: [Blueprint; ZONE_COUNT],
 }
 
 impl Default for WorldConfig {
@@ -141,6 +170,9 @@ impl Default for WorldConfig {
             zone_hues: DEFAULT_ZONE_HUES,
             interior_width_range: [6, 14],
             interior_height_range: [6, 14],
+            interior_floor_height: crate::layout::DEFAULT_FLOOR_HEIGHT,
+            interior_max_floors: crate::layout::DEFAULT_MAX_FLOORS,
+            interior_blueprints: crate::layout::default_blueprints(),
         }
     }
 }
@@ -208,6 +240,31 @@ impl WorldConfig {
         }
         if self.interior_width_range[0] == 0 || self.interior_height_range[0] == 0 {
             return false;
+        }
+        // Interior floor mapping and blueprints.
+        if !(1e-6..=1000.0).contains(&self.interior_floor_height) {
+            return false;
+        }
+        if self.interior_max_floors == 0 {
+            return false;
+        }
+        for bp in &self.interior_blueprints {
+            if bp.core_size == 0 {
+                return false;
+            }
+            if usize::from(bp.room_count) > crate::layout::MAX_BLUEPRINT_ROOMS {
+                return false;
+            }
+            for r in bp.room_slice() {
+                if r.weight < 0.0
+                    || r.min_w == 0
+                    || r.max_w < r.min_w
+                    || r.min_d == 0
+                    || r.max_d < r.min_d
+                {
+                    return false;
+                }
+            }
         }
         true
     }
@@ -304,6 +361,53 @@ impl WorldConfig {
             block_size: (block_sum as f32 * inv).round() as u8,
             palette_count: (palette_sum * inv).round() as u8,
         }
+    }
+
+    /// Retrieve the interior layout [`Blueprint`] for a given [`ZoneType`].
+    ///
+    /// If a zone's blueprint is empty (no room templates configured), falls back
+    /// to [`blueprint_defaults`] so the generator always has a valid rule table.
+    #[must_use]
+    pub fn blueprint_for(&self, zone: ZoneType) -> Blueprint {
+        let bp = self.interior_blueprints[zone as usize];
+        if bp.is_empty() {
+            blueprint_defaults(zone)
+        } else {
+            bp
+        }
+    }
+
+    /// Build an [`InteriorContext`] for a built cell from this config.
+    ///
+    /// The context is the exterior→interior bridge: it derives the floor count
+    /// from the building height using this config's `interior_floor_height` /
+    /// `interior_max_floors`, and records the footprint, zone, and palette so
+    /// the generator reacts to them deterministically.
+    #[must_use]
+    #[allow(clippy::too_many_arguments)] // thin wrapper over the flat context record
+    pub fn interior_context(
+        &self,
+        id: InteriorId,
+        zone: ZoneType,
+        zone_affinity: &[f32; crate::zones::ZONE_COUNT],
+        height: f32,
+        footprint_w: u8,
+        footprint_d: u8,
+        palette_id: u8,
+        seed: u64,
+    ) -> InteriorContext {
+        InteriorContext::new(
+            id,
+            zone,
+            *zone_affinity,
+            height,
+            self.interior_floor_height,
+            self.interior_max_floors,
+            footprint_w,
+            footprint_d,
+            palette_id,
+            seed,
+        )
     }
 }
 
