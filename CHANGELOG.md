@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Demons show interior maps** for a selected exterior cell: `cli_demo.rs`
+- **Demos show interior maps** for a selected exterior cell: `cli_demo.rs`
   inspects a specific cell headlessly (`--cx/--cy/--dx/--dy`, default picks the
   tallest built cell in the chunk), `viz.rs` gained `--inspect <wx,wz>`, and
   `interactive.rs` lets you click a lot on the map to view its interior
