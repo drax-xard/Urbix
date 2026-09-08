@@ -7,9 +7,12 @@
  * /api/interior for a selected building's storey grids (tiles + room kinds).
  *
  * Controls:
- *   orbit  — drag / scroll (damped), click a building to inspect its interior
- *   inside — WASD/arrows move, mouse-look (pointer lock on click), Q/E change
- *            storey, Esc exits back to orbit
+ *   orbit  — drag / scroll (damped); click a building (or G/Enter toward it) to
+ *            fade into its interior; G or Esc fades back out
+ *   inside — WASD/arrows move (walls block), Q/E turn, R/F storey up/down,
+ *            mouse-look on click; the view stays level at pedestrian eye height
+ *   stop   — Shift+Esc (after a confirm) asks the server to shut down and
+ *            closes the explorer
  */
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
@@ -33,17 +36,61 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 
+/* ---- procedural canvas textures (sky, sun glow) ---- */
+function canvasTexture(size, draw) {
+  const c = document.createElement("canvas");
+  c.width = c.height = size;
+  draw(c.getContext("2d"));
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+/* Vertical sky gradient: deep zenith blue -> warm haze at the horizon. */
+const skyTex = canvasTexture(8, (g) => {
+  const grad = g.createLinearGradient(0, 0, 0, 8);
+  grad.addColorStop(0, "#0a2440");
+  grad.addColorStop(0.45, "#2d578a");
+  grad.addColorStop(0.72, "#7ea3c4");
+  grad.addColorStop(1, "#c9d6df");
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 8, 8);
+});
+
+const HAZE = new THREE.Color(0x8aa6bd);   /* fog = horizon haze */
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0e1622);
-scene.fog = new THREE.Fog(0x0e1622, 180, 520);
+scene.background = skyTex;
+scene.fog = new THREE.Fog(HAZE, 160, 560);
 
 const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 2000);
 camera.position.set(64, 90, 96);
 
-const hemi = new THREE.HemisphereLight(0xdfeaff, 0x3a4a5c, 0.9);
-const sun = new THREE.DirectionalLight(0xfff2d8, 1.4);
-sun.position.set(80, 160, -60);
-scene.add(hemi, sun);
+/* Soft cool fill + warm late-afternoon sun for readable silhouettes. */
+const hemi = new THREE.HemisphereLight(0xcfe4ff, 0x27344a, 0.75);
+const sun = new THREE.DirectionalLight(0xffe3b8, 1.5);
+sun.position.set(90, 150, -70);
+const fill = new THREE.DirectionalLight(0x9fc4e8, 0.35);
+fill.position.set(-90, 40, 80);
+scene.add(hemi, sun, fill);
+
+/* Sun glow sprite (adds depth behind the skyline). */
+const glowTex = canvasTexture(128, (g) => {
+  const grad = g.createRadialGradient(64, 64, 2, 64, 64, 64);
+  grad.addColorStop(0, "rgba(255,246,222,0.95)");
+  grad.addColorStop(0.22, "rgba(255,214,150,0.30)");
+  grad.addColorStop(1, "rgba(255,200,120,0)");
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 128, 128);
+});
+const sunGlow = new THREE.Sprite(
+  new THREE.SpriteMaterial({ map: glowTex, blending: THREE.AdditiveBlending, depthWrite: false })
+);
+sunGlow.scale.setScalar(420);
+sunGlow.position.copy(sun.position);
+scene.add(sunGlow);
+
+/* Shared unit box — one geometry for all instanced buildings (never disposed). */
+const UNIT_BOX = new THREE.BoxGeometry(1, 1, 1);
 
 const controls = new OrbitControls(camera, canvas);
 controls.target.set(16, 0, 16);
@@ -52,11 +99,27 @@ controls.maxPolarAngle = Math.PI / 2.02;
 controls.minDistance = 2;
 controls.maxDistance = 700;
 
-/* Ground cover (roads live implicitly between boxes). */
+/* Ground cover: asphalt with a faint block grid (roads read as the darker
+   space between building blocks) plus subtle grain. Tiles every 4 world units. */
+const groundTex = canvasTexture(64, (g) => {
+  g.fillStyle = "#141d27";
+  g.fillRect(0, 0, 64, 64);
+  g.fillStyle = "#1b2633";
+  for (let i = 0; i < 8; i++) {
+    g.fillRect(0, i * 8, 64, 1);
+    g.fillRect(i * 8, 0, 1, 64);
+  }
+  for (let i = 0; i < 640; i++) { /* asphalt grain */
+    g.fillStyle = `rgba(230,238,248,${0.02 + (i % 3) * 0.015})`;
+    g.fillRect((i * 37) % 64, (i * 53) % 64, 1, 1);
+  }
+});
+groundTex.wrapS = groundTex.wrapT = THREE.RepeatWrapping;
 const ground = new THREE.Mesh(
   new THREE.PlaneGeometry(6000, 6000),
-  new THREE.MeshLambertMaterial({ color: 0x182434 })
+  new THREE.MeshLambertMaterial({ map: groundTex })
 );
+ground.material.map.repeat.set(6000 / 4, 6000 / 4);
 ground.rotation.x = -Math.PI / 2;
 ground.position.y = -0.02;
 scene.add(ground);
@@ -100,7 +163,7 @@ let pickMeshes = [];
 
 function cellColor(zone, pal, h) {
   const [r, g, b] = CFG.zoneHues[zone] || [150, 150, 150];
-  const v = 0.62 + 0.10 * ((pal % 5) / 4) + Math.min(h / 600, 0.14);
+  const v = 0.64 + 0.12 * ((pal % 5) / 4) + Math.min(h / 460, 0.13);
   return new THREE.Color(r * v / 255, g * v / 255, b * v / 255);
 }
 
@@ -125,36 +188,49 @@ function spawnChunk(c) {
   const group = new THREE.Group();
   const data = [];
   let mesh = null;
+  let roof = null;
 
   if (built.length > 0) {
     mesh = new THREE.InstancedMesh(
-      new THREE.BoxGeometry(1, 1, 1),
+      UNIT_BOX,
+      new THREE.MeshLambertMaterial({ color: 0xffffff }),
+      built.length
+    );
+    roof = new THREE.InstancedMesh(
+      UNIT_BOX,
       new THREE.MeshLambertMaterial({ color: 0xffffff }),
       built.length
     );
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    roof.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     const m = new THREE.Matrix4();
     const q = new THREE.Quaternion();
     const p = new THREE.Vector3();
     const s = new THREE.Vector3();
+    const WHITE = new THREE.Color(0xffffff);
     built.forEach((cell, i) => {
       const h = Math.max(cell.h, 0.05);
+      const tint = cellColor(cell.zone, cell.pal, h);
       p.set(cell.x, h / 2, cell.z);
       s.set(1, h, 1);
       mesh.setMatrixAt(i, m.compose(p, q, s));
-      mesh.setColorAt(i, cellColor(cell.zone, cell.pal, h));
+      mesh.setColorAt(i, tint);
+      p.set(cell.x, h + 0.09, cell.z);   /* rooftop crown, ~9cm above the slab */
+      s.set(0.92, 0.18, 0.92);
+      roof.setMatrixAt(i, m.compose(p, q, s));
+      roof.setColorAt(i, tint.clone().lerp(WHITE, 0.55));
       data.push({ wx: cell.x, wz: cell.z, height: h, zone: cell.zone, i });
     });
     mesh.instanceMatrix.needsUpdate = true;
-    const colors = mesh.instanceColor;
-    if (colors) colors.needsUpdate = true;
-    mesh.castShadow = false;
-    group.add(mesh);
-    pickMeshes.push(mesh);
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    roof.instanceMatrix.needsUpdate = true;
+    if (roof.instanceColor) roof.instanceColor.needsUpdate = true;
+    group.add(mesh, roof);
+    pickMeshes.push(mesh, roof);
   }
 
   group.userData = { cx: c.cx, cy: c.cy };
-  chunks.set(key, { group, data, mesh, cx: c.cx, cy: c.cy });
+  chunks.set(key, { group, data, mesh, roof, cx: c.cx, cy: c.cy });
   scene.add(group);
 }
 
@@ -179,9 +255,9 @@ function updateStream() {
     const d = Math.max(Math.abs(entry.cx - c.cx), Math.abs(entry.cy - c.cy));
     if (d > STREAM_RADIUS) {
       scene.remove(entry.group);
-      pickMeshes = pickMeshes.filter((m) => m !== entry.mesh);
-      entry.mesh?.dispose();
-      entry.group.traverse((o) => o.geometry && (o.geometry.dispose(), o.material?.dispose()));
+      pickMeshes = pickMeshes.filter((m) => m !== entry.mesh && m !== entry.roof);
+      for (const em of [entry.mesh, entry.roof])
+        if (em && em.material) em.material.dispose();   /* UNIT_BOX geometry is shared, keep it */
       chunks.delete(key);
     }
   }
@@ -194,34 +270,135 @@ function countBoxes() {
   return n;
 }
 
-/* ---- interior inspection (click a building) ---- */
-let inspecting = null;  /* { wx, wz, zone, floors, boxMesh, floorMesh, active } */
+/* ---- interior (click a building to go inside) ---- */
+let inspecting = null;  /* { wx, wz, zone, floors, w, dep, ox, oz, active } */
 const interiorGroup = new THREE.Group();
 interiorGroup.visible = false;
 scene.add(interiorGroup);
+const INTERIOR_BG = new THREE.Color(0x0a0e14);
 
 const popup = document.getElementById("popup");
+const fadeEl = document.getElementById("fade");
+const shutdownEl = document.getElementById("shutdown");
+let transitionBusy = false;
+let exitState = null;   /* orbit camera transform, restored on exit */
+
+function fade(alpha) {
+  return new Promise((resolve) => {
+    fadeEl.classList.toggle("on", alpha === 1);
+    setTimeout(resolve, 460);
+  });
+}
+async function withFade(swap) {
+  await fade(true);
+  swap();
+  await fade(false);
+}
+
+/* Shift+Esc: tell the server to exit, then close (or cover) the page. */
+async function shutdownExplorer() {
+  try { await fetch("/api/shutdown"); } catch (_) { /* server may die first */ }
+  shutdownEl.classList.remove("hidden");
+  try { window.close(); } catch (_) { /* only works for scripted tabs */ }
+}
+
+/* Hide/show everything outside the building (exterior boxes + ground). */
+function setExteriorVisible(show) {
+  for (const entry of chunks.values()) entry.group.visible = show;
+  ground.visible = show;
+  scene.background = show ? skyTex : INTERIOR_BG;
+}
 
 async function inspectCell(wx, wz) {
   const r = await fetch(`/api/interior?wx=${wx}&wz=${wz}`);
   const d = await r.json();
   if (!d.floor_count || !d.floors.length) {
-    popup.textContent = `(${wx}, ${wz}) — no interior`;
+    popup.textContent = `(${wx}, ${wz}) — no interior here`;
     popup.classList.remove("hidden");
     setTimeout(() => popup.classList.add("hidden"), 2000);
     return;
   }
-  clearInspect();
+  await enterBuilding(wx, wz, d);
+}
+
+/* Cross-fade into the building: exterior fades out, camera walks to the
+   doorway and the interior fades in, so you're never seeing both at once. */
+async function enterBuilding(wx, wz, d) {
+  if (transitionBusy || inspecting) return;
   const floors = d.floors.slice(0, MAX_FLOORS);
-  inspecting = { wx, wz, floors, zone: d.zone, active: 0 };
+  const w = d.footprint_w;
+  const dep = d.footprint_d;
+  const ox = wx - Math.floor(w / 2);
+  const oz = wz - Math.floor(dep / 2);
+  const door = findDoor(floors, w, dep);
+  const pass = firstPassable(floors, w, dep);
+  if (!door && !pass) {
+    popup.textContent = `(${wx}, ${wz}) — no way into this building (all sealed)`;
+    popup.classList.remove("hidden");
+    setTimeout(() => popup.classList.add("hidden"), 2500);
+    return;
+  }
+
+  transitionBusy = true;
+  controls.enabled = false;
+  clearInspect();
+  inspecting = { wx, wz, zone: d.zone, floors, w, dep, ox, oz, active: 0 };
   buildInteriorMesh(d, floors);
-  enterInspect(d);
+
+  exitState = { pos: camera.position.clone(), quat: camera.quaternion.clone(), target: controls.target.clone() };
+
+  const foot = door ? { x: ox + door.x + 0.5, z: oz + door.z + 0.5 }
+            : { x: ox + pass.x + 0.5, z: oz + pass.z + 0.5 };
+  const inside = door ? inward(door, dep)
+              : { x: Math.sign(wx - ox - pass.x - 0.5), z: Math.sign(wz - oz - pass.z - 0.5) };
+
+  await withFade(() => {
+    setExteriorVisible(false);
+    interiorGroup.visible = true;
+    camera.rotation.order = "YXZ";
+    camera.position.set(foot.x + inside.x * 0.7, FLY_EYE, foot.z + inside.z * 0.7);
+    fly.yaw = Math.atan2(-inside.x, -inside.z);   /* look into the building */
+    fly.anchorY = FLY_EYE;
+    setActiveStorey(0, false);
+  });
+
+  transitionBusy = false;
+  modeHint.textContent = "WASD move · Q/E turn · R/F floor · G/Esc exit · Shift+Esc stop";
+  popup.textContent =
+    `inside (${wx}, ${wz}) · ${CFG.zoneNames[d.zone] || "?"} · ` +
+    `${d.floors.length} storeys · ${w}×${dep}`;
+  popup.classList.remove("hidden");
+  storeyBox.classList.remove("hidden");
+}
+
+function findDoor(floors, w, dep) {
+  const g = floors[0].tiles;
+  for (let tz = 0; tz < dep; tz++)
+    for (let tx = 0; tx < w; tx++)
+      if (g[tz * w + tx] === TILE.DOOR && (tx === 0 || tx === w - 1 || tz === 0 || tz === dep - 1))
+        return { x: tx, z: tz };
+  return null;
+}
+function firstPassable(floors, w, dep) {
+  const g = floors[0].tiles;
+  for (let i = 0; i < g.length; i++)
+    if (g[i] !== TILE.VOID && g[i] !== TILE.WALL && g[i] !== TILE.CORE)
+      return { x: i % w, z: Math.floor(i / w) };
+  return null;
+}
+function inward(door, dep) {
+  if (door.z === 0) return { x: 0, z: 1 };
+  if (door.z === dep - 1) return { x: 0, z: -1 };
+  if (door.x === 0) return { x: 1, z: 0 };
+  return { x: -1, z: 0 };
 }
 
 function clearInspect() {
   interiorGroup.clear();
-  for (const child of interiorGroup.children)
-    child.geometry?.dispose(), child.material?.dispose();
+  for (const child of interiorGroup.children) {
+    if (child.geometry && child.geometry !== UNIT_BOX) child.geometry.dispose();
+    if (child.material) child.material.dispose();
+  }
   inspecting = null;
 }
 
@@ -232,61 +409,71 @@ function buildInteriorMesh(d, floors) {
   const ox = d.wx - Math.floor(w / 2);
   const oz = d.wz - Math.floor(dep / 2);
 
-  /* Boxes: walls + core squares + doors, instanced. */
+  /* Opaque per-storey structure: full-height walls & cores, door lintels. */
+  const WALL_C = new THREE.Color(0xa9b2bc);
+  const CORE_C = new THREE.Color(0x272d36);
+  const DOOR_C = new THREE.Color(0xc3a47a);
   const boxList = [];
   const boxColor = [];
+  const addBox = (x, z, y, h, c) => { boxList.push([x, z, y, h, c]); };
   for (let f = 0; f < floors.length; f++) {
     const y0 = f * fh;
     for (let tz = 0; tz < dep; tz++) {
       for (let tx = 0; tx < w; tx++) {
         const t = floors[f].tiles[tz * w + tx];
-        if (t === TILE.WALL || t === TILE.CORE || t === TILE.DOOR) {
-          const h = t === TILE.CORE ? fh * 0.92 : t === TILE.WALL ? fh * 0.35 : fh * 0.25;
-          boxList.push([ox + tx, y0 + h / 2, oz + tz, h]);
-          boxColor.push(new THREE.Color(TILE_COLORS[t]));
+        if (t === TILE.WALL) {
+          addBox(ox + tx, oz + tz, y0, fh,
+                 WALL_C.clone().multiplyScalar(0.94 + 0.06 * ((tx * 7 + tz * 13) % 5) / 4));
+        } else if (t === TILE.CORE) {
+          addBox(ox + tx, oz + tz, y0, fh, new THREE.Color(CORE_C));
+        } else if (t === TILE.DOOR) {
+          /* lintel over the opening — the doorway itself stays passable */
+          addBox(ox + tx, oz + tz, y0 + fh * 0.84, fh * 0.16, new THREE.Color(DOOR_C));
         }
       }
     }
   }
 
   const boxMesh = new THREE.InstancedMesh(
-    new THREE.BoxGeometry(1, 1, 1),
-    new THREE.MeshLambertMaterial({ color: 0xffffff, transparent: true, opacity: 0.92 }),
+    UNIT_BOX,
+    new THREE.MeshLambertMaterial({ color: 0xffffff }),
     boxList.length || 1
   );
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();
   const p = new THREE.Vector3();
   const s = new THREE.Vector3(1, 1, 1);
-  boxList.forEach(([x, y, z, h], i) => {
-    p.set(x, y, z);
+  boxList.forEach(([x, z, y, h, c], i) => {
+    p.set(x + 0.5, y + h / 2, z + 0.5);
     s.y = h;
     boxMesh.setMatrixAt(i, m.compose(p, q, s));
-    boxMesh.setColorAt(i, boxColor[i]);
+    boxMesh.setColorAt(i, c);
   });
   if (boxList.length) {
     boxMesh.instanceMatrix.needsUpdate = true;
     if (boxMesh.instanceColor) boxMesh.instanceColor.needsUpdate = true;
   }
 
-  /* Floor surfaces: corridor + room tiles merged into one colored geometry. */
+  /* Floor + ceiling slabs for walkable tiles (corridor, rooms, doorways). */
   const positions = [];
   const colors = [];
   const addQuad = (x, z, y, color) => {
     positions.push(x, y, z, x + 1, y, z, x + 1, y, z + 1, x, y, z, x + 1, y, z + 1, x, y, z + 1);
     for (let i = 0; i < 6; i++) colors.push(color.r, color.g, color.b);
   };
+  const DOORMAT = new THREE.Color(0x4a525c);
   for (let f = 0; f < floors.length; f++) {
-    const y = (f + 1) * fh - 0.02; /* slab top, right under the next floor's walls */
     for (let tz = 0; tz < dep; tz++) {
       for (let tx = 0; tx < w; tx++) {
         const i = tz * w + tx;
         const t = floors[f].tiles[i];
-        if (t === TILE.CORRIDOR) {
-          addQuad(ox + tx, oz + tz, y, new THREE.Color(TILE_COLORS[TILE.CORRIDOR]));
-        } else if (t === TILE.ROOM) {
-          const k = (floors[f].kinds[i] || 0) % ROOM_KIND_COLORS.length;
-          addQuad(ox + tx, oz + tz, y, new THREE.Color(ROOM_KIND_COLORS[k]));
+        let c = null;
+        if (t === TILE.CORRIDOR) c = new THREE.Color(TILE_COLORS[TILE.CORRIDOR]);
+        else if (t === TILE.ROOM) c = new THREE.Color(ROOM_KIND_COLORS[(floors[f].kinds[i] || 0) % ROOM_KIND_COLORS.length]);
+        else if (t === TILE.DOOR) c = new THREE.Color(DOORMAT);
+        if (c) {
+          addQuad(ox + tx, oz + tz, f * fh + 0.01, c);        /* slab underfoot */
+          addQuad(ox + tx, oz + tz, (f + 1) * fh - 0.02, c);  /* ceiling above  */
         }
       }
     }
@@ -297,23 +484,17 @@ function buildInteriorMesh(d, floors) {
   floorGeom.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
   const floorMesh = new THREE.Mesh(
     floorGeom,
-    new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, transparent: true, opacity: 0.96 })
+    new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide })
   );
 
-  /* Translucent shell showing the exterior silhouette while inside. */
-  const shell = new THREE.Mesh(
-    new THREE.BoxGeometry(w, floors.length * fh, dep),
-    new THREE.MeshLambertMaterial({ color: 0x8fa8c8, transparent: true, opacity: 0.08, depthWrite: false })
-  );
-  shell.position.set(d.wx, (floors.length * fh) / 2, d.wz);
-
-  /* Active-storey highlight. */
+  /* Active-storey volume highlight. */
   const frame = new THREE.LineSegments(
-    new THREE.EdgesGeometry(new THREE.BoxGeometry(w + 0.05, 1, dep + 0.05)),
+    new THREE.EdgesGeometry(new THREE.BoxGeometry(w + 0.05, fh, dep + 0.05)),
     new THREE.LineBasicMaterial({ color: 0x6ea8ff, transparent: true, opacity: 0.9 })
   );
+  frame.position.set(d.wx, fh / 2, d.wz);
 
-  interiorGroup.add(boxMesh, floorMesh, shell, frame);
+  interiorGroup.add(boxMesh, floorMesh, frame);
   interiorGroup.userData = { boxMesh, floorMesh, frame, fh };
 
   storeySlider.max = String(floors.length - 1);
@@ -330,9 +511,9 @@ function setActiveStorey(f, moveCamera) {
   storeySlider.value = String(inspecting.active);
   document.getElementById("storey-n").textContent = String(inspecting.active);
   const { frame, fh } = interiorGroup.userData;
-  if (frame) frame.position.set(inspecting.wx, inspecting.active * fh - 0.35, inspecting.wz);
+  if (frame) frame.position.set(inspecting.wx, inspecting.active * fh + fh / 2, inspecting.wz);
   if (moveCamera) {
-    camera.position.y = inspecting.active * fh + fh / 2;
+    fly.anchorY = inspecting.active * fh + FLY_EYE;   /* glide to that storey's slab */
   }
 }
 
@@ -347,14 +528,50 @@ function pickCell() {
   raycaster.setFromCamera(pointer, camera);
   const hit = raycaster.intersectObjects(pickMeshes, false)[0];
   if (!hit) return;
-  const entry = [...chunks.values()].find((e) => e.mesh === hit.object);
+  const entry = [...chunks.values()].find((e) => e.mesh === hit.object || e.roof === hit.object);
   if (!entry) return;
   const cell = entry.data[hit.instanceId];
   inspectCell(cell.wx, cell.wz);
 }
 
-/* fly-in controls (while inspecting) */
-const fly = { yaw: 0, pitch: -0.25, keys: new Set(), look: false };
+/* ---- collision + enter-by-key ---- */
+function activeFloor() {
+  return Math.max(0, Math.min(inspecting.floors.length - 1,
+    Math.round((camera.position.y - FLY_EYE) / CFG.floorHeight)));
+}
+function interiorTile(f, x, z) {
+  const { w, dep, ox, oz } = inspecting;
+  const gx = Math.floor(x - ox);
+  const gz = Math.floor(z - oz);
+  if (gx < 0 || gx >= w || gz < 0 || gz >= dep) return -1; /* outside footprint = walled */
+  return inspecting.floors[f].tiles[gz * w + gx];
+}
+function walkable(f, px, pz) {
+  const r = 0.28;
+  for (const [dx, dz] of [[0, 0], [r, 0], [-r, 0], [0, r], [0, -r]]) {
+    const t = interiorTile(f, px + dx, pz + dz);
+    if (t === -1 || t === TILE.WALL || t === TILE.CORE) return false;
+  }
+  return true;
+}
+
+/* "G" (or Enter) while looking at a building walks you inside. */
+async function enterCenterBuilding() {
+  if (transitionBusy || inspecting) return;
+  pointer.set(0, 0);
+  raycaster.setFromCamera(pointer, camera);
+  const hit = raycaster.intersectObjects(pickMeshes, false)[0];
+  if (!hit) return;
+  const entry = [...chunks.values()].find((e) => e.mesh === hit.object || e.roof === hit.object);
+  if (!entry) return;
+  const cell = entry.data[hit.instanceId];
+  inspectCell(cell.wx, cell.wz);
+}
+
+/* fly-in controls (while inspecting) — view is always level with the ground
+   and floats at a pedestrian eye height unless R/F change storey. */
+const FLY_EYE = 1.6;
+const fly = { yaw: Math.PI, keys: new Set(), look: false, anchorY: FLY_EYE };
 let pointerX = 0;
 let pointerY = 0;
 
@@ -362,8 +579,7 @@ canvas.addEventListener("mousemove", (e) => {
   pointerX = e.clientX;
   pointerY = e.clientY;
   if (inspecting && fly.look && document.pointerLockElement === canvas) {
-    fly.yaw -= e.movementX * 0.003;
-    fly.pitch = Math.max(-1.5, Math.min(1.5, fly.pitch - e.movementY * 0.003));
+    fly.yaw -= e.movementX * 0.003;   /* horizontal only — see stays level */
   }
 });
 
@@ -373,7 +589,7 @@ canvas.addEventListener("mousedown", (e) => {
     if (!fly.look) {
       canvas.requestPointerLock();
       fly.look = true;
-      modeHint.textContent = "WASD move · Q/E floor · Esc exit";
+      modeHint.textContent = "mouse look · WASD move · Q/E turn · R/F floor · G/Esc exit · Shift+Esc stop";
     }
     return;
   }
@@ -386,10 +602,10 @@ document.addEventListener("pointerlockchange", () => {
   const dir = new THREE.Vector3();
   camera.getWorldDirection(dir);
   fly.yaw = Math.atan2(-dir.x, -dir.z);
-  fly.pitch = 0;
 });
 
 const MOVE_SPEED = 14;
+const TURN_SPEED = 2.2;   /* rad/s for Q/E */
 function stepFly(dt) {
   const fwd = new THREE.Vector3();
   camera.getWorldDirection(fwd);
@@ -406,48 +622,64 @@ function stepFly(dt) {
   if (fly.keys.has("ArrowRight")) move.add(right);
   if (move.lengthSq() > 0) {
     move.normalize().multiplyScalar(MOVE_SPEED * dt);
-    camera.position.add(move);
+    if (inspecting) {
+      const f = activeFloor();
+      const px = camera.position.x + move.x;
+      const pz = camera.position.z + move.z;
+      if (walkable(f, px, pz)) camera.position.add(move);   /* walls block, no clipping out */
+    } else {
+      camera.position.add(move);
+    }
   }
+  if (fly.keys.has("KeyQ")) fly.yaw += TURN_SPEED * dt;
+  if (fly.keys.has("KeyE")) fly.yaw -= TURN_SPEED * dt;
   camera.rotation.order = "YXZ";
   camera.rotation.y = fly.yaw;
-  camera.rotation.x = fly.pitch;
+  camera.rotation.x = 0;   /* forced level with the ground, no pitch/roll */
+  camera.rotation.z = 0;
+  const dy = fly.anchorY - camera.position.y;   /* pedestrian eye-level anchor */
+  camera.position.y += dy * Math.min(1, dt * 6);
 }
 
 window.addEventListener("keydown", (e) => {
-  if (e.code === "Escape" && inspecting) { exitInspect(); return; }
-  if (inspecting) {
-    if (e.code === "KeyQ") setActiveStorey(inspecting.active - 1, false);
-    if (e.code === "KeyE") setActiveStorey(inspecting.active + 1, true);
-    fly.keys.add(e.code);
+  if (e.key === "Escape" && e.shiftKey) {
+    if (confirm("Shut down the Urbix server and close the explorer?")) shutdownExplorer();
+    return;
   }
+  if (e.code === "Escape" && inspecting) { exitBuilding(); return; }
+  if (inspecting) {
+    if (e.code === "KeyG") { exitBuilding(); return; }
+    if (e.code === "KeyR") setActiveStorey(inspecting.active + 1, true);
+    if (e.code === "KeyF") setActiveStorey(inspecting.active - 1, true);
+    fly.keys.add(e.code);
+    return;
+  }
+  if (e.code === "KeyG" || e.code === "Enter") enterCenterBuilding();
 });
 window.addEventListener("keyup", (e) => fly.keys.delete(e.code));
 
-function enterInspect(d) {
-  controls.enabled = false;
-  interiorGroup.visible = true;
-  modeHint.textContent = "click to grab mouse · WASD/arrows move · Q/E floor · Esc exit";
-  popup.textContent =
-    `(${d.wx}, ${d.wz}) · ${CFG.zoneNames[d.zone] || "?"} · ` +
-    `${d.floors.length} storeys · ${d.footprint_w}×${d.footprint_d}`;
-  popup.classList.remove("hidden");
-  const fh = CFG.floorHeight;
-  camera.rotation.order = "YXZ";
-  camera.position.set(d.wx, fh * 0.6, d.wz - 3.2);
-  fly.yaw = 0;
-  fly.pitch = 0;
-  setActiveStorey(0, false);
-  updateStream(); /* pull in surrounding chunks so the street continues */
-}
-
-function exitInspect() {
+async function exitBuilding() {
+  if (transitionBusy || !inspecting) return;
+  transitionBusy = true;
   if (document.pointerLockElement) document.exitPointerLock();
-  clearInspect();
-  interiorGroup.visible = false;
-  storeyBox.classList.add("hidden");
-  popup.classList.add("hidden");
-  controls.enabled = true;
-  modeHint.textContent = "drag orbit · scroll zoom · click a building to enter";
+  fly.keys.clear();
+  const saved = exitState;
+  await withFade(() => {
+    interiorGroup.visible = false;
+    clearInspect();
+    setExteriorVisible(true);
+    storeyBox.classList.add("hidden");
+    popup.classList.add("hidden");
+    controls.enabled = true;
+    if (saved) {
+      camera.position.copy(saved.pos);
+      camera.quaternion.copy(saved.quat);
+      controls.target.copy(saved.target);
+    }
+    controls.update();
+  });
+  transitionBusy = false;
+  modeHint.textContent = "drag orbit · scroll zoom · click a building (or G) to enter · Shift+Esc stop";
 }
 
 /* ---- main loop ---- */

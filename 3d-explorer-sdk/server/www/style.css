@@ -41,3 +41,25 @@ html, body { margin: 0; padding: 0; overflow: hidden; background: #0e1622; heigh
 .sw.stub {
   background: conic-gradient(#7fb3d5,#f5b041,#82e0aa,#af7ac5,#f1948a,#7fb3d5);
 }
+
+#fade {
+  position: fixed; inset: 0; z-index: 30;
+  background: #05070c; pointer-events: none;
+  opacity: 0; transition: opacity .45s ease;
+}
+#fade.on { opacity: 1; }
+
+#shutdown {
+  position: fixed; inset: 0; z-index: 40;
+  background: #05070c; text-align: center;
+  color: #dbe6f3; font: 13px/1.6 "SF Mono", ui-monospace, Menlo, monospace;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px;
+}
+#shutdown .shutdown-card {
+  font-size: 18px; font-weight: 600; letter-spacing: .06em;
+  padding: 14px 22px; border: 1px solid rgba(255,255,255,.15);
+  background: rgba(10,18,30,.7); border-radius: 8px;
+}
+#shutdown .shutdown-note { opacity: .7; }
+#shutdown.hidden { display: none; }

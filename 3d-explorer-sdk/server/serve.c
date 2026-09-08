@@ -25,6 +25,7 @@
  *   GET /api/chunk?cx=&cy=        { header + cells:[ {x,z,h,zone,pal,flags,interior_id} ] }
  *   GET /api/interior?wx=&wz=     { header + floors:[ {w,d,tiles[],kinds[]} ] }
  *   GET /api/zone?wx=&wz=         { weights:[5] }  (continuous zone affinity)
+ *   GET /api/shutdown             { shutting_down:true } then the server exits
  */
 #include <arpa/inet.h>
 #include <errno.h>
@@ -68,6 +69,9 @@ typedef struct {
     size_t n;
     size_t cap;
 } Jbuf;
+
+/* Set by /api/shutdown so the accept loop can end gracefully. */
+static volatile sig_atomic_t g_shutdown = 0;
 
 static void jbuf_reserve(Jbuf *b, size_t extra) {
     if (b->n + extra + 1 > b->cap) {
@@ -337,6 +341,10 @@ static void json_zone(Jbuf *b, double wx, double wz, UrbixEngine *e) {
     jprintf(b, "]}");
 }
 
+static void json_shutdown(Jbuf *b) {
+    jprintf(b, "{\"shutting_down\":true}");
+}
+
 /* ---- Request dispatch ---- */
 static void handle_request(int fd, const char *req_raw, const char *web_dir,
                            UrbixEngine *e, uint64_t seed) {
@@ -381,6 +389,9 @@ static void handle_request(int fd, const char *req_raw, const char *web_dir,
             return;
         }
         json_zone(&b, wx, wz, e);
+    } else if (strcmp(path, "/api/shutdown") == 0) {
+        json_shutdown(&b);
+        g_shutdown = 1;
     } else if (strncmp(path, "/api/", 5) == 0) {
         send_error(fd, 404, "Not Found", "unknown api endpoint");
         free(b.p);
@@ -455,12 +466,16 @@ int main(int argc, char **argv) {
         ssize_t got = recv(cfd, req, sizeof(req) - 1, 0);
         if (got > 0) {
             req[got] = '\0';
-            char *end = strstr(req, "\r\n");
-            if (end) *end = '\0';   /* just the request line is all we need */
-            handle_request(cfd, req, web_dir, engine, seed);
-        }
-        close(cfd);
+char *end = strstr(req, "\r\n");
+        if (end) *end = '\0';   /* just the request line is all we need */
+        handle_request(cfd, req, web_dir, engine, seed);
     }
+    close(cfd);
+    if (g_shutdown) {
+        fprintf(stderr, "urbix serve: shutdown requested, exiting\n");
+        break;
+    }
+}
 
     urbix_engine_destroy(engine);
     return 0;

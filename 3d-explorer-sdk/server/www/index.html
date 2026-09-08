@@ -16,7 +16,7 @@
 <div id="hud">
   <div class="hud-top">
     <span class="title">Urbix · <span id="seed"></span></span>
-    <span class="hint" id="mode-hint">drag orbit · scroll zoom · click a building to enter</span>
+    <span class="hint" id="mode-hint">drag orbit · scroll zoom · click/G enter · Shift+Esc stop</span>
   </div>
   <div id="status">loading config…</div>
   <div id="storey" class="hidden">
@@ -32,6 +32,11 @@
   </div>
 </div>
 <div id="popup" class="hidden"></div>
+<div id="fade"></div>
+<div id="shutdown" class="hidden">
+  <div class="shutdown-card">server stopped</div>
+  <div class="shutdown-note">You can close this tab now.</div>
+</div>
 
 <script type="module" src="app.js"></script>
 </body>

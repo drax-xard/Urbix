@@ -108,10 +108,19 @@ shipped library and serves JSON plus a Three.js single-page explorer.
 # open http://localhost:8311
 ```
 
-Controls: drag to orbit, scroll to zoom, click a building to fly through its
-interior; inside, click to grab the mouse (pointer lock), WASD/arrows to move,
-Q/E to change storey, Esc to exit. The page pulls `/api/chunk` streams lazily
-around the camera and `/api/interior` on click, so memory stays bounded.
+Controls: drag to orbit, scroll to zoom. Look at a building and click it (or
+press G/Enter) to fade into its interior — the exterior fades out so you never
+see both at once. Inside, interior walls block your movement (no clipping out
+through the facade); WASD/arrows move, Q/E turn, R/F change storey, mouse-look
+on click, G or Esc fades back out to the same orbit view. The camera stays
+level with the ground and floats at pedestrian eye height. The page pulls
+`/api/chunk` streams lazily around the camera and `/api/interior` on entry, so
+memory stays bounded.
+
+To stop the demo, press Shift+Esc (confirm the dialog): the page asks the
+server to shut down via `/api/shutdown` and then closes itself (browsers only
+auto-close script-opened tabs, so otherwise it shows a "server stopped" screen
+you can dismiss).
 
 Endpoints: `/api/config` (seed/settings/zones), `/api/chunk?cx&cy`,
 `/api/interior?wx&wz`, `/api/zone?wx&wz`, static files from `--web`. The server
