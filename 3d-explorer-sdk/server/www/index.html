@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Urbix — 3D City Explorer</title>
+<link rel="stylesheet" href="style.css">
+<script type="importmap">
+  { "imports": { "three": "./vendor/three.module.js",
+                 "three/addons/": "./vendor/" } }
+</script>
+</head>
+<body>
+<canvas id="gl"></canvas>
+
+<div id="hud">
+  <div class="hud-top">
+    <span class="title">Urbix · <span id="seed"></span></span>
+    <span class="hint" id="mode-hint">drag orbit · scroll zoom · click a building to enter</span>
+  </div>
+  <div id="status">loading config…</div>
+  <div id="storey" class="hidden">
+    <label>storey <b id="storey-n"></b>/<span id="storey-total"></span></label>
+    <input id="storey-slider" type="range" min="0" max="0" value="0">
+  </div>
+  <div id="legend">
+    <div class="legend-row"><span class="sw" style="background:#9a9a9a"></span>wall</div>
+    <div class="legend-row"><span class="sw" style="background:#2f2f2f"></span>core</div>
+    <div class="legend-row"><span class="sw" style="background:#c9a06a"></span>door</div>
+    <div class="legend-row"><span class="sw" style="background:#e6e2da"></span>corridor</div>
+    <div class="legend-row"><span class="sw stub"></span>room (kind)</div>
+  </div>
+</div>
+<div id="popup" class="hidden"></div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
