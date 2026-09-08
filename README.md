@@ -45,6 +45,7 @@ progress / ⬜ pending). Current version: `0.9.0` (see `CHANGELOG.md`).
 | M7 — CLI, docs & benchmarks | ✅ Done (0.7.0) |
 | M8 — Modular customization | ✅ Done (0.8.0) |
 | M9 — Interior layout generation | ✅ Done (0.9.0) |
+| M10 — Interior FFI export | ✅ Done (0.10.0) |
 
 M9 completes data-driven interior layout generation: each built lot gets an
 `InteriorContext` (zone, blended affinity, footprint, height→floor derivation,
@@ -58,6 +59,12 @@ faces is picked to match the street it abuts), rolls rooms from the blueprint
 weighted tables, greedily places each within a navigable margin, then fills
 leftover cells as `Corridor` and punches a `Door` at every room's opening. See
 [`docs/interiors.md`](docs/interiors.md) for the full algorithm.
+
+M10 ships that interior out the C border: `urbix_generate_interior(engine, wx,
+wz)` returns a `UrbixInterior` flat buffer (per-storey `Tile` grids + room-kind
+tags keyed by world coordinates, following the Rust generator path exactly), so
+a renderer that streams chunks can also render room layouts with no Rust.
+Release it with `urbix_interior_free`.
 
 Each chunk is produced by: querying the continuous Voronoi zone field at the
 cell's absolute world coordinates → resolving blended zone parameters → laying
@@ -83,7 +90,9 @@ then packing the results into flat `#[repr(C)]` cell records.
   `build.rs` (checked in, best-effort so offline builds keep working), and the
   crate emits both `staticlib` (`liburbix.a`) and `cdylib` for C consumers.
   `urbix_generate_chunk` transfers buffer ownership to the caller (must be freed
-  only via `urbix_chunk_free`); the engine handle is opaque. Compat shims
+  only via `urbix_chunk_free`); since M10, `urbix_generate_interior(engine, wx,
+  wz)` hands over a building's room layout the same way (freed via
+  `urbix_interior_free`). The engine handle is opaque. Compat shims
   `URBIX_FLAG_STREET`/`URBIX_FLAG_PARK` are preserved.
 - **Bounded memory.** `ChunkCache` keeps chunks keyed by `ChunkId` and evicts
   by Chebyshev distance from the current center, with an optional hard capacity.

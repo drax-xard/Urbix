@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Interior layout across the C FFI** (Milestone 10): `src/ffi.rs` now exposes a
+  building's generated interior to any C-compatible consumer.
+  - `UrbixInterior` — a `#[repr(C)]` flat-buffer record (interior id, world
+    seed, dominant zone, entrance `door_side`, shared `footprint_w/depth`,
+    `floor_count`, payload `len`/`data`). The payload is one chunk per storey,
+    row-major `tiles[W·D]` (`Tile` enum bytes 0–5) followed by `kinds[W·D]`
+    (room-kind tags), so `len = floor_count * 2 * footprint_w * footprint_d`.
+  - `urbix_generate_interior(engine, wx, wz)` — the engine locates the cell from
+    world coordinates alone (the canonical `InteriorId` key), generates its
+    chunk if needed, and derives the layout via the same
+    `interior_context_for` + `blueprint_for` + `generate_layout` path as the
+    Rust APIs; unbuilt cells and null engines yield a zeroed record.
+  - `urbix_interior_free` — releases the buffer (same ownership/allocator
+    contract as `urbix_chunk_free`).
+  - `include/urbix.h` regenerated (cbindgen) to match.
+
 ### Fixed
 
 - **Small lots no longer render zero-room towers**: Downtown's 4-cell street

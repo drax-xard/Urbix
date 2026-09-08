@@ -97,6 +97,64 @@ typedef struct UrbixChunkBuffer {
 } UrbixChunkBuffer;
 
 /**
+ * A generated building interior handed to foreign code.
+ *
+ * `data` points at `len` bytes laid out as one payload chunk per floor, in
+ * storey order:
+ *
+ * ```text
+ * floor i (i in 0..floor_count):
+ *   tiles[footprint_w * footprint_d]   // one Tile byte each, row-major
+ *   kinds[footprint_w * footprint_d]   // room-kind tag byte each, 0 = not room
+ * ```
+ *
+ * Every floor shares the same `footprint_w × footprint_d` grid, so `len` is
+ * exactly `floor_count * 2 * footprint_w * footprint_d`. `Tile` bytes are the
+ * [`crate::layout::Tile`] enum values (0 = void, 1 = wall, 2 = door, 3 = core,
+ * 4 = corridor, 5 = room). The caller owns this payload and must release it
+ * with [`urbix_interior_free`]. An unbuilt cell (height ≤ 0) or null engine
+ * yields a zeroed header with `data == null` and `len == 0`.
+ */
+typedef struct UrbixInterior {
+    /**
+     * Stable interior key (the built cell's deterministic key).
+     */
+    uint64_t interior_id;
+    /**
+     * World seed used during generation.
+     */
+    uint64_t seed;
+    /**
+     * Dominant [`crate::zones::ZoneType`] index (0–4).
+     */
+    uint8_t zone;
+    /**
+     * [`crate::layout::DoorSide`] index (0 = west, 1 = east, 2 = north, 3 = south).
+     */
+    uint8_t door_side;
+    /**
+     * Shared floor-grid width in tiles.
+     */
+    uint8_t footprint_w;
+    /**
+     * Shared floor-grid depth in tiles.
+     */
+    uint8_t footprint_d;
+    /**
+     * Number of storeys (`len` = `floor_count * 2 * footprint_w * footprint_d`).
+     */
+    uint16_t floor_count;
+    /**
+     * Total payload byte length; 0 when unbuilt.
+     */
+    uint64_t len;
+    /**
+     * Start of the payload (see struct docs); null when unbuilt.
+     */
+    uint8_t *data;
+} UrbixInterior;
+
+/**
  * A blended zone-affinity vector, one weight per [`crate::zones::ZoneType`].
  */
 typedef struct UrbixZoneAffinity {
@@ -405,6 +463,35 @@ struct UrbixChunkBuffer urbix_generate_chunk(struct UrbixEngine *engine, int32_t
  * double-free / undefined behaviour.
  */
 void urbix_chunk_free(struct UrbixChunkBuffer buf);
+
+/**
+ * Generate the interior layout for the built cell at world space `(wx, wz)`.
+ *
+ * The engine locates the cell's chunk from the coordinates alone (world space
+ * is the canonical interior key — see [`crate::chunk::interior_context_for`]),
+ * generates it if needed, and derives the layout from the same path the Rust
+ * APIs use, so C consumers and Rust consumers always agree. Requires a built
+ * cell (`height > 0`); otherwise the returned header is zeroed.
+ *
+ * On success returns an owned [`UrbixInterior`]; release it with
+ * [`urbix_interior_free`].
+ *
+ * ## Safety
+ *
+ * `engine` must be a valid, non-null handle from [`urbix_engine_create`].
+ */
+struct UrbixInterior urbix_generate_interior(struct UrbixEngine *engine, int32_t wx, int32_t wz);
+
+/**
+ * Release an interior buffer returned by [`urbix_generate_interior`].
+ *
+ * ## Safety
+ *
+ * `interior` must be an *unreleased* result from [`urbix_generate_interior`].
+ * Calling this twice on the same buffer (or with an unrelated buffer) is
+ * double-free / undefined behaviour.
+ */
+void urbix_interior_free(struct UrbixInterior interior);
 
 /**
  * Query the continuous zone-affinity vector at world coordinates.

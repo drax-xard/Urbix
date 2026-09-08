@@ -12,6 +12,10 @@ algorithm (weighted rolls from the blueprint tables, greedy placement with a
 navigable margin, corridor fill, per-floor variation, and a street-facing
 entrance) are implemented and tested.
 
+Status (Milestone 10): landed. The generated interior crosses the C border via
+`UrbixInterior` / `urbix_generate_interior` / `urbix_interior_free` (see §9),
+so renderers consuming chunks can also render room layouts with no Rust.
+
 ## 1. Overview
 
 A generated interior is a **separate mini-world**, not part of the outdoor chunk
@@ -237,6 +241,70 @@ Reserved for interior work (see `src/hash.rs:62` and `include/urbix.h`):
 | 43 | `LAYOUT_ROOM_SIZE` | size draws (reserved; sizes draw on the room stream) |
 | 44 | `LAYOUT_DOOR` | entrance pick (k=0) + room doors (k≥1) |
 | 45 | `LAYOUT_FURNITURE` | slot density (reserved for a later milestone) |
+
+## 9. Interior FFI export (Milestone 10)
+
+`src/ffi.rs` exposes a built cell's interior to any C-compatible consumer,
+mirroring the chunk stream in shape and ownership. See the generated
+`include/urbix.h` for the exact declarations.
+
+### Requesting an interior
+
+```c
+UrbixInterior in = urbix_generate_interior(engine, wx, wz);
+```
+
+The engine locates the cell **from world coordinates alone** — no
+chunk/cell-index juggling by the consumer. `(wx, wz)` is the canonical
+`InteriorId` key: the engine derives the chunk with `div_euclid`/`rem_euclid`
+on the configured chunk size, generates it if needed, and rebuilds the context
+via `chunk::interior_context_for` before running `generate_layout` — the same
+path the Rust APIs use, so C and Rust always agree on a lot's interior. A cell
+with `height <= 0` (or a null engine handle) returns a zeroed record.
+
+Always release a returned buffer:
+
+```c
+urbix_interior_free(in);   // null data is a safe no-op
+```
+
+### `UrbixInterior` payload layout
+
+The record is a `#[repr(C)]` flat buffer (`src/ffi.rs`):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `interior_id` | `uint64_t` | stable interior key (the built cell's key) |
+| `seed` | `uint64_t` | world seed used for generation |
+| `zone` | `uint8_t` | dominant `ZoneType` index (0–4) |
+| `door_side` | `uint8_t` | `DoorSide` index (0 west, 1 east, 2 north, 3 south) |
+| `footprint_w` | `uint8_t` | shared floor-grid width in tiles |
+| `footprint_d` | `uint8_t` | shared floor-grid depth in tiles |
+| `floor_count` | `uint16_t` | number of storeys |
+| `len` | `uint64_t` | payload byte length |
+| `data` | `uint8_t *` | payload; null when unbuilt |
+
+`data` holds one payload chunk per storey, in order `floor 0 … floor_count-1`:
+
+```
+tiles[footprint_w * footprint_d]   // Tile enum bytes, row-major
+kinds[footprint_w * footprint_d]   // opaque room-kind tags (0 = not a room)
+```
+
+Tile bytes are the `Tile` enum values (`src/layout.rs:195`): 0 void, 1 wall,
+2 door, 3 core, 4 corridor, 5 room. Because every floor shares the same grid,
+`len = floor_count * 2 * footprint_w * footprint_d`. Room `kind`s are
+consumer-meaningful tags the engine only passes through (blueprint
+`BlueprintRoom.kind`), so a renderer can tint a "kitchen" differently from an
+"office" without the engine knowing what either is.
+
+### Streaming a city with interiors
+
+Pair the interior query with the chunk stream from `docs/api.md` §8: for each
+built cell you already rendered as an exterior box, `urbix_generate_interior`
+fetches the matching room grid on demand when the player steps inside — the
+engine caches the chunk, and interiors are re-derived cheaply per request
+(no interior cache is crossed over the FFI yet).
 
 ## Reference
 

@@ -515,6 +515,37 @@ interiors.
 
 ---
 
+### Milestone 10 — Interior FFI export — ✅ DONE
+
+**Goal:** hand a built cell's generated interior to a C-compatible consumer, so
+a renderer/tool that streams chunks can also render room layouts — the last
+piece of the FFI-first story (exterior in `UrbixChunkBuffer`, interiors in
+`UrbixInterior`).
+
+| File | Deliverable |
+|---|---|
+| `src/ffi.rs` | `UrbixInterior` (`#[repr(C)]` flat buffer: id, seed, zone, `door_side`, footprint w/d, `floor_count`, `len`/`data`); `urbix_generate_interior(engine, wx, wz)` (world-space cell lookup → `interior_context_for` → `blueprint_for` → `generate_layout`; empty record for unbuilt cells/null engine); `urbix_interior_free`. |
+| `include/urbix.h` | Regenerated (cbindgen) with the new type + functions. |
+
+**Subtasks:**
+- **10.1 (done):** payload layout — per floor, row-major `tiles[W·D]` (`Tile`
+  enum bytes 0–5) then `kinds[W·D]` (opaque room-kind tags), so
+  `len = floor_count * 2 * footprint_w * footprint_d`.
+- **10.2 (done):** world-coordinate lookup — the engine derives the chunk via
+  `div_euclid`/`rem_euclid` on the configured chunk size, so a consumer never
+  juggles chunk/cell indices to reach an interior; determinism and
+  cross-chunk consistency are inherited from the Rust path.
+
+**Tests:**
+- `urbix_generate_interior` round-trip + payload determinism (identical bytes
+  across calls), payload length formula, tile bytes within the enum range,
+  walls + circulation core present, non-null engine only.
+- Negative world coordinates round-trip.
+- Unbuilt cells and null engines yield a zeroed (empty) record; freeing it is a
+  safe no-op.
+
+---
+
 ## 8. Future Extensions (explicitly deferred)
 
 These are deliberately out of scope for the initial build but are designed for

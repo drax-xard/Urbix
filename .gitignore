@@ -2,6 +2,9 @@
 /target
 Cargo.lock
 
+# Release packaging staging (CI builds artifacts under dist/)
+/dist
+
 # macOS
 .DS_Store
 

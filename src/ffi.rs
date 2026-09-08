@@ -17,6 +17,9 @@
 //!   Rust-allocated byte buffer. **Ownership transfers to the caller**, who must
 //!   release it with [`urbix_chunk_free`]. It must never be freed by a foreign
 //!   allocator (`free`, `delete`, ...).
+//! - [`urbix_generate_interior`] returns a [`UrbixInterior`] in the same
+//!   pattern: `data` is a Rust-allocated payload the caller owns and must
+//!   release with [`urbix_interior_free`].
 //! - All other functions take borrowed state and transfer no ownership.
 //!
 //! ## C ABI notes
@@ -59,6 +62,45 @@ pub struct UrbixChunkBuffer {
 pub struct UrbixZoneAffinity {
     /// Per-zone weights summing to ~1.0.
     pub weights: [f32; ZONE_COUNT],
+}
+
+/// A generated building interior handed to foreign code.
+///
+/// `data` points at `len` bytes laid out as one payload chunk per floor, in
+/// storey order:
+///
+/// ```text
+/// floor i (i in 0..floor_count):
+///   tiles[footprint_w * footprint_d]   // one Tile byte each, row-major
+///   kinds[footprint_w * footprint_d]   // room-kind tag byte each, 0 = not room
+/// ```
+///
+/// Every floor shares the same `footprint_w × footprint_d` grid, so `len` is
+/// exactly `floor_count * 2 * footprint_w * footprint_d`. `Tile` bytes are the
+/// [`crate::layout::Tile`] enum values (0 = void, 1 = wall, 2 = door, 3 = core,
+/// 4 = corridor, 5 = room). The caller owns this payload and must release it
+/// with [`urbix_interior_free`]. An unbuilt cell (height ≤ 0) or null engine
+/// yields a zeroed header with `data == null` and `len == 0`.
+#[repr(C)]
+pub struct UrbixInterior {
+    /// Stable interior key (the built cell's deterministic key).
+    pub interior_id: u64,
+    /// World seed used during generation.
+    pub seed: u64,
+    /// Dominant [`crate::zones::ZoneType`] index (0–4).
+    pub zone: u8,
+    /// [`crate::layout::DoorSide`] index (0 = west, 1 = east, 2 = north, 3 = south).
+    pub door_side: u8,
+    /// Shared floor-grid width in tiles.
+    pub footprint_w: u8,
+    /// Shared floor-grid depth in tiles.
+    pub footprint_d: u8,
+    /// Number of storeys (`len` = `floor_count * 2 * footprint_w * footprint_d`).
+    pub floor_count: u16,
+    /// Total payload byte length; 0 when unbuilt.
+    pub len: u64,
+    /// Start of the payload (see struct docs); null when unbuilt.
+    pub data: *mut u8,
 }
 
 /// Construct an engine with the given seed and default configuration.
@@ -130,6 +172,122 @@ pub unsafe extern "C" fn urbix_chunk_free(buf: UrbixChunkBuffer) {
     // SAFETY: caller guarantees buf came from urbix_generate_chunk (or a null
     // verified above).
     drop(unsafe { ChunkBuffer::from_raw_bytes(buf.data, buf.len as usize) });
+}
+
+/// Generate the interior layout for the built cell at world space `(wx, wz)`.
+///
+/// The engine locates the cell's chunk from the coordinates alone (world space
+/// is the canonical interior key — see [`crate::chunk::interior_context_for`]),
+/// generates it if needed, and derives the layout from the same path the Rust
+/// APIs use, so C consumers and Rust consumers always agree. Requires a built
+/// cell (`height > 0`); otherwise the returned header is zeroed.
+///
+/// On success returns an owned [`UrbixInterior`]; release it with
+/// [`urbix_interior_free`].
+///
+/// ## Safety
+///
+/// `engine` must be a valid, non-null handle from [`urbix_engine_create`].
+#[no_mangle]
+pub unsafe extern "C" fn urbix_generate_interior(
+    engine: *mut UrbixEngine,
+    wx: i32,
+    wz: i32,
+) -> UrbixInterior {
+    let empty = empty_interior();
+    if engine.is_null() {
+        return empty;
+    }
+    // SAFETY: caller guarantees a valid non-concurrently-used engine handle.
+    let engine = unsafe { &mut *(engine as *mut WorldEngine) };
+
+    let n = i64::from(engine.config().chunk_size);
+    let cx = i64::from(wx).div_euclid(n) as i32;
+    let cy = i64::from(wz).div_euclid(n) as i32;
+    let chunk = engine.generate_chunk(cx, cy);
+
+    let lx = i64::from(wx).rem_euclid(n) as usize;
+    let ly = i64::from(wz).rem_euclid(n) as usize;
+    let cell = chunk.get_cell(ly * n as usize + lx);
+    if cell.height <= 0.0 {
+        return empty;
+    }
+
+    let config = engine.config();
+    let ctx = crate::chunk::interior_context_for(config, i64::from(wx), i64::from(wz), &cell);
+    let blueprint = config.blueprint_for(ctx.zone);
+    let layout = crate::interior::generate_layout(cell.interior_id, &ctx, &blueprint);
+
+    let first = &layout.floors[0];
+    let payload = interior_payload(&layout);
+    let len = payload.len() as u64;
+    let data = Box::into_raw(payload.into_boxed_slice()) as *mut u8;
+    UrbixInterior {
+        interior_id: layout.id,
+        seed: layout.seed,
+        zone: ctx.zone as u8,
+        door_side: ctx.door_side as u8,
+        footprint_w: first.width,
+        footprint_d: first.depth,
+        floor_count: layout.floors.len() as u16,
+        len,
+        data,
+    }
+}
+
+/// Release an interior buffer returned by [`urbix_generate_interior`].
+///
+/// ## Safety
+///
+/// `interior` must be an *unreleased* result from [`urbix_generate_interior`].
+/// Calling this twice on the same buffer (or with an unrelated buffer) is
+/// double-free / undefined behaviour.
+#[no_mangle]
+pub unsafe extern "C" fn urbix_interior_free(interior: UrbixInterior) {
+    if interior.data.is_null() {
+        return;
+    }
+    // SAFETY: caller guarantees interior came from urbix_generate_interior (or
+    // a null verified above), so data is a Rust-allocated boxed slice.
+    drop(unsafe {
+        Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+            interior.data,
+            interior.len as usize,
+        ))
+    });
+}
+
+/// An unbuilt ("empty") interior: zeroed header, no payload.
+fn empty_interior() -> UrbixInterior {
+    UrbixInterior {
+        interior_id: 0,
+        seed: 0,
+        zone: 0,
+        door_side: 0,
+        footprint_w: 0,
+        footprint_d: 0,
+        floor_count: 0,
+        len: 0,
+        data: ptr::null_mut(),
+    }
+}
+
+/// Pack a layout's floors into the FFI payload layout.
+///
+/// Per floor, row-major tiles then room-kind bytes:
+/// `floor_count * 2 * footprint_w * footprint_d` bytes total.
+fn interior_payload(layout: &crate::layout::InteriorLayout) -> Vec<u8> {
+    let cell_bytes = layout
+        .floors
+        .iter()
+        .map(|f| usize::from(f.width) * usize::from(f.depth))
+        .sum::<usize>();
+    let mut out = Vec::with_capacity(cell_bytes * 2);
+    for floor in &layout.floors {
+        out.extend(floor.tiles.iter().map(|t| *t as u8));
+        out.extend(floor.kinds.iter().copied());
+    }
+    out
 }
 
 /// Query the continuous zone-affinity vector at world coordinates.
@@ -237,6 +395,7 @@ pub unsafe extern "C" fn urbix_set_config(engine: *mut UrbixEngine, config: *con
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::slice;
 
     #[test]
     fn create_destroy_null_safe() {
@@ -320,5 +479,157 @@ mod tests {
         // SAFETY: release buffer, then engine.
         unsafe { urbix_chunk_free(buf) };
         urbix_engine_destroy(engine);
+    }
+
+    #[test]
+    fn interior_round_trips_and_is_deterministic() {
+        // Engine created, used single-threaded, destroyed here.
+        let engine = urbix_engine_create(445566);
+        assert!(!engine.is_null());
+
+        // SAFETY: live engine.
+        let buf = unsafe { urbix_generate_chunk(engine, 0, 0) };
+        assert!(!buf.data.is_null());
+        // SAFETY: valid buffer; header is in-bounds.
+        let header =
+            unsafe { std::ptr::read_unaligned(buf.data.cast::<crate::data::ChunkHeader>()) };
+        let mut built = None;
+        let mut street = None;
+        for i in 0..header.cell_count as usize {
+            // SAFETY: cell i lies within buf.len (header + cell_count * 40).
+            let cell = unsafe {
+                std::ptr::read_unaligned(buf.data.add(32 + i * 40).cast::<crate::data::Cell>())
+            };
+            let lx = (i % usize::from(header.chunk_size)) as i32;
+            let ly = (i / usize::from(header.chunk_size)) as i32;
+            if cell.height > 0.0 && built.is_none() {
+                built = Some((lx, ly));
+            }
+            if cell.height == 0.0 && street.is_none() {
+                street = Some((lx, ly));
+            }
+            if built.is_some() && street.is_some() {
+                break;
+            }
+        }
+        // SAFETY: scan buffer released once.
+        unsafe { urbix_chunk_free(buf) };
+
+        let (wx, wz) = built.expect("seed 445566 has a built cell near (0,0)");
+        // SAFETY: live engine.
+        let i1 = unsafe { urbix_generate_interior(engine, wx, wz) };
+        assert!(!i1.data.is_null());
+        assert!(i1.door_side <= 3, "door_side is a valid DoorSide");
+        assert!(i1.floor_count >= 1);
+        assert!(
+            i1.footprint_w >= 7 && i1.footprint_d >= 7,
+            "footprint floored at 7"
+        );
+        let expected =
+            u64::from(i1.floor_count) * 2 * u64::from(i1.footprint_w) * u64::from(i1.footprint_d);
+        assert_eq!(i1.len, expected);
+
+        // SAFETY: payload is exactly i1.len bytes.
+        let payload1 = unsafe { slice::from_raw_parts(i1.data, i1.len as usize) };
+        let grid = usize::from(i1.footprint_w) * usize::from(i1.footprint_d);
+        let tiles = &payload1[..grid];
+        assert!(
+            tiles.iter().all(|&b| b <= 5),
+            "tile bytes within enum range"
+        );
+        assert!(tiles.contains(&1), "has exterior walls");
+        assert!(tiles.contains(&3), "has circulation core");
+
+        // Determinism: a second call yields the identical payload.
+        // SAFETY: live engine.
+        let i2 = unsafe { urbix_generate_interior(engine, wx, wz) };
+        assert_eq!(i2.interior_id, i1.interior_id);
+        assert_eq!(i2.seed, i1.seed);
+        assert_eq!(i2.len, i1.len);
+        // SAFETY: both payloads are valid.
+        assert_eq!(
+            unsafe { slice::from_raw_parts(i2.data, i2.len as usize) },
+            payload1
+        );
+
+        // SAFETY: each interior released once; engine destroyed once.
+        unsafe {
+            urbix_interior_free(i1);
+            urbix_interior_free(i2);
+        }
+        urbix_engine_destroy(engine);
+    }
+
+    #[test]
+    fn interior_negative_world_coords_round_trip() {
+        // Engine created/destroyed here.
+        let engine = urbix_engine_create(445566);
+        assert!(!engine.is_null());
+        // SAFETY: live engine; div_euclid handles negatives.
+        let a = unsafe { urbix_generate_interior(engine, -3, -7) };
+        let b = unsafe { urbix_generate_interior(engine, -3, -7) };
+        assert_eq!(a.interior_id, b.interior_id);
+        assert_eq!(a.len, b.len);
+        if !a.data.is_null() {
+            // SAFETY: payloads are valid and equal length.
+            assert_eq!(
+                unsafe { slice::from_raw_parts(a.data, a.len as usize) },
+                unsafe { slice::from_raw_parts(b.data, b.len as usize) }
+            );
+        }
+        // SAFETY: each interior released once; engine destroyed once.
+        unsafe {
+            urbix_interior_free(a);
+            urbix_interior_free(b);
+        }
+        urbix_engine_destroy(engine);
+    }
+
+    #[test]
+    fn unbuilt_cell_yields_empty_interior() {
+        // Engine created/destroyed here.
+        let engine = urbix_engine_create(7);
+        assert!(!engine.is_null());
+
+        // SAFETY: live engine.
+        let buf = unsafe { urbix_generate_chunk(engine, 0, 0) };
+        // SAFETY: valid buffer.
+        let header =
+            unsafe { std::ptr::read_unaligned(buf.data.cast::<crate::data::ChunkHeader>()) };
+        let mut street = None;
+        for i in 0..header.cell_count as usize {
+            // SAFETY: cell i lies within buf.len.
+            let cell = unsafe {
+                std::ptr::read_unaligned(buf.data.add(32 + i * 40).cast::<crate::data::Cell>())
+            };
+            if cell.height == 0.0 {
+                let lx = (i % usize::from(header.chunk_size)) as i32;
+                let ly = (i / usize::from(header.chunk_size)) as i32;
+                street = Some((lx, ly));
+                break;
+            }
+        }
+        // SAFETY: scan buffer released once.
+        unsafe { urbix_chunk_free(buf) };
+
+        let (wx, wz) = street.expect("every chunk has street cells");
+        // SAFETY: live engine; unbuilt cells yield a zeroed interior.
+        let interior = unsafe { urbix_generate_interior(engine, wx, wz) };
+        assert!(interior.data.is_null());
+        assert_eq!(interior.len, 0);
+        assert_eq!(interior.floor_count, 0);
+        // SAFETY: null payload is a safe no-op.
+        unsafe { urbix_interior_free(interior) };
+        urbix_engine_destroy(engine);
+    }
+
+    #[test]
+    fn interior_null_engine_safe() {
+        // SAFETY: null engine is a no-op, not UB.
+        let interior = unsafe { urbix_generate_interior(ptr::null_mut(), 10, 10) };
+        assert!(interior.data.is_null());
+        assert_eq!(interior.len, 0);
+        // SAFETY: null payload is a safe no-op.
+        unsafe { urbix_interior_free(interior) };
     }
 }
