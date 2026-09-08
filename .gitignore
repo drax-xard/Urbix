@@ -5,6 +5,9 @@ Cargo.lock
 # Release packaging staging (CI builds artifacts under dist/)
 /dist
 
+# Micro-server binary (rebuilt via 3d-explorer-sdk/server/build.sh)
+/3d-explorer-sdk/server/serve
+
 # macOS
 .DS_Store
 
