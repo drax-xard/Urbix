@@ -12,17 +12,23 @@ deterministic city in chunks; you render it.
 ├── docs/
 │   └── api.md                <-- THE authoritative C API reference (read this first)
 ├── examples/
-│   └── explore_grid.c        <-- fully worked example: drive a chunk grid + render data
+│   ├── explore_grid.c        <-- fully worked example: drive a chunk grid + render data
+│   └── explore_interior.c    <-- worked example: read a building's interior via the FFI
+├── server/
+│   ├── serve.c               <-- dependency-free C micro-server (links the shipped lib)
+│   ├── build.sh              <-- compiles server/serve
+│   ├── test.sh               <-- headless HTTP smoke tests
+│   └── www/                  <-- Three.js city explorer (a working demo app)
 └── sdk/
     ├── include/urbix.h       <-- C header (all types + functions)
     ├── lib/
     │   ├── liburbix.a        <-- static library
     │   └── liburbix.dylib    <-- dynamic library
-    └── urbix-0.8.0-macos-aarch64.tar.gz   <-- CI release artifact (same contents)
+    └── urbix-0.10.0-macos-aarch64.tar.gz   <-- CI release artifact (same contents)
 ```
 
 Target platform of this build: **macOS, Apple Silicon (`aarch64`)**. Version:
-**0.8.0**.
+**0.10.0**.
 
 ## For an AI agent: how to integrate
 
@@ -34,6 +40,7 @@ Follow this order so you build on the right foundation:
 2. **Read `examples/explore_grid.c`** — a small, compile-and-run C program that
    generates a radial grid of chunks and verifies the header/cell layout. Modeling
    your 3D mesh generation directly on `explore_grid.c` is the fastest path.
+   `examples/explore_interior.c` does the same for a building's interiors.
 3. **Write your 3D demo** against the API in `docs/api.md`. The conceptual flow:
 
    ```text
@@ -52,6 +59,12 @@ a building height, zone affinity, palette id, and flags — enough to place a bo
 or an instance at world position `(cx*chunk_size + i%chunk_size, cy*chunk_size + i/chunk_size)`.
 The engine is deterministic from a seed and streams infinitely; cache eviction
 is automatic. You don't persist anything — just generate on demand.
+
+Since 0.10.0 the engine also exposes what's **inside** each built cell:
+`urbix_generate_interior(engine, wx, wz)` returns per-storey tile grids
+(`UrbixInterior`: walls, doors, the circulation core, corridors, and rooms
+tagged by kind) so a viewer can render room layouts — good enough for a
+fly-through demo. See `docs/api.md` §5.
 
 ## Compiling your C integration
 
@@ -84,7 +97,31 @@ once.
 
 See `docs/api.md` §7 and §8 for the exact loops and the world-position formula.
 
+## Running the web explorer (Three.js)
+
+This SDK ships a working demo: a dependency-free C micro-server that links the
+shipped library and serves JSON plus a Three.js single-page explorer.
+
+```sh
+./server/build.sh                 # compiles server/serve
+./server/serve --seed 445566 --web server/www   # default port 8311
+# open http://localhost:8311
+```
+
+Controls: drag to orbit, scroll to zoom, click a building to fly through its
+interior; inside, click to grab the mouse (pointer lock), WASD/arrows to move,
+Q/E to change storey, Esc to exit. The page pulls `/api/chunk` streams lazily
+around the camera and `/api/interior` on click, so memory stays bounded.
+
+Endpoints: `/api/config` (seed/settings/zones), `/api/chunk?cx&cy`,
+`/api/interior?wx&wz`, `/api/zone?wx&wz`, static files from `--web`. The server
+binds localhost only. `three.js` (r160) is vendored under `server/www/vendor/`,
+served locally — no external network access needed.
+
+`server/test.sh` runs headless HTTP smoke tests (9 assertions) against the flag
+defaults; it needs a localhost connection only.
+
 ## License & provenance
 
-This SDK packages `urbix` v0.8.0. See `sdk/.../LICENSE` (inside the tarball) and
+This SDK packages `urbix` v0.10.0. See `sdk/.../LICENSE` (inside the tarball) and
 the engine repo metadata. The header and libs are generated from the Urbix crate.

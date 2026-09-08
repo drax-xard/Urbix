@@ -1,4 +1,4 @@
-# Urbix Engine — C API Reference (v0.8.0, macos-aarch64)
+# Urbix Engine — C API Reference (v0.10.0, macos-aarch64)
 
 This is the authoritative reference for calling the Urbix procedural city
 engine from C (or any language with C interop: C++, Rust, C#, Unity, Godot,
@@ -18,7 +18,8 @@ Urbix is a **deterministic, infinite procedural city generator**. Given a
 - a **palette index** (which facade color it uses),
 - **flags** (is it a street? is it park?),
 - an **interior key** (a deterministic id of the room inside the building,
-  `0` = no interior).
+  `0` = no interior), and — since 0.10.0 — the full **interior layout** itself
+  (per-storey tile grids), fetched with `urbix_generate_interior`.
 
 The same `seed` always produces the *identical* city. Chunks are generated
 **on demand** and LRU-cached, so memory stays bounded as you fly through an
@@ -41,7 +42,7 @@ The SDK ships both forms in `sdk/`:
 | `sdk/lib/liburbix.dylib` | dynamic library (macOS) | You want to hot-swap or link at runtime |
 | `sdk/include/urbix.h` | C header | Everything here is declared in it |
 
-The archive `sdk/urbix-0.8.0-macos-aarch64.tar.gz` is the exact CI release
+The archive `sdk/urbix-0.10.0-macos-aarch64.tar.gz` is the exact CI release
 artifact (matches `.github/workflows/release.yml`) with the same layout.
 
 ### Link line (macOS/AArch64)
@@ -173,6 +174,37 @@ The 5 zones, in index order (this is the `ZONE_COUNT == 5` convention):
 | 3 | Industrial (grimy grey/brown) |
 | 4 | Park (light green) |
 
+### `UrbixInterior` — generated building interior (since 0.10.0)
+
+```c
+typedef struct UrbixInterior {
+    uint64_t  interior_id;     /* interior key (the built cell's key) */
+    uint64_t  seed;            /* world seed used for generation */
+    uint8_t   zone;            /* dominant zone index 0–4 */
+    uint8_t   door_side;       /* 0 west, 1 east, 2 north, 3 south */
+    uint8_t   footprint_w;     /* floor-grid width in tiles */
+    uint8_t   footprint_d;     /* floor-grid depth in tiles */
+    uint16_t  floor_count;     /* number of storeys */
+    uint64_t  len;             /* payload byte length; 0 when unbuilt */
+    uint8_t  *data;            /* owned by caller; free with urbix_interior_free */
+} UrbixInterior;
+```
+
+`data` holds one payload chunk per storey, in floor order. Each storey:
+
+```
+tiles[footprint_w * footprint_d]   /* Tile enum bytes, row-major */
+kinds[footprint_w * footprint_d]   /* opaque room-kind tags (0 = not a room) */
+```
+
+Tile bytes (`Tile` enum): `0` void, `1` wall, `2` door, `3` core (stairs/elevator),
+`4` corridor, `5` room. Every floor shares the same footprint, so
+`len == floor_count * 2 * footprint_w * footprint_d`. The `kind` tags are
+consumer-meaningful (the engine stamps each room with the zone blueprint's
+opaque kind) — tint "kitchen" vs "office" without the engine knowing what either
+is. An unbuilt cell (`height <= 0`) or NULL engine yields a zeroed record with
+`data == NULL`.
+
 ---
 
 ## 4. Lifecycle functions
@@ -226,6 +258,31 @@ Return the **continuous** blended zone weight vector (sum ~1.0) at continuous
 world coordinates `(wx, wz)`. Useful for ground colour, ambient audio, or
 spawning district-specific props. The `wx/wz` are world units in the same frame
 as cell positions (i.e. a cell's world position is `x = cx*chunk_size + l`, etc.).
+
+### Generate an interior (since 0.10.0)
+
+```c
+UrbixInterior urbix_generate_interior(UrbixEngine *engine, int32_t wx, int32_t wz);
+```
+
+- `wx`, `wz` are **world cell coordinates** (the canonical interior key). The
+  engine derives the chunk with `div_euclid`/`rem_euclid` on the configured
+  chunk size, generates it if needed, and rebuilds the cell's context via the
+  same path the Rust APIs use — so a C consumer and the Rust examples always
+  agree on a lot's interior.
+- Requires a built cell (`height > 0`). Otherwise returns `{ ...len: 0, data: NULL }`.
+- On success returns a record you MUST release with `urbix_interior_free`.
+- NULL engine → zeroed record.
+
+### Free an interior buffer
+
+```c
+void urbix_interior_free(UrbixInterior interior);
+```
+
+- NULL `data` is a no-op.
+- **Never** free with the C `free()` — the buffer is Rust-allocated. You must
+  call `urbix_interior_free`, exactly once.
 
 ---
 
@@ -310,6 +367,12 @@ Do generation on a **worker thread** with a mutex-guarded engine, or keep the
 engine on the main thread and generate synchronously; don't block the render
 frame on huge sweeps — spread chunk generation across frames.
 
+**Interiors while flying:** for each built cell you already boxed
+(`c->interior_id != 0`), call `urbix_generate_interior(engine, wx, wz)` on demand
+when the player steps inside (or a picking ray hits the lot). The engine caches
+the chunk, so the interior request is cheap; the returned storey grids let you
+render walls, the corridor/net core, and room kinds per floor (see `UrbixInterior`).
+
 ---
 
 ## 9. Building a `WorldConfig` from C
@@ -359,7 +422,9 @@ API means checking for a non-NULL result.
 Urbix's FFI **never panics into C**. On invalid inputs the functions no-op:
 
 - `urbix_generate_chunk(NULL, …)` → `{NULL, 0}`.
+- `urbix_generate_interior(NULL, …)` → zeroed record (`data == NULL`, `len == 0`).
 - `urbix_chunk_free({NULL, 0})` → no-op.
+- `urbix_interior_free({…, NULL, 0})` → no-op.
 - `urbix_engine_destroy(NULL)` → no-op.
 - `urbix_set_*(NULL, …)` → no-op.
 - Invalid `WorldConfig` → `create_with_config` returns NULL; `set_config` no-ops.
@@ -371,7 +436,9 @@ as an error (allocation or bad config).
 1. Caller owns `UrbixEngine`; destroy once, with `urbix_engine_destroy`.
 2. Caller owns each successful `UrbixChunkBuffer.data`; free once, with
    `urbix_chunk_free` — **not** `free()`.
-3. Never dereference `UrbixEngine`.
+3. Caller owns each successful `UrbixInterior.data`; free once, with
+   `urbix_interior_free` — **not** `free()`.
+4. Never dereference `UrbixEngine`.
 
 ---
 
@@ -384,6 +451,8 @@ as an error (allocation or bad config).
 | `urbix_engine_destroy(e)` | `UrbixEngine*` | – |
 | `urbix_generate_chunk(e, cx, cy)` | `int32_t,int32_t` | `UrbixChunkBuffer` (free me) |
 | `urbix_chunk_free(buf)` | `UrbixChunkBuffer` | – |
+| `urbix_generate_interior(e, wx, wz)` | `int32_t,int32_t` | `UrbixInterior` (free me) |
+| `urbix_interior_free(in)` | `UrbixInterior` | – |
 | `urbix_get_zone(e, wx, wz)` | `double,double` | `UrbixZoneAffinity` |
 | `urbix_set_draw_distance(e, radius)` | `uint32_t` | – |
 | `urbix_set_chunk_size(e, size)` | `uint16_t` | – (clears cache) |
