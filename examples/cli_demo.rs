@@ -37,7 +37,7 @@ use urbix::chunk::interior_context_for;
 use urbix::config::WorldConfig;
 use urbix::data::{Cell, CellFlags};
 use urbix::engine::WorldEngine;
-use urbix::interior::generate_layout;
+use urbix::interior::generate_layout_with_ground;
 use urbix::layout::{Floor, Tile};
 
 /// Parse a `--key value` argument list into a simple string map.
@@ -187,7 +187,11 @@ pub fn interior_report(
         ));
     }
 
-    let layout = generate_layout(cell.interior_id, &ctx, &bp);
+    let layout = {
+        let ground =
+            urbix::interior::resolve_ground_override(&ctx, &bp, &config.interior_blueprints);
+        generate_layout_with_ground(cell.interior_id, &ctx, &bp, ground)
+    };
     out.push_str(&format!(
         "{} storey(s), seed {}\n",
         layout.floors.len(),

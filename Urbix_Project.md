@@ -623,7 +623,7 @@ bump to `0.13.0` (context growth).
 
 ---
 
-### Milestone 14 — Interior program (units, wet stacks, rules) — ⬜ PENDING
+### Milestone 14 — Interior program (units, wet stacks, rules) — ✅ DONE
 
 **Goal:** rooms that make sense per building — apartments with front doors,
 plumbing stacked vertically, artist-tunable rules. Specified in

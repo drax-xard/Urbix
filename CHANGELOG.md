@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-09-16
+
+### Added
+
+- **Interior program** (Milestone 14 — rooms that make sense per building):
+  - Blueprint v2 (`src/layout.rs`): per-room `min_count`, adjacency `tags`
+    (`TAG_WET/QUIET/PUBLIC/STREET`), `doors` (0 reads as 1); per-blueprint
+    `unit_max`, `wet_shafts`, `ground_zone` (255 = none), `corridor`
+    (double/single-loaded) — all serde-defaulted so old files parse
+    (covered by a strip-and-reparse compat test); `WorldConfig::is_valid`
+    guards the new knobs.
+  - Unit subdivision (`src/interior.rs`): guillotine splits into apartment
+    rects (shaft-aware cuts never orphan a unit), per-unit anchor orders,
+    minimum pass, fill pass, room-less unit guarantee, unit front doors.
+  - Wet-stack snapping (`domain::LAYOUT_WET`): building-constant shaft
+    columns; WET rooms cover a shaft or (fill phase) are skipped, so every
+    placed wet room provably stacks.
+  - Mixed-use ground: `resolve_ground_override` + `generate_layout_with_ground`
+    (retail base under 3+ storey homes by default); FFI and all examples
+    resolve it.
+  - Multi-door rooms, single-loaded corridor band policy.
+  - Tests: unit partition/guarantee, kitchen+bath minimums, strict wet
+    alignment, mixed-use kinds, two-door rooms, corridor confinement,
+    shaft-aware splits, unplaceable-minimum safety.
+
+### Changed
+
+- `BlueprintRoom::new` / `room_fits` / `try_place_room` / `room_door`
+  signatures grow (private except the constructor; MINOR break).
+- Defaults: homes subdivide (3 units), stack 2 wet shafts, and rise over a
+  retail base; workplaces stay open plan with 1 shaft.
+- Docs: `docs/interiors.md` §§4/5/7/8 rewritten for M14; `Urbix_Project.md`
+  M14 ✅; `README.md` updated.
+
 ## [0.13.0] — 2026-09-16
 
 ### Added

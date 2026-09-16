@@ -120,8 +120,11 @@ Blueprints are the per-zone rule tables. Two plain `#[repr(C)]`,
 | `weight` | relative selection weight when rolling a room for this zone |
 | `min_w/max_w` | room width bounds in tiles (inclusive) |
 | `min_d/max_d` | room depth bounds in tiles (inclusive) |
+| `min_count` | minimum placements per floor (best-effort; skipped if unplaceable) |
+| `tags` | adjacency bits: 1 WET (shafts) · 2 QUIET · 4 PUBLIC · 8 STREET |
+| `doors` | doors punched per room (`0` reads as 1) |
 
-**`Blueprint`** (`src/layout.rs:242`) — one zone's whole rule table:
+**`Blueprint`** (`src/layout.rs`) — one zone's whole rule table:
 
 | Field | Meaning |
 |---|---|
@@ -131,6 +134,10 @@ Blueprints are the per-zone rule tables. Two plain `#[repr(C)]`,
 | `rooms` | `[BlueprintRoom; MAX_BLUEPRINT_ROOMS]` fixed array; only `room_count` are live |
 | `vary_typical` | nonzero re-rolls typical floors per storey (`0` = generate once, clone) |
 | `wandering_core` | nonzero re-hashes the core per floor (`0` = one stacked shaft) |
+| `unit_max` | max apartment units per floor (`0` = open plan) |
+| `wet_shafts` | plumbing shaft columns per building (`0` = off, capped at 4) |
+| `ground_zone` | ground-floor blueprint as `ZoneType` index (`255` = none; retail base) |
+| `corridor` | `0` double-loaded fill · `1` single-loaded (rooms north of south band) |
 
 `rooms` is a **fixed-size** array (`MAX_BLUEPRINT_ROOMS = 8`, `src/layout.rs:55`)
 because a `Blueprint` must live inside the `#[repr(C)]` `WorldConfig` and cross
@@ -149,10 +156,14 @@ the `[Blueprint; ZONE_COUNT]` array that initializes
 | Zone | margin / core | room templates (kind · weight · min/max size) |
 |---|---|---|
 | Downtown | 2 / 3 | lobby 10 · 3.0 · 3–6²; open office 11 · 6.0 · 3–4²; meeting 12 · 4.0 · 3–5×2–4; utility 13 · 3.0 · 2–3² |
-| Residential | 1 / 2 | living 20 · 4.0 · 3–5²; kitchen 21 · 3.0 · 2–3²; bedroom 22 · 4.0 · 3–4²; bathroom 23 · 1.0 · 1–2² |
+| Residential | 1 / 2 | living 20 · 4.0 · 3–5²; kitchen 21 · 3.0 · 2–3² (min 1, wet); bedroom 22 · 4.0 · 3–4² (quiet); bathroom 23 · 1.0 · 1–2² (min 1, wet) |
 | Commercial | 1 / 2 | retail 30 · 3.0 · 4–6×3–5; office/flex 31 · 3.0 · 3–5²; stockroom 32 · 2.0 · 2–3² |
 | Industrial | 1 / 2 | work bay 40 · 5.0 · 4–7×3–6; office/reception 41 · 2.0 · 2–3²; washroom 42 · 1.0 · 1–2² |
 | Park | 1 / 1 | shed 50 · 1.0 · 2–3² |
+
+Unit/shaft/ground policy defaults: homes split into ≤3 apartments over 2
+wet shafts with a Commercial retail base on 3+ storey buildings; workplaces
+stay open plan with 1 shaft; sheds stay simple (no units, no shafts).
 
 ## 6. Configuration & override chain
 
@@ -242,11 +253,38 @@ Per floor, in order:
 
 The result is deterministic, sealed (only entrance/room `Door`s break the
 ring), vertically coherent (one shaft, one entrance, repeated typicals), and
-every room opens onto circulation — covered by the unit tests in
-`src/interior.rs` (`rooms_are_placed_walled_sealed_and_reachable`,
-`core_stacks_vertically_across_floors`, `typical_floors_repeat_one_layout`,
-`entrance_door_lives_on_the_ground_floor_only`,
-`degenerate_footprint_is_sealed`).
+every room opens onto circulation.
+
+### Units, shafts, and mixed use (Milestone 14)
+
+* **Subdivision** (`split_units`): the placeable region splits by guillotine
+  cuts into ≤ `unit_max` apartment rects (single-loaded band excluded first).
+  Cuts keep ≥3 cells per side and never orphan a unit from every plumbing
+  shaft. Each unit gets its own anchor order, rooms, a forced room if left
+  empty, and a front `Door` onto circulation.
+* **Minimums then fill**: templates with `min_count` place first across
+  units (round-robin, best-effort — unplaceable minimums are skipped, never
+  retried forever); weighted rolls fill the rest; every room punches its
+  template's `doors` count.
+* **Wet stacks** (`wet_shaft_columns`, `domain::LAYOUT_WET`): building-wide
+  shaft columns, identical every floor. WET rooms cover a shaft column or —
+  in the fill phase — are skipped, so every placed wet room provably stacks;
+  minimum passes allow off-shaft fallback so required kitchens still land.
+* **Mixed-use ground** (`resolve_ground_override`,
+  `generate_layout_with_ground`): 3+ storey buildings whose blueprint names
+  `ground_zone` draw floor 0 from that zone's table (retail base under
+  housing by default); the stacked shaft still comes from the main
+  blueprint.
+* **Corridor policy**: `corridor == 1` pre-paints a south band and confines
+  rooms north of it (single-loaded); `0` is the classic double-loaded fill.
+
+Covered by `units_partition_the_floor_and_hold_rooms`,
+`minimums_hold_kitchen_and_bath_on_homes`,
+`wet_rooms_stack_on_shaft_columns`, `mixed_use_ground_serves_retail`,
+`multi_door_rooms_open_more_than_once`,
+`single_loaded_policy_confines_rooms_north`,
+`splits_keep_every_unit_on_a_shaft`, and
+`unplaceable_minimums_skip_without_panic`.
 
 ## 8. Hash domains
 

@@ -49,7 +49,7 @@ progress / ⬜ pending). Current version: `0.9.0` (see `CHANGELOG.md`).
 | M11 — Believable city (walkability-first, varied fabric) | ✅ Done (0.11.0, see `docs/believable_city.md`) |
 | M12 — Variation pass (dropout, boulevards, specials) | ✅ Done (0.12.0, see `docs/believable_city.md` §12) |
 | M13 — Interior structure (stacked cores, floor roles) | ✅ Done (0.13.0, see `docs/interiors.md`) |
-| M14 — Interior program (units, wet stacks, rules) | ⬜ Pending (see `docs/interiors.md` Roadmap) |
+| M14 — Interior program (units, wet stacks, rules) | ✅ Done (0.14.0, see `docs/interiors.md`) |
 | M15 — Interior finish (furniture, metadata, cache) | ⬜ Pending (see `docs/interiors.md` Roadmap) |
 
 M9 completes data-driven interior layout generation: each built lot gets an

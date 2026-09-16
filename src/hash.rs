@@ -73,6 +73,8 @@ pub mod domain {
     /// Building-level circulation core position, constant across floors
     /// (see `interior.rs`).
     pub const LAYOUT_CORE: u8 = 46;
+    /// Plumbing shaft columns, constant across floors (see `interior.rs`).
+    pub const LAYOUT_WET: u8 = 47;
 
     /// Lot subdivision slot within a block (see `lot.rs`).
     pub const LOT_SPLIT: u8 = 50;

@@ -65,6 +65,31 @@
 #define DEFAULT_MAX_FLOORS 64
 
 /**
+ * Room adjacency/program tag bits for [`BlueprintRoom::tags`].
+ *
+ * Tags steer placement without the engine knowing room semantics: `WET`
+ * rooms snap to plumbing shafts, `QUIET` rooms avoid street edges and the
+ * core, `PUBLIC` rooms prefer the entrance half, `STREET` rooms prefer the
+ * wall ring facing outside.
+ */
+#define TAG_WET (1 << 0)
+
+/**
+ * Quiet room tag bit (see [`TAG_WET`]).
+ */
+#define TAG_QUIET (1 << 1)
+
+/**
+ * Public room tag bit (see [`TAG_WET`]).
+ */
+#define TAG_PUBLIC (1 << 2)
+
+/**
+ * Street-facing room tag bit (see [`TAG_WET`]).
+ */
+#define TAG_STREET (1 << 3)
+
+/**
  * The number of distinct zone types.
  */
 #define ZONE_COUNT 5
@@ -198,6 +223,20 @@ typedef struct BlueprintRoom {
      * Maximum room grid depth in tiles (inclusive).
      */
     uint8_t max_d;
+    /**
+     * Minimum placements per floor (enforced after fill rolls).
+     * Serde-defaulted so pre-M14 files parse.
+     */
+    uint8_t min_count;
+    /**
+     * Adjacency/program tag bits (`TAG_*`); 0 = no preference.
+     * Serde-defaulted so pre-M14 files parse.
+     */
+    uint8_t tags;
+    /**
+     * Doors punched per room (`0` means 1). Serde-defaulted.
+     */
+    uint8_t doors;
 } BlueprintRoom;
 
 /**
@@ -239,6 +278,30 @@ typedef struct Blueprint {
      * (`0`, the default). Serde-defaulted so pre-M13 files parse.
      */
     uint8_t wandering_core;
+    /**
+     * Max apartment/office units per floor (`0` = open plan, no subdivision).
+     * Serde-defaulted so pre-M14 files parse.
+     */
+    uint8_t unit_max;
+    /**
+     * Plumbing shaft columns per building (`0` = off; capped at 4).
+     * WET-tagged rooms snap to these columns on every floor.
+     * Serde-defaulted so pre-M14 files parse.
+     */
+    uint8_t wet_shafts;
+    /**
+     * Ground-floor blueprint override as a `ZoneType` index
+     * (`255` = none): when set, floor 0 uses that zone's blueprint
+     * (mixed-use base, e.g. retail under housing).
+     * Serde-defaulted so pre-M14 files parse.
+     */
+    uint8_t ground_zone;
+    /**
+     * Corridor policy: `0` = double-loaded fill (rooms both sides),
+     * `1` = single-loaded (rooms north of a south corridor band).
+     * Serde-defaulted so pre-M14 files parse.
+     */
+    uint8_t corridor;
 } Blueprint;
 
 /**

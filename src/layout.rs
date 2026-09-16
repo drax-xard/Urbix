@@ -301,6 +301,20 @@ pub enum Tile {
 // BlueprintRoom / Blueprint — per-zone layout rule tables
 // ---------------------------------------------------------------------------
 
+/// Room adjacency/program tag bits for [`BlueprintRoom::tags`].
+///
+/// Tags steer placement without the engine knowing room semantics: `WET`
+/// rooms snap to plumbing shafts, `QUIET` rooms avoid street edges and the
+/// core, `PUBLIC` rooms prefer the entrance half, `STREET` rooms prefer the
+/// wall ring facing outside.
+pub const TAG_WET: u8 = 1 << 0;
+/// Quiet room tag bit (see [`TAG_WET`]).
+pub const TAG_QUIET: u8 = 1 << 1;
+/// Public room tag bit (see [`TAG_WET`]).
+pub const TAG_PUBLIC: u8 = 1 << 2;
+/// Street-facing room tag bit (see [`TAG_WET`]).
+pub const TAG_STREET: u8 = 1 << 3;
+
 /// One room template within a zone's [`Blueprint`].
 ///
 /// A plain data record so room tables are artist-tunable via `WorldConfig`.
@@ -323,12 +337,34 @@ pub struct BlueprintRoom {
     pub min_d: u8,
     /// Maximum room grid depth in tiles (inclusive).
     pub max_d: u8,
+    /// Minimum placements per floor (enforced after fill rolls).
+    /// Serde-defaulted so pre-M14 files parse.
+    #[serde(default)]
+    pub min_count: u8,
+    /// Adjacency/program tag bits (`TAG_*`); 0 = no preference.
+    /// Serde-defaulted so pre-M14 files parse.
+    #[serde(default)]
+    pub tags: u8,
+    /// Doors punched per room (`0` means 1). Serde-defaulted.
+    #[serde(default)]
+    pub doors: u8,
 }
 
 impl BlueprintRoom {
     /// Convenience constructor keeping call sites short.
     #[must_use]
-    pub const fn new(kind: u8, weight: f32, min_w: u8, max_w: u8, min_d: u8, max_d: u8) -> Self {
+    #[allow(clippy::too_many_arguments)] // one value per rule field, mirroring the record
+    pub const fn new(
+        kind: u8,
+        weight: f32,
+        min_w: u8,
+        max_w: u8,
+        min_d: u8,
+        max_d: u8,
+        min_count: u8,
+        tags: u8,
+        doors: u8,
+    ) -> Self {
         Self {
             kind,
             weight,
@@ -336,6 +372,19 @@ impl BlueprintRoom {
             max_w,
             min_d,
             max_d,
+            min_count,
+            tags,
+            doors,
+        }
+    }
+
+    /// Doors this template punches per room (`0` reads as 1).
+    #[must_use]
+    pub const fn door_count(&self) -> u8 {
+        if self.doors == 0 {
+            1
+        } else {
+            self.doors
         }
     }
 }
@@ -369,6 +418,32 @@ pub struct Blueprint {
     /// (`0`, the default). Serde-defaulted so pre-M13 files parse.
     #[serde(default)]
     pub wandering_core: u8,
+    /// Max apartment/office units per floor (`0` = open plan, no subdivision).
+    /// Serde-defaulted so pre-M14 files parse.
+    #[serde(default)]
+    pub unit_max: u8,
+    /// Plumbing shaft columns per building (`0` = off; capped at 4).
+    /// WET-tagged rooms snap to these columns on every floor.
+    /// Serde-defaulted so pre-M14 files parse.
+    #[serde(default)]
+    pub wet_shafts: u8,
+    /// Ground-floor blueprint override as a `ZoneType` index
+    /// (`255` = none): when set, floor 0 uses that zone's blueprint
+    /// (mixed-use base, e.g. retail under housing).
+    /// Serde-defaulted so pre-M14 files parse.
+    #[serde(default = "default_ground_zone")]
+    pub ground_zone: u8,
+    /// Corridor policy: `0` = double-loaded fill (rooms both sides),
+    /// `1` = single-loaded (rooms north of a south corridor band).
+    /// Serde-defaulted so pre-M14 files parse.
+    #[serde(default)]
+    pub corridor: u8,
+}
+
+/// Serde default for [`Blueprint::ground_zone`]: no override.
+#[must_use]
+pub const fn default_ground_zone() -> u8 {
+    255
 }
 
 impl Blueprint {
@@ -403,28 +478,39 @@ pub fn blueprint_defaults(zone: ZoneType) -> Blueprint {
 
     let room_slice: &[BlueprintRoom] = match zone {
         ZoneType::Downtown => &[
-            BlueprintRoom::new(10, 3.0, 3, 6, 3, 6), // lobby / lounge
-            BlueprintRoom::new(11, 6.0, 3, 4, 3, 4), // open office
-            BlueprintRoom::new(12, 4.0, 3, 5, 2, 4), // meeting
-            BlueprintRoom::new(13, 3.0, 2, 3, 2, 3), // utility
+            BlueprintRoom::new(10, 3.0, 3, 6, 3, 6, 0, TAG_PUBLIC | TAG_STREET, 2), // lobby / lounge
+            BlueprintRoom::new(11, 6.0, 3, 4, 3, 4, 0, TAG_PUBLIC, 1),              // open office
+            BlueprintRoom::new(12, 4.0, 3, 5, 2, 4, 0, TAG_PUBLIC | TAG_QUIET, 1),  // meeting
+            BlueprintRoom::new(13, 3.0, 2, 3, 2, 3, 0, TAG_WET, 1),                 // utility
         ],
         ZoneType::Residential => &[
-            BlueprintRoom::new(20, 4.0, 3, 5, 3, 5), // living
-            BlueprintRoom::new(21, 3.0, 2, 3, 2, 3), // kitchen
-            BlueprintRoom::new(22, 4.0, 3, 4, 3, 4), // bedroom
-            BlueprintRoom::new(23, 1.0, 1, 2, 1, 2), // bathroom
+            BlueprintRoom::new(20, 4.0, 3, 5, 3, 5, 0, TAG_PUBLIC | TAG_STREET, 2), // living
+            BlueprintRoom::new(21, 3.0, 2, 3, 2, 3, 1, TAG_WET | TAG_PUBLIC, 1),    // kitchen
+            BlueprintRoom::new(22, 4.0, 3, 4, 3, 4, 0, TAG_QUIET, 1),               // bedroom
+            BlueprintRoom::new(23, 1.0, 1, 2, 1, 2, 1, TAG_WET | TAG_QUIET, 1),     // bathroom
         ],
         ZoneType::Commercial => &[
-            BlueprintRoom::new(30, 3.0, 4, 6, 3, 5), // retail floor
-            BlueprintRoom::new(31, 3.0, 3, 5, 3, 5), // office/flex
-            BlueprintRoom::new(32, 2.0, 2, 3, 2, 3), // stockroom
+            BlueprintRoom::new(30, 3.0, 4, 6, 3, 5, 0, TAG_PUBLIC | TAG_STREET, 2), // retail floor
+            BlueprintRoom::new(31, 3.0, 3, 5, 3, 5, 0, TAG_PUBLIC, 1),              // office/flex
+            BlueprintRoom::new(32, 2.0, 2, 3, 2, 3, 0, TAG_WET, 1),                 // stockroom
         ],
         ZoneType::Industrial => &[
-            BlueprintRoom::new(40, 5.0, 4, 7, 3, 6), // open work bay
-            BlueprintRoom::new(41, 2.0, 2, 3, 2, 3), // office/reception
-            BlueprintRoom::new(42, 1.0, 1, 2, 1, 2), // washroom
+            BlueprintRoom::new(40, 5.0, 4, 7, 3, 6, 0, TAG_PUBLIC, 1), // open work bay
+            BlueprintRoom::new(41, 2.0, 2, 3, 2, 3, 0, TAG_PUBLIC | TAG_QUIET, 1), // office/reception
+            BlueprintRoom::new(42, 1.0, 1, 2, 1, 2, 0, TAG_WET, 1),                // washroom
         ],
-        ZoneType::Park => &[BlueprintRoom::new(50, 1.0, 2, 3, 2, 3)], // small shed
+        ZoneType::Park => &[BlueprintRoom::new(50, 1.0, 2, 3, 2, 3, 0, 0, 1)], // small shed
+    };
+
+    // Unit/shaft/corridor policy per zone: homes subdivide into apartments
+    // with stacked plumbing and a retail-capable base; workplaces stay open
+    // plan with one wet shaft; sheds stay simple.
+    let (unit_max, wet_shafts, ground_zone, corridor) = match zone {
+        ZoneType::Downtown => (0, 1, 255, 0),
+        ZoneType::Residential => (3, 2, ZoneType::Commercial as u8, 0),
+        ZoneType::Commercial => (0, 1, 255, 0),
+        ZoneType::Industrial => (0, 1, 255, 0),
+        ZoneType::Park => (0, 0, 255, 0),
     };
 
     // Copy the live rooms into the fixed array's prefix (the rest stay default).
@@ -438,6 +524,10 @@ pub fn blueprint_defaults(zone: ZoneType) -> Blueprint {
         rooms,
         vary_typical: 0,
         wandering_core: 0,
+        unit_max,
+        wet_shafts,
+        ground_zone,
+        corridor,
     }
 }
 

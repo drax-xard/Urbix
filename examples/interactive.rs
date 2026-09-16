@@ -17,7 +17,6 @@ use urbix::chunk::interior_context_for;
 use urbix::config::WorldConfig;
 use urbix::data::{Cell, CellFlags, ZONE_COUNT};
 use urbix::engine::WorldEngine;
-use urbix::interior::generate_layout;
 use urbix::layout::{Floor, InteriorLayout, Tile};
 
 /// Fallback hues matching `WorldConfig::default().zone_hues` (promoted to config
@@ -148,7 +147,17 @@ impl App {
                 &cell,
             );
             let bp = self.engine.config().blueprint_for(ctx.zone);
-            Some(generate_layout(cell.interior_id, &ctx, &bp))
+            let ground = urbix::interior::resolve_ground_override(
+                &ctx,
+                &bp,
+                &self.engine.config().interior_blueprints,
+            );
+            Some(urbix::interior::generate_layout_with_ground(
+                cell.interior_id,
+                &ctx,
+                &bp,
+                ground,
+            ))
         } else {
             None
         };

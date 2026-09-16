@@ -263,6 +263,12 @@ impl WorldConfig {
             if usize::from(bp.room_count) > crate::layout::MAX_BLUEPRINT_ROOMS {
                 return false;
             }
+            if bp.wet_shafts > 4 || bp.corridor > 1 {
+                return false;
+            }
+            if bp.ground_zone != 255 && bp.ground_zone >= crate::zones::ZONE_COUNT as u8 {
+                return false;
+            }
             for r in bp.room_slice() {
                 if r.weight < 0.0
                     || r.min_w == 0
@@ -503,6 +509,48 @@ mod tests {
         let json_str = serde_json::to_string(&cfg).unwrap();
         let parsed = WorldConfig::from_json_str(&json_str).unwrap();
         assert_eq!(cfg, parsed);
+    }
+
+    #[test]
+    fn old_blueprint_tables_without_new_fields_still_parse() {
+        // Simulate a pre-M14 file by dropping the M13/M14 keys from a
+        // current default serialization: parsing must succeed, stay valid,
+        // and fall back to pre-M14 behaviour (no overrides, open plans,
+        // stacked cores, repeated typicals).
+        let full = toml::to_string(&WorldConfig::default()).unwrap();
+        let mut stripped = String::new();
+        for line in full.lines() {
+            let t = line.trim_start();
+            if t.starts_with("min_count")
+                || t.starts_with("tags =")
+                || t.starts_with("doors =")
+                || t.starts_with("unit_max")
+                || t.starts_with("wet_shafts")
+                || t.starts_with("ground_zone")
+                || t.starts_with("corridor =")
+                || t.starts_with("vary_typical")
+                || t.starts_with("wandering_core")
+            {
+                continue;
+            }
+            stripped.push_str(line);
+            stripped.push('\n');
+        }
+        assert!(
+            stripped.len() < full.len(),
+            "strip step removed nothing — key names drifted?"
+        );
+        let parsed = WorldConfig::from_toml_str(&stripped).unwrap();
+        assert!(parsed.is_valid());
+        let home = &parsed.interior_blueprints[crate::zones::ZoneType::Residential as usize];
+        assert_eq!(home.ground_zone, 255);
+        assert_eq!(home.unit_max, 0);
+        assert_eq!(home.wet_shafts, 0);
+        assert_eq!(home.corridor, 0);
+        assert!(home
+            .room_slice()
+            .iter()
+            .all(|r| r.min_count == 0 && r.tags == 0));
     }
 
     #[test]

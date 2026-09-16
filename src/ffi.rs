@@ -222,7 +222,10 @@ pub unsafe extern "C" fn urbix_generate_interior(
         &cell,
     );
     let blueprint = config.blueprint_for(ctx.zone);
-    let layout = crate::interior::generate_layout(cell.interior_id, &ctx, &blueprint);
+    let ground =
+        crate::interior::resolve_ground_override(&ctx, &blueprint, &config.interior_blueprints);
+    let layout =
+        crate::interior::generate_layout_with_ground(cell.interior_id, &ctx, &blueprint, ground);
 
     let first = &layout.floors[0];
     let payload = interior_payload(&layout);
