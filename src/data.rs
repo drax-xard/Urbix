@@ -84,6 +84,16 @@ impl CellFlags {
     pub const IS_STREET: CellFlags = CellFlags(1 << 0);
     /// The cell is park/green (foliage or open ground).
     pub const IS_PARK: CellFlags = CellFlags(1 << 1);
+    /// The cell is an arterial avenue: a wide (2-cell) street on the
+    /// per-zone `arterial_every` lattice. Always combined with `IS_STREET`
+    /// so old consumers still render it as a road.
+    pub const IS_ARTERIAL: CellFlags = CellFlags(1 << 2);
+    /// The cell is a pedestrian plaza: no-build, walkable, height 0.
+    /// Combined with `IS_STREET` so old renderers draw it as paved ground.
+    pub const IS_PLAZA: CellFlags = CellFlags(1 << 3);
+    /// The cell is a sidewalk apron: the 1-cell ring inside the street edge.
+    /// No-build, height 0; renderers draw curb/pavement, not asphalt.
+    pub const IS_SIDEWALK: CellFlags = CellFlags(1 << 4);
 
     /// Whether all flags in `rhs` are present.
     ///

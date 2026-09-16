@@ -4,6 +4,9 @@ This document describes how Urbix turns a single `seed: u64` into an infinite,
 deterministic city. It mirrors `Urbix_Project.md §3–§4` but dives into the
 actual generation pipeline as implemented in `src/`.
 
+Scale canon (Milestone 11): **1 cell = 4 m**. Block sizes are in cells;
+multiply by 4 for metres (downtown 11 → 44 m permeable blocks).
+
 ## 1. Overview
 
 ```
@@ -11,12 +14,14 @@ seed
  │
  ▼
 Voronoi sites (immutable, 24–48 points) ──►  continuous zone-affinity field
- │
+ │                                            + per-district frame (angle/warp)
+ │                                            + CBD peak factor
  ▼
 per-cell: world_x = cx*CS + lx , world_z = cy*CS + ly  (i64, §1.1)
  │
  ▼
-Voronoi query → [f32;5] affinity ──► zone_params blend ──► street? ──► building
+Voronoi query → [f32;5] affinity ──► snapped grid + blended heights
+  ──► street? (local/arterial, plaza) ──► sidewalk? ──► lot → building
  │
  ▼
 Cell { height, zone_affinity, palette_id, flags, interior_id }  (40 B)
@@ -51,7 +56,10 @@ Values inside `i32` hash byte-identically to the legacy `i32` formula
    blend that snapped at triple points (`CHANGELOG.md 0.3.0`).
 
 Diagnostics covered in `src/region.rs` tests: determinism, near-1.0 at a site,
-unit-sum, and bisector-sweep continuity.
+unit-sum, and bisector-sweep continuity — plus the Milestone 11 district
+rules: CBD anchor (site nearest the origin is Downtown), adjacency buffer
+(Industrial re-tagged Commercial when its nearest neighbour is Residential),
+quantized district frames, and the `1.0–1.5` CBD peak factor.
 
 ## 3. Chunk Layer (`src/chunk.rs`)
 
@@ -60,20 +68,29 @@ cy, &config, &voronoi) -> ChunkBuffer` walks `local_x/y` in row-major order:
 
 1. `world_x = i64(cx)*CS + local_x`, `world_z = i64(cy)*CS + local_y`.
 2. `affinity = voronoi.query(world_x as f64, world_z as f64)`.
-3. `params = zone_params(&affinity)` (`src/zones.rs:155`) — density,
-   `height_min/max`, `block_size`, `palette_count` blended by affinity.
-4. `flags = street::layout_block(world_x, world_z, &params)` (`src/street.rs`) —
-   per-zone street grid via `rem_euclid` on absolute coords (sign-stable,
-   cross-chunk consistent). Streets have `height = 0`.
-5. If not a street, `building::assign_building(world_x, world_z, &params, seed)`
-   (`src/building.rs:53`) derives height clamped to the zone band and a
-   `palette_id` via `hash_coords(..., domain::HEIGHT/PALETTE)`. A density roll
-   (`domain::DENSITY`) may leave an empty lot (`height = 0`).
-6. If `height > 0`, `interior_id = hash_coords(world_x, world_z, seed,
-   domain::INTERIOR)` (`src/chunk.rs:127`) — stable for M6 interiors.
+3. `params = config.blended_zone_params(&affinity)` (`src/config.rs:337`) —
+   heights/density/palette blended; `block_size`/`arterial_every` snapped from
+   the dominant zone so transition bands never average grid periods.
+4. `frame = voronoi.district_frame_for(...)` — the district's quantized
+   rotation + sine warp (`src/lot.rs`).
+5. `flags = street::layout_block(world_x, world_z, &params, &frame)`
+   (`src/street.rs`) — 1-cell local streets plus 2-cell arterials every
+   `arterial_every` streets (`IS_ARTERIAL`). Intersections in
+   Downtown/Commercial become `IS_PLAZA` on a 2% hash.
+6. Sidewalk ring: a non-street cell abutting any street cell (same framed
+   query on 4-neighbours) becomes `IS_SIDEWALK` — paved, no-build.
+7. Lots: `lot::block_loc` + `lot::lot_slot` split the block interior into
+   1–6 street-facing strips with one stable `lot_id`
+   (`domain::LOT_SPLIT`). `building::assign_building` derives one
+   height/palette per lot (block-noise clumping, CBD boost, corner bonus,
+   landmark 1.5×) with ±10% per-cell jitter (`domain::LOT_HEIGHT`).
+8. If `height > 0`, `interior_id = interior_id_for_lot(block, slot, seed)`
+   (`src/chunk.rs:225`, `domain::INTERIOR`) — one key per lot, shared by
+   every cell in it.
 
-`IS_PARK` is set on non-street cells where `Park` affinity dominates
-(`dominant_zone` argmax, tie → lower index, matching `examples/viz.rs`).
+`IS_PARK` is set on unpaved cells where `Park` affinity dominates, plus a
+hashed 15% of Residential blocks (courtyard gardens). Paved cells
+(street/sidewalk) never carry it.
 
 Cells are packed into `ChunkBuffer` (`src/data.rs:146`): header fields written
 at `offset_of!` offsets into a zeroed `Vec<u8>` so implicit padding stays `0`

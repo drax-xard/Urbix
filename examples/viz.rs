@@ -12,10 +12,13 @@
 //!
 //! - **Hybrid mode (default)**: each cell is tinted by its district's zone
 //!   colour, then brightened toward white by building height (tall = bright,
-//!   so the skyline reads instantly). Street cells (flag `IS_STREET`) are
-//!   painted as roads instead.
+//!   so the skyline reads instantly). Paved cells draw the ground-plane
+//!   hierarchy instead (arterial / street / sidewalk / plaza).
 //! - **Affinity mode** (`--mode affinity`): shows the *dominant* zone per
 //!   cell as a flat district map, ignoring height.
+//! - **Walk mode** (`--mode walk`): the pedestrian's map — paved hierarchy in
+//!   high-contrast tones, parks vivid green, buildings as dark masses so the
+//!   walkable ground reads first.
 //!
 //! Two files are always written:
 //! - `.ppm` — P6 binary PPM, written by hand (zero dependencies).
@@ -37,7 +40,7 @@
 //! - `--center-cy <i32>`     chunk row at the grid centre (default 0)
 //! - `--extent <u32>`        chunks per side (default 16; 16 → 512×512 px)
 //! - `--chunk-size <u16>`    cells per chunk side (default 32)
-//! - `--mode <hybrid|affinity>` colouring (default hybrid)
+//! - `--mode <hybrid|affinity|walk>` colouring (default hybrid)
 //! - `--out <path>`          output base path (default `out`)
 //! - `--inspect <wx,wz>`     print the interior report for the cell at absolute
 //!   world coordinates `(wx,wz)` after rendering (see `examples/cli_demo.rs`)
@@ -66,6 +69,16 @@ const ZONE_HUES: [[u8; 3]; ZONE_COUNT] = [
 
 /// Road colour for `IS_STREET` cells.
 const ROAD_RGB: [u8; 3] = [40, 40, 46];
+/// Arterial avenue colour (`IS_ARTERIAL`): wide roads read brighter.
+const ARTERIAL_RGB: [u8; 3] = [86, 72, 110];
+/// Sidewalk apron colour (`IS_SIDEWALK`): pale pavement, not asphalt.
+const SIDEWALK_RGB: [u8; 3] = [118, 118, 128];
+/// Plaza colour (`IS_PLAZA`): warm paved square.
+const PLAZA_RGB: [u8; 3] = [216, 200, 160];
+/// Walk-mode park green: vivid so green masses pop against pavement.
+const WALK_PARK_RGB: [u8; 3] = [64, 170, 80];
+/// Walk-mode building mass: dark silhouette so the ground plane leads.
+const WALK_BUILDING_RGB: [u8; 3] = [28, 32, 44];
 
 /// Parse a `--key value` argument list into a simple string map.
 fn parse_args() -> Vec<(String, String)> {
@@ -109,11 +122,22 @@ fn dominant_zone(cell: &Cell) -> usize {
 
 /// Map a cell to an RGB pixel.
 ///
-/// In hybrid mode the returned colour is the zone hue brightened by the
-/// building height (relative to the blended zone max); streets draw the road
-/// colour. In affinity mode the flat dominant-zone hue is returned.
+/// Paved cells always draw the ground-plane hierarchy (plaza, arterial,
+/// sidewalk, street) and skip building/grading logic. In affinity mode the
+/// flat dominant-zone hue is returned. Walk mode mutes buildings to dark
+/// masses and pops parks so the pedestrian network reads first; hybrid mode
+/// brightens the zone hue by building height.
 fn colour_cell(cell: &Cell, mode: &str) -> [u8; 3] {
-    // Streets are always drawn as roads and skip building/grading logic.
+    // Paved hierarchy first (plaza keeps IS_STREET, so test it first).
+    if cell.flags.contains(CellFlags::IS_PLAZA) {
+        return PLAZA_RGB;
+    }
+    if cell.flags.contains(CellFlags::IS_ARTERIAL) {
+        return ARTERIAL_RGB;
+    }
+    if cell.flags.contains(CellFlags::IS_SIDEWALK) {
+        return SIDEWALK_RGB;
+    }
     if cell.flags.contains(CellFlags::IS_STREET) {
         return ROAD_RGB;
     }
@@ -123,6 +147,15 @@ fn colour_cell(cell: &Cell, mode: &str) -> [u8; 3] {
 
     if mode == "affinity" {
         return hue;
+    }
+    if mode == "walk" {
+        if cell.flags.contains(CellFlags::IS_PARK) {
+            return WALK_PARK_RGB;
+        }
+        if cell.height <= 0.0 {
+            return hue;
+        }
+        return WALK_BUILDING_RGB;
     }
 
     // Hybrid: brighten the zone hue by height so the skyline reads. Normalize
@@ -237,7 +270,13 @@ fn room_tile_counts(floor: &Floor) -> BTreeMap<u8, usize> {
 pub fn interior_report(config: &WorldConfig, world_x: i64, world_z: i64, cell: &Cell) -> String {
     let mut out = String::new();
 
-    let kind = if cell.flags.contains(CellFlags::IS_STREET) {
+    let kind = if cell.flags.contains(CellFlags::IS_PLAZA) {
+        "plaza"
+    } else if cell.flags.contains(CellFlags::IS_ARTERIAL) {
+        "arterial street"
+    } else if cell.flags.contains(CellFlags::IS_SIDEWALK) {
+        "sidewalk"
+    } else if cell.flags.contains(CellFlags::IS_STREET) {
         "street"
     } else if cell.flags.contains(CellFlags::IS_PARK) {
         "park"
@@ -341,6 +380,7 @@ fn main() -> ExitCode {
         .unwrap_or(32);
     let mode = match get(&args, "mode") {
         Some("affinity") => "affinity",
+        Some("walk") => "walk",
         _ => "hybrid",
     };
     let out_base = get(&args, "out").unwrap_or("out").to_string();

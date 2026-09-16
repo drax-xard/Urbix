@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-09-16
+
+### Added
+
+- **Believable city generation** (Milestone 11, walkability-first, varied
+  fabric — spec in `docs/believable_city.md`, scale canon 1 cell = 4 m):
+  - `src/lot.rs`: `DistrictFrame` (quantized rotation + sine warp),
+    `block_loc` (block lattice in the district frame), `lot_slot`
+    (1–6 street-facing lots per block, stable `lot_id`), `block_noise`
+    (per-block clumping draw). New hash domains `LOT_SPLIT/LOT_HEIGHT/
+    BLOCK_NOISE/ORIENTATION/LANDMARK/PLAZA`.
+  - **Varied-fabric streets** (`src/street.rs`): district-frame grid with
+    1-cell local streets + 2-cell arterial avenues every
+    `ZoneParams.arterial_every` (per-zone K; `< 2` disables).
+  - **New `CellFlags` bits** (`src/data.rs`): `IS_ARTERIAL`, `IS_PLAZA`,
+    `IS_SIDEWALK` (`Cell` stays 40 B; cbindgen exports + `URBIX_FLAG_*`
+    shims in `build.rs`).
+  - **Block anatomy** (`src/chunk.rs`): 1-cell sidewalk ring, hashed plazas
+    (2% of Downtown/Commercial intersections), landmark towers (~1.5×,
+    4%/2%/1% per zone), residential garden blocks (15%), lot-keyed
+    `InteriorId` (one key per lot).
+  - **District v2** (`src/region.rs`): CBD anchor (origin-nearest site forced
+    Downtown), Industrial|Residential adjacency buffer, quantized district
+    frames, `cbd_factor` skyline peak (1.0–1.5).
+  - **Per-lot buildings** (`src/building.rs`): one height/palette per lot
+    (block clumping, CBD boost, corner bonus) with ±10% per-cell jitter.
+  - `examples/walkability.rs`: headless acceptance metrics (paved shares,
+    street-wall runs, junction census, landmark density per km²; exits 1 on
+    degenerate fabric). `viz`/`interactive` gained paved-hierarchy colours
+    plus a `walk` pedestrian mode; `cli_demo` reports the new ground kinds.
+
+### Changed
+
+- **BREAKING (Rust MINOR)**: `street::layout_block` takes a district frame;
+  `building::assign_building` takes lot context; pre-11 seeds regenerate
+  with the new fabric (no legacy fallback).
+- `ZoneParams` gains `arterial_every` (serde-defaulted so old config files
+  parse); `block_size`/`arterial_every` snap from the dominant zone instead
+  of averaging. Defaults re-tuned to the 4 m canon (Downtown 11,
+  Residential 10, Commercial 9, Industrial 14, Park 18).
+  `ZoneParams` stays 16 B (trailing padding absorbs the field); `Cell`
+  layout unchanged.
+- `include/urbix.h` regenerated (new flags, `arterial_every`);
+  `urbix.toml.example` / `urbix.json.example` updated.
+- Docs: `docs/believable_city.md` marked done with as-built notes;
+  `docs/world_generation.md` (§1–§3), `docs/api.md` (flags),
+  `examples/examples.md`, `Urbix_Project.md` (M11 ✅), `README.md` updated.
+
 ### Added
 
 - **Interior layout across the C FFI** (Milestone 10): `src/ffi.rs` now exposes a

@@ -45,6 +45,12 @@ exclude = [
     "INTERIOR_SIZE_H",
     "INTERIOR_FOG",
     "INTERIOR_PALETTE",
+    "LOT_SPLIT",
+    "LOT_HEIGHT",
+    "BLOCK_NOISE",
+    "ORIENTATION",
+    "LANDMARK",
+    "PLAZA",
 ]
 
 # Rename Rust names to the Urbix-prefixed names used in §2.3.

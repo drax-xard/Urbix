@@ -63,6 +63,7 @@ fn main() {
         "  float density;\n",
         "  uint8_t block_size;\n",
         "  uint8_t palette_count;\n",
+        "  uint8_t arterial_every;\n",
         "} ZoneParams;\n",
     );
     if !content.contains("typedef struct ZoneParams")
@@ -80,6 +81,9 @@ fn main() {
         "\n/* ---- Compatibility shims for old manual header ---- */\n",
         "#define URBIX_FLAG_STREET CellFlags_IS_STREET\n",
         "#define URBIX_FLAG_PARK CellFlags_IS_PARK\n",
+        "#define URBIX_FLAG_ARTERIAL CellFlags_IS_ARTERIAL\n",
+        "#define URBIX_FLAG_PLAZA CellFlags_IS_PLAZA\n",
+        "#define URBIX_FLAG_SIDEWALK CellFlags_IS_SIDEWALK\n",
         "\n/* ---- Compile-time layout checks (inside include guard) ---- */\n",
         "_Static_assert(sizeof(UrbixChunkHeader) == 32, \"UrbixChunkHeader must be 32 bytes\");\n",
         "_Static_assert(sizeof(UrbixCell) == 40,      \"UrbixCell must be 40 bytes\");\n",

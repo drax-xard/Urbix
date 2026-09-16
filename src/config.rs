@@ -135,36 +135,41 @@ impl Default for WorldConfig {
                     height_min: 40.0,
                     height_max: 200.0,
                     density: 0.95,
-                    block_size: 4,
+                    block_size: 11,
                     palette_count: 6,
+                    arterial_every: 4,
                 },
                 ZoneParams {
                     height_min: 4.0,
                     height_max: 18.0,
                     density: 0.80,
-                    block_size: 8,
+                    block_size: 10,
                     palette_count: 5,
+                    arterial_every: 5,
                 },
                 ZoneParams {
                     height_min: 12.0,
                     height_max: 60.0,
                     density: 0.90,
-                    block_size: 5,
+                    block_size: 9,
                     palette_count: 7,
+                    arterial_every: 4,
                 },
                 ZoneParams {
                     height_min: 6.0,
                     height_max: 25.0,
                     density: 0.70,
-                    block_size: 12,
+                    block_size: 14,
                     palette_count: 4,
+                    arterial_every: 6,
                 },
                 ZoneParams {
                     height_min: 0.0,
                     height_max: 2.0,
                     density: 0.10,
-                    block_size: 16,
+                    block_size: 18,
                     palette_count: 3,
+                    arterial_every: 0,
                 },
             ],
             zone_hues: DEFAULT_ZONE_HUES,
@@ -229,6 +234,9 @@ impl WorldConfig {
                 return false;
             }
             if z.block_size == 0 || z.palette_count == 0 {
+                return false;
+            }
+            if z.arterial_every > 16 {
                 return false;
             }
         }
@@ -331,35 +339,43 @@ impl WorldConfig {
     /// config's `zones` (modular customization, Milestone 8).
     ///
     /// Mirrors `crate::zones::zone_params` but reads from `self.zones` instead
-    /// of the global `zone_defaults`. The global function remains for backward
-    /// compatibility and returns `WorldConfig::default()` values.
+    /// of the global `zone_defaults`. Heights, density, and palette count are
+    /// affinity-weighted averages; `block_size` and `arterial_every` snap from
+    /// the dominant zone (argmax, ties toward the lower index) so transition
+    /// bands never produce hybrid grid spacings.
     #[must_use]
     pub fn blended_zone_params(&self, affinity: &[f32; crate::zones::ZONE_COUNT]) -> ZoneParams {
         let mut total = 0.0f32;
         let mut min_sum = 0.0f32;
         let mut max_sum = 0.0f32;
         let mut density_sum = 0.0f32;
-        let mut block_sum = 0u32;
         let mut palette_sum = 0.0f32;
+        let mut best_idx = ZoneType::Residential as usize;
+        let mut best_w = f32::NEG_INFINITY;
         for (i, w) in affinity.iter().enumerate() {
             total += *w;
             let d = self.zones[i];
             min_sum += *w * d.height_min;
             max_sum += *w * d.height_max;
             density_sum += *w * d.density;
-            block_sum += (*w * f32::from(d.block_size)) as u32;
             palette_sum += *w * f32::from(d.palette_count);
+            if *w > best_w {
+                best_w = *w;
+                best_idx = i;
+            }
         }
         if total <= f32::EPSILON {
             return self.zones[ZoneType::Residential as usize];
         }
         let inv = 1.0 / total;
+        let grid = self.zones[best_idx];
         ZoneParams {
             height_min: min_sum * inv,
             height_max: max_sum * inv,
             density: density_sum * inv,
-            block_size: (block_sum as f32 * inv).round() as u8,
+            block_size: grid.block_size,
             palette_count: (palette_sum * inv).round() as u8,
+            arterial_every: grid.arterial_every,
         }
     }
 

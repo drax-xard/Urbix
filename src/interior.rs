@@ -2,8 +2,8 @@
 //!
 //! Interior generation surface for the Urbix engine.
 //!
-//! Every built cell is assigned a stable [`crate::data::InteriorId`] during
-//! chunk generation (`chunk.rs:interior_id_for`). This module defines the
+//! Every built lot is assigned a stable [`crate::data::InteriorId`] during
+//! chunk generation (`chunk.rs:interior_id_for_lot`, one key per lot). This module defines the
 //! **generation surface** a renderer and teleport routine will use: the
 //! [`InteriorState`] trait parameterized by the exterior lot's context
 //! ([`crate::layout::InteriorContext`]).

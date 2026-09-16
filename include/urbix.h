@@ -260,6 +260,7 @@ typedef struct ZoneParams {
   float density;
   uint8_t block_size;
   uint8_t palette_count;
+  uint8_t arterial_every;
 } ZoneParams;
 typedef struct WorldConfig {
     /**
@@ -374,6 +375,22 @@ typedef uint8_t CellFlags;
  * The cell is park/green (foliage or open ground).
  */
 #define CellFlags_IS_PARK (1 << 1)
+/**
+ * The cell is an arterial avenue: a wide (2-cell) street on the
+ * per-zone `arterial_every` lattice. Always combined with `IS_STREET`
+ * so old consumers still render it as a road.
+ */
+#define CellFlags_IS_ARTERIAL (1 << 2)
+/**
+ * The cell is a pedestrian plaza: no-build, walkable, height 0.
+ * Combined with `IS_STREET` so old renderers draw it as paved ground.
+ */
+#define CellFlags_IS_PLAZA (1 << 3)
+/**
+ * The cell is a sidewalk apron: the 1-cell ring inside the street edge.
+ * No-build, height 0; renderers draw curb/pavement, not asphalt.
+ */
+#define CellFlags_IS_SIDEWALK (1 << 4)
 
 /**
  * Deterministic id of a built lot's future interior.
@@ -549,6 +566,9 @@ void urbix_set_config(struct UrbixEngine *engine, const struct WorldConfig *conf
 /* ---- Compatibility shims for old manual header ---- */
 #define URBIX_FLAG_STREET CellFlags_IS_STREET
 #define URBIX_FLAG_PARK CellFlags_IS_PARK
+#define URBIX_FLAG_ARTERIAL CellFlags_IS_ARTERIAL
+#define URBIX_FLAG_PLAZA CellFlags_IS_PLAZA
+#define URBIX_FLAG_SIDEWALK CellFlags_IS_SIDEWALK
 
 /* ---- Compile-time layout checks (inside include guard) ---- */
 _Static_assert(sizeof(UrbixChunkHeader) == 32, "UrbixChunkHeader must be 32 bytes");

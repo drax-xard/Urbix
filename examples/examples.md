@@ -39,15 +39,19 @@ Flags (simple `--key value` parser, no `--help`):
 ## `viz` — 2D city visualizer → images
 
 Generates an `extent × extent` grid of chunks and writes `.ppm` + `.png`
-files (one pixel per cell). Two colouring modes:
+files (one pixel per cell). Three colouring modes:
 
 - **hybrid (default)** — zone colour, brightened by building height (tall =
-  bright skyline); streets drawn as roads
+  bright skyline); paved hierarchy drawn as roads (arterials brighter,
+  sidewalks pale, plazas warm)
 - **affinity** — flat per-cell dominant-zone map
+- **walk** — pedestrian map: paved hierarchy in high contrast, parks vivid
+  green, buildings as dark masses so the walkable ground reads first
 
 ```sh
 cargo run --release --example viz                       # default seed 0, extent 16 → out-*.png
 cargo run --release --example viz -- --seed 445566 --extent 32 --mode affinity
+cargo run --release --example viz -- --seed 445566 --extent 16 --mode walk
 cargo run --release --example viz -- --seed 445566 --inspect 120,400   # + interior report for world cell (120,400)
 ```
 
@@ -57,10 +61,24 @@ Flags:
 - `--center-cx <i32>` / `--center-cy <i32>` — chunk at the grid centre (default 0)
 - `--extent <u32>` — chunks per side (default 16; 16 → 512×512 px)
 - `--chunk-size <u16>` — cells per chunk side (default 32)
-- `--mode <hybrid|affinity>` — colouring (default hybrid)
+- `--mode <hybrid|affinity|walk>` — colouring (default hybrid)
 - `--out <path>` — output base path (default `out`)
 - `--inspect <wx,wz>` — print the interior report for the cell at absolute
   world coordinates `(wx,wz)` after rendering (same output as `cli_demo`)
+
+## `walkability` — walkability metrics (headless acceptance)
+
+Drives the public pipeline over an `extent × extent` grid and prints
+ground-plane statistics (scale canon: 1 cell = 4 m): paved shares, plaza
+counts, mean uninterrupted street-wall length, junction census, tall-cell
+density per km². Exits 1 on degenerate fabric, so CI can gate on it.
+
+```sh
+cargo run --release --example walkability -- --seed 445566 --extent 8
+```
+
+Flags: `--seed`, `--center-cx` / `--center-cy`, `--extent` (1..=64),
+`--chunk-size` (same parser as `viz`).
 
 ## `interactive` — streaming explorer (egui window)
 

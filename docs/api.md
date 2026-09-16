@@ -21,9 +21,10 @@ typedef struct {
     float    height;             // 0 = street/open
     float    zone_affinity[5];   // per ZoneType, sum ~1
     uint8_t  palette_id;
-    uint8_t  flags;              // bit 0 = is_street, bit 1 = is_park
+    uint8_t  flags;              // bit 0 = street, 1 = park, 2 = arterial,
+                                 // bit 3 = plaza, 4 = sidewalk (M11)
     uint16_t _pad;
-    uint64_t interior_id;        // 0 = none
+    uint64_t interior_id;        // 0 = none (one key per lot since M11)
 } UrbixCell; // 40 B, 8-byte aligned
 ```
 

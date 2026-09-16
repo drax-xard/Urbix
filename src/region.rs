@@ -24,7 +24,8 @@
 
 use crate::config::WorldConfig;
 use crate::hash::domain;
-use crate::hash::hash_coords;
+use crate::hash::{hash_coords, hash_unit};
+use crate::lot::DistrictFrame;
 use crate::zones::{ZoneType, ZONE_COUNT};
 
 /// Half-extent of the coordinate span sites are spread across. Sites are
@@ -67,11 +68,18 @@ pub struct VoronoiSite {
 /// Construct with [`VoronoiDiagram::generate`] or [`VoronoiDiagram::generate_with_config`];
 /// the map is fully determined by the seed and site configuration and is
 /// intended to live for the whole engine run.
+///
+/// Milestone 11 adds two district-level rules at generation time (zero
+/// per-cell cost): the site nearest the origin is forced to Downtown (a
+/// legible CBD anchor for the skyline peak), and Industrial sites whose
+/// nearest neighbour is Residential are re-tagged Commercial (no grimy
+/// factory abutting quiet homes without a buffer).
 #[derive(Clone, Debug, PartialEq)]
 pub struct VoronoiDiagram {
     sites: Vec<VoronoiSite>,
     shepard_power: f64,
     shepard_epsilon: f64,
+    seed: u64,
 }
 
 impl VoronoiDiagram {
@@ -112,7 +120,7 @@ impl VoronoiDiagram {
         let site_count = config.voronoi_site_count;
         let span = config.voronoi_span;
         let weights = &config.zone_weights;
-        let sites = (0..site_count)
+        let mut sites: Vec<VoronoiSite> = (0..site_count)
             .map(|i| {
                 let idx = i as u64;
                 let xh = hash_coords(idx as i64, 0, seed, domain::SITE_X);
@@ -125,10 +133,52 @@ impl VoronoiDiagram {
                 }
             })
             .collect();
+        // CBD anchor: the site nearest the origin becomes Downtown so the
+        // skyline has one legible peak and `cbd_factor` has a stable centre.
+        if let Some(centre) = sites
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| {
+                (a.x * a.x + a.y * a.y)
+                    .partial_cmp(&(b.x * b.x + b.y * b.y))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(i, _)| i)
+        {
+            sites[centre].zone = ZoneType::Downtown;
+        }
+        // Adjacency buffer: an Industrial site whose nearest neighbour is
+        // Residential becomes Commercial (order-independent via snapshot).
+        if sites.len() > 1 {
+            let snapshot: Vec<ZoneType> = sites.iter().map(|s| s.zone).collect();
+            for i in 0..sites.len() {
+                if snapshot[i] != ZoneType::Industrial {
+                    continue;
+                }
+                let mut best = f64::INFINITY;
+                let mut neighbour = ZoneType::Industrial;
+                for (j, other) in sites.iter().enumerate() {
+                    if i == j {
+                        continue;
+                    }
+                    let dx = other.x - sites[i].x;
+                    let dy = other.y - sites[i].y;
+                    let d2 = dx * dx + dy * dy;
+                    if d2 < best {
+                        best = d2;
+                        neighbour = snapshot[j];
+                    }
+                }
+                if neighbour == ZoneType::Residential {
+                    sites[i].zone = ZoneType::Commercial;
+                }
+            }
+        }
         Self {
             sites,
             shepard_power: config.shepard_power,
             shepard_epsilon: config.shepard_epsilon,
+            seed,
         }
     }
 
@@ -136,6 +186,95 @@ impl VoronoiDiagram {
     #[must_use]
     pub fn sites(&self) -> &[VoronoiSite] {
         &self.sites
+    }
+
+    /// Index of the site nearest `(world_x, world_z)` (linear scan; the map
+    /// holds only 16–64 sites so this stays cheap; chunk loops hoist the
+    /// frame per distinct district in practice via per-cell memo of one id).
+    ///
+    /// Ties resolve toward the lower index. Empty diagrams return 0.
+    #[must_use]
+    pub fn nearest_site_idx(&self, world_x: f64, world_z: f64) -> usize {
+        let mut best_idx = 0usize;
+        let mut best_d2 = f64::INFINITY;
+        for (i, site) in self.sites.iter().enumerate() {
+            let dx = site.x - world_x;
+            let dy = site.y - world_z;
+            let d2 = dx * dx + dy * dy;
+            if d2 < best_d2 {
+                best_d2 = d2;
+                best_idx = i;
+            }
+        }
+        best_idx
+    }
+
+    /// Per-district street orientation frame at a world coordinate.
+    ///
+    /// Piecewise constant per nearest site (not blended): every cell whose
+    /// nearest site is `i` shares site `i`'s frame, so fabrics differ per
+    /// district and meet with intentional jogs at bisectors. The frame
+    /// derives from `(site_idx, seed, domain::ORIENTATION)` hashes —
+    /// quantized to `{0°, ±12°, ±24°}` with warp `0.5–1.5` cells over
+    /// `40–80` cells — so it is stable across chunks and runs.
+    ///
+    /// ## Example
+    ///
+    /// ```
+    /// use urbix::region::VoronoiDiagram;
+    /// let d = VoronoiDiagram::generate(42, 32);
+    /// let a = d.district_frame_for(100.0, 200.0);
+    /// assert_eq!(a, d.district_frame_for(100.0, 200.0));
+    /// ```
+    #[must_use]
+    pub fn district_frame_for(&self, world_x: f64, world_z: f64) -> DistrictFrame {
+        if self.sites.is_empty() {
+            return DistrictFrame::identity();
+        }
+        let idx = self.nearest_site_idx(world_x, world_z) as i64;
+        let angles = [0.0, 12.0, -12.0, 24.0, -24.0];
+        let pick =
+            (hash_coords(idx, 0, self.seed, domain::ORIENTATION) % angles.len() as u64) as usize;
+        let angle_rad = angles[pick] * std::f64::consts::PI / 180.0;
+        let amp = 0.5 + hash_unit(idx, 1, self.seed, domain::ORIENTATION) as f64;
+        let len = 40.0 + hash_unit(idx, 2, self.seed, domain::ORIENTATION) as f64 * 40.0;
+        let phase = hash_unit(idx, 3, self.seed, domain::ORIENTATION) as f64
+            * std::f64::consts::TAU as f32 as f64;
+        DistrictFrame {
+            angle_rad,
+            warp_amp: amp,
+            warp_len: len,
+            warp_phase: phase,
+        }
+    }
+
+    /// Skyline peak factor at a world coordinate: `1.0` far from downtown,
+    /// rising smoothly to `1.5` atop the nearest Downtown site.
+    ///
+    /// Lorentzian falloff with a 1500-unit knee (`cbd_factor = 1 + 0.5 /
+    /// (1 + (d/1500)²)`). Applied to lot heights in `building.rs` via
+    /// `chunk.rs` so downtown cores peak and taper instead of plateauing.
+    /// Returns `1.0` when no Downtown site exists (unreachable after the CBD
+    /// anchor, but safe for hand-built diagrams).
+    #[must_use]
+    pub fn cbd_factor(&self, world_x: f64, world_z: f64) -> f32 {
+        let mut best_d2 = f64::INFINITY;
+        for site in &self.sites {
+            if site.zone != ZoneType::Downtown {
+                continue;
+            }
+            let dx = site.x - world_x;
+            let dy = site.y - world_z;
+            let d2 = dx * dx + dy * dy;
+            if d2 < best_d2 {
+                best_d2 = d2;
+            }
+        }
+        if !best_d2.is_finite() {
+            return 1.0;
+        }
+        let d = best_d2.sqrt();
+        (1.0 + 0.5 / (1.0 + (d / 1500.0) * (d / 1500.0))) as f32
     }
 
     /// Query the fuzzy zone-affinity vector at an arbitrary world coordinate.
@@ -275,6 +414,83 @@ mod tests {
         let a = d.query(123.0, -456.0);
         let b = d.query(123.0, -456.0);
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn cbd_anchor_forces_downtown_near_origin() {
+        // Every seed gets a legible CBD: the site nearest the origin is Downtown.
+        for seed in [1u64, 7, 42, 445566] {
+            let d = VoronoiDiagram::generate(seed, 32);
+            let mut best_idx = 0usize;
+            let mut best_d2 = f64::INFINITY;
+            for (i, s) in d.sites().iter().enumerate() {
+                let d2 = s.x * s.x + s.y * s.y;
+                if d2 < best_d2 {
+                    best_d2 = d2;
+                    best_idx = i;
+                }
+            }
+            assert_eq!(d.sites()[best_idx].zone, ZoneType::Downtown);
+        }
+    }
+
+    #[test]
+    fn industrial_never_abuts_residential() {
+        // Adjacency buffer: no Industrial site's nearest neighbour is Residential.
+        for seed in [1u64, 7, 42, 99] {
+            let d = VoronoiDiagram::generate(seed, 48);
+            let sites = d.sites();
+            for (i, s) in sites.iter().enumerate() {
+                if s.zone != ZoneType::Industrial {
+                    continue;
+                }
+                let mut best = f64::INFINITY;
+                let mut neighbour = ZoneType::Industrial;
+                for (j, o) in sites.iter().enumerate() {
+                    if i == j {
+                        continue;
+                    }
+                    let d2 = (o.x - s.x).powi(2) + (o.y - s.y).powi(2);
+                    if d2 < best {
+                        best = d2;
+                        neighbour = o.zone;
+                    }
+                }
+                assert_ne!(neighbour, ZoneType::Residential, "seed {seed} site {i}");
+            }
+        }
+    }
+
+    #[test]
+    fn district_frame_is_deterministic_and_quantized() {
+        let d = VoronoiDiagram::generate(42, 32);
+        let a = d.district_frame_for(100.0, 200.0);
+        assert_eq!(a, d.district_frame_for(100.0, 200.0));
+        // Angle is one of the quantized set; warp stays in band.
+        let deg = a.angle_rad * 180.0 / std::f64::consts::PI;
+        assert!(
+            [0.0, 12.0, -12.0, 24.0, -24.0]
+                .iter()
+                .any(|v| (v - deg).abs() < 1e-9),
+            "angle {deg} not quantized"
+        );
+        assert!((0.5..=1.5).contains(&a.warp_amp));
+        assert!((40.0..=80.0).contains(&a.warp_len));
+    }
+
+    #[test]
+    fn cbd_factor_peaks_downtown_and_fades() {
+        let d = VoronoiDiagram::generate(7, 32);
+        let downtown = d
+            .sites()
+            .iter()
+            .find(|s| s.zone == ZoneType::Downtown)
+            .copied()
+            .expect("CBD anchor guarantees a downtown site");
+        let peak = d.cbd_factor(downtown.x, downtown.y);
+        assert!((peak - 1.5).abs() < 1e-6, "peak {peak}");
+        let far = d.cbd_factor(downtown.x + 20_000.0, downtown.y);
+        assert!((1.0..1.05).contains(&far), "far {far}");
     }
 
     #[test]

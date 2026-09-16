@@ -70,6 +70,19 @@ pub mod domain {
     pub const LAYOUT_DOOR: u8 = 44;
     /// Interior furniture slot density (see `layout.rs`).
     pub const LAYOUT_FURNITURE: u8 = 45;
+
+    /// Lot subdivision slot within a block (see `lot.rs`).
+    pub const LOT_SPLIT: u8 = 50;
+    /// Per-lot building height draw (see `building.rs`).
+    pub const LOT_HEIGHT: u8 = 51;
+    /// Per-block correlated noise: density clumping, skyline variation (see `lot.rs`).
+    pub const BLOCK_NOISE: u8 = 52;
+    /// Per-district street orientation frame (see `region.rs`).
+    pub const ORIENTATION: u8 = 53;
+    /// Landmark outlier lots (see `chunk.rs`).
+    pub const LANDMARK: u8 = 54;
+    /// Plaza intersections (see `chunk.rs`).
+    pub const PLAZA: u8 = 55;
 }
 
 /// Hash a coordinate pair under a seed and domain into a `u64`.

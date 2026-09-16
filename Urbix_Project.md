@@ -546,7 +546,13 @@ piece of the FFI-first story (exterior in `UrbixChunkBuffer`, interiors in
 
 ---
 
-### Milestone 11 — Believable City (walkability-first, varied fabric) — ⬜ PENDING
+### Milestone 11 — Believable City (walkability-first, varied fabric) — ✅ DONE
+
+**Goal:** move from per-cell white noise to a deterministic
+district → block → lot → cell hierarchy that reads correctly at eye level,
+with per-district orientation/warp and a street hierarchy. Full buildable
+specification lives in `docs/believable_city.md` (locked decisions: 1 cell =
+4 m, `CellFlags` may grow, arterial spacing is per-zone).
 
 **Goal:** move from per-cell white noise to a deterministic
 district → block → lot → cell hierarchy that reads correctly at eye level,

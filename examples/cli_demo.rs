@@ -128,7 +128,13 @@ fn room_tile_counts(floor: &Floor) -> BTreeMap<u8, usize> {
 pub fn interior_report(config: &WorldConfig, world_x: i64, world_z: i64, cell: &Cell) -> String {
     let mut out = String::new();
 
-    let kind = if cell.flags.contains(CellFlags::IS_STREET) {
+    let kind = if cell.flags.contains(CellFlags::IS_PLAZA) {
+        "plaza"
+    } else if cell.flags.contains(CellFlags::IS_ARTERIAL) {
+        "arterial street"
+    } else if cell.flags.contains(CellFlags::IS_SIDEWALK) {
+        "sidewalk"
+    } else if cell.flags.contains(CellFlags::IS_STREET) {
         "street"
     } else if cell.flags.contains(CellFlags::IS_PARK) {
         "park"

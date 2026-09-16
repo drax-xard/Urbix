@@ -7,16 +7,20 @@
 //! one chunk deterministically, taking a coordinate and the world state and
 //! returning a flat array of cells.
 //!
-//! ## Pipeline (per cell)
+//! ## Pipeline (per cell, Milestone 11)
 //!
 //! 1. Query the continuous Voronoi zone field (`region.rs`) at the cell's
 //!    world position to obtain a blended zone-affinity vector.
-//! 2. Resolve that into concrete per-zone parameters (`zones.rs`).
-//! 3. Ask `street.rs` whether this cell is part of the street grid; streets
-//!    carry `height = 0`.
-//! 4. For non-street cells, ask `building.rs` for height, palette id, and
-//!    compute the cell's `InteriorId`.
-//! 5. Package the result into the `repr(C)` cell record (`data.rs`).
+//! 2. Resolve that into concrete parameters: heights/density blended,
+//!    `block_size`/`arterial_every` snapped from the dominant zone.
+//! 3. Look up the district frame (`region.rs`) and ask `street.rs` whether
+//!    this cell is a street (local or 2-cell arterial); intersections may
+//!    become plazas.
+//! 4. Non-street cells abutting a street become the 1-cell sidewalk ring.
+//! 5. Remaining cells resolve to a lot (`lot.rs`); `building.rs` assigns one
+//!    height/palette per lot with CBD, corner, and landmark shaping.
+//! 6. Package the result into the `repr(C)` cell record (`data.rs`) with a
+//!    lot-keyed `InteriorId`.
 //!
 //! ## Determinism & edge consistency
 //!
@@ -28,8 +32,9 @@
 use crate::building;
 use crate::config::WorldConfig;
 use crate::data::{Cell, CellFlags, ChunkBuffer, ChunkId, InteriorId};
-use crate::hash::{domain, hash_coords};
+use crate::hash::{domain, hash_coords, hash_unit};
 use crate::layout::DoorSide;
+use crate::lot::{block_loc, block_noise, lot_slot};
 use crate::region::VoronoiDiagram;
 use crate::street;
 use crate::zones::ZoneType;
@@ -77,16 +82,47 @@ pub fn generate_chunk(
             let world_z = i64::from(cy) * chunk_size + local_y;
 
             let affinity = voronoi.query(world_x as f64, world_z as f64);
+            // Heights/density blend across the fuzzy border; the grid period
+            // (block_size/arterial_every) snaps from the dominant zone so
+            // transition bands never produce hybrid spacings.
             let params = config.blended_zone_params(&affinity);
+            let zone = dominant_zone(&affinity);
+            // District fabric: one orientation frame per nearest site.
+            let frame = voronoi.district_frame_for(world_x as f64, world_z as f64);
 
-            // Streets first; a street cell never becomes a building.
-            let mut flags = street::layout_block(world_x, world_z, &params);
+            // Streets first; a street cell never becomes a building. The
+            // frame is shared so neighbour checks below stay consistent.
+            let mut flags = street::layout_block(world_x, world_z, &params, &frame);
 
-            // A cell dominated by the Park district (and not a street) is
-            // flagged as greenery, giving the public `IS_PARK` wire flag real
-            // meaning instead of remaining a never-set constant.
+            // Plazas: a small hashed share of downtown/commercial
+            // intersections widens into pedestrian ground (keeps IS_STREET
+            // so old renderers still draw pavement).
+            if flags.contains(CellFlags::IS_STREET)
+                && is_intersection(world_x, world_z, &params, &frame)
+                && (zone == ZoneType::Downtown || zone == ZoneType::Commercial)
+                && hash_unit(world_x, world_z, seed, domain::PLAZA) < 0.02
+            {
+                flags = flags.insert(CellFlags::IS_PLAZA);
+            }
+
+            // Sidewalk ring: non-street cells abutting any street cell become
+            // paved apron (no-build, height 0). Checked with the same framed
+            // query so chunk edges agree.
             if !flags.contains(CellFlags::IS_STREET)
-                && dominant_zone(&affinity) == crate::zones::ZoneType::Park
+                && abuts_street(world_x, world_z, &params, &frame)
+            {
+                flags = flags.insert(CellFlags::IS_SIDEWALK);
+            }
+
+            // A cell dominated by the Park district (and not paved) is
+            // flagged as greenery. Residential garden blocks (a hashed 15%
+            // of residential blocks) read as courtyard green the same way.
+            let block = block_loc(world_x, world_z, params.block_size, &frame);
+            let garden_block = zone == ZoneType::Residential
+                && hash_unit(block.bx, block.bz, seed, domain::BLOCK_NOISE) < 0.15;
+            if !flags.contains(CellFlags::IS_STREET)
+                && !flags.contains(CellFlags::IS_SIDEWALK)
+                && (zone == ZoneType::Park || garden_block)
             {
                 flags = flags.insert(CellFlags::IS_PARK);
             }
@@ -100,15 +136,32 @@ pub fn generate_chunk(
                 interior_id: 0,
             };
 
-            if !flags.contains(CellFlags::IS_STREET) {
-                let (height, palette) = building::assign_building(world_x, world_z, &params, seed);
+            let paved =
+                flags.contains(CellFlags::IS_STREET) || flags.contains(CellFlags::IS_SIDEWALK);
+            if !paved && !flags.contains(CellFlags::IS_PARK) {
+                let slot = lot_slot(&block, params.block_size, seed);
+                let clump = block_noise(block.bx, block.bz, seed);
+                let boost = voronoi.cbd_factor(world_x as f64, world_z as f64);
+                let (mut height, palette) = building::assign_building(
+                    slot.lot_id,
+                    slot.corner,
+                    clump,
+                    boost,
+                    Some((world_x, world_z)),
+                    &params,
+                    seed,
+                );
+                // Landmarks: a hashed share of lots per zone rises ~1.5× —
+                // the wayfinding towers above the street wall.
+                if height > 0.0 && is_landmark(slot.lot_id, zone, seed) {
+                    height = (height * 1.5).min(params.height_max * 1.6 + 1.0);
+                }
                 cell.height = height;
                 cell.palette_id = palette;
                 if height > 0.0 {
-                    // Interior generation is a later milestone; for now the
-                    // interior key is derived deterministically here and the
-                    // interior module (Milestone 6) will flesh out contents.
-                    cell.interior_id = interior_id_for(world_x, world_z, seed);
+                    // Lot-keyed interior: every cell of a lot shares one key
+                    // so a building has one interior, not one per cell.
+                    cell.interior_id = interior_id_for_lot(block.bx, block.bz, slot.slot, seed);
                 }
             }
 
@@ -120,13 +173,62 @@ pub fn generate_chunk(
     buf
 }
 
-/// Derive a deterministic interior key for a built cell.
+/// Whether a world cell sits on a street intersection (both axes on the
+/// block boundary in the district frame). Plaza candidates only.
+fn is_intersection(
+    world_x: i64,
+    world_z: i64,
+    params: &crate::zones::ZoneParams,
+    frame: &crate::lot::DistrictFrame,
+) -> bool {
+    let loc = block_loc(world_x, world_z, params.block_size, frame);
+    loc.rx == 0 && loc.rz == 0
+}
+
+/// Whether any 4-neighbour of a world cell is a street (same framed query).
+/// Used for the sidewalk ring; pure over absolute coords, hence
+/// cross-chunk consistent.
+fn abuts_street(
+    world_x: i64,
+    world_z: i64,
+    params: &crate::zones::ZoneParams,
+    frame: &crate::lot::DistrictFrame,
+) -> bool {
+    const DIRS: [(i64, i64); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+    DIRS.iter().any(|(dx, dz)| {
+        street::layout_block(world_x + dx, world_z + dz, params, frame)
+            .contains(CellFlags::IS_STREET)
+    })
+}
+
+/// Whether a lot is a landmark tower for its zone.
 ///
-/// `0` means "no interior", so built cells (height > 0) always take a nonzero
-/// key. Uses a distinct hash domain so the id does not correlate with height
-/// or palette draws.
-fn interior_id_for(world_x: i64, world_z: i64, seed: u64) -> InteriorId {
-    hash_coords(world_x, world_z, seed, domain::INTERIOR)
+/// Hashed shares: downtown 4%, commercial 2%, residential/industrial 1%,
+/// park never. Deterministic per `(lot_id, seed)`.
+fn is_landmark(lot_id: u64, zone: ZoneType, seed: u64) -> bool {
+    let p = match zone {
+        ZoneType::Downtown => 0.04,
+        ZoneType::Commercial => 0.02,
+        ZoneType::Residential | ZoneType::Industrial => 0.01,
+        ZoneType::Park => return false,
+    };
+    hash_unit(lot_id as i64, (lot_id >> 32) as i64, seed, domain::LANDMARK) < p
+}
+
+/// Derive a deterministic interior key for a lot.
+///
+/// `0` means "no interior", so built lots always take a nonzero key in
+/// practice (the hash is uniform over `u64`; callers treat 0 as none just
+/// like the old per-cell key). Keyed on `(block, slot)` — not on the cell —
+/// so every cell of one lot shares one interior. Uses a distinct hash domain
+/// so the id does not correlate with height or palette draws.
+fn interior_id_for_lot(block_bx: i64, block_bz: i64, slot: u8, seed: u64) -> InteriorId {
+    hash_coords(
+        block_bx.wrapping_mul(8).wrapping_add(i64::from(slot)),
+        block_bz,
+        seed,
+        domain::INTERIOR,
+    )
 }
 
 /// Reconstruct the [`InteriorContext`] for a built `Cell` from config.
@@ -256,7 +358,10 @@ mod tests {
         let (cfg, voronoi) = fixture();
         let buf = generate_chunk(0, 0, &cfg, &voronoi);
         for cell in buf.cells() {
-            if cell.flags.contains(CellFlags::IS_STREET) {
+            // Paved ground — streets, sidewalks, plazas — never builds.
+            if cell.flags.contains(CellFlags::IS_STREET)
+                || cell.flags.contains(CellFlags::IS_SIDEWALK)
+            {
                 assert_eq!(cell.height, 0.0);
             }
         }
@@ -281,12 +386,10 @@ mod tests {
 
     #[test]
     fn downtown_cells_never_render_zero_room_interiors() {
-        // Downtown's raw street block is 4 cells wide, which alone would give
-        // interiors too small for a single room. `interior_context_for` floors
-        // the footprint at 7x7 and the generator caps the core, so a built
-        // downtown lot keeps at least one room per storey. The bridge is tested
-        // on a synthetic pure-Downtown cell so the assertion never depends on
-        // a seed's street geometry.
+        // `interior_context_for` floors the footprint at 7x7 and the generator
+        // caps the core, so a built lot keeps at least one room per storey.
+        // The bridge is tested on a synthetic pure-Downtown cell so the
+        // assertion never depends on a seed's street geometry.
         let cfg = WorldConfig {
             seed: 1234,
             ..Default::default()
@@ -322,9 +425,11 @@ mod tests {
     #[test]
     fn street_flags_match_independent_recomputation() {
         // Cross-chunk edges stay consistent because a cell's street flag is a
-        // pure function of its *absolute* world coordinates (via layout_block),
-        // never of which chunk generated it. Recompute each cell's street
-        // status from the same continuous zone params and require a match.
+        // pure function of its *absolute* world coordinates in the district
+        // frame (via layout_block), never of which chunk generated it.
+        // Recompute each cell's street status from the same continuous zone
+        // params + frame and require a match. (Plazas keep IS_STREET, so the
+        // street bit still matches the base query.)
         let (cfg, voronoi) = fixture();
         let n = i64::from(cfg.chunk_size);
         for (cx, cy) in [(0, 0), (1, 0), (0, 1), (-1, -1)] {
@@ -335,18 +440,77 @@ mod tests {
                     let wx = i64::from(cx) * n + local_x;
                     let wz = i64::from(cy) * n + local_y;
                     let cell = buf.get_cell(index);
+                    let frame = voronoi.district_frame_for(wx as f64, wz as f64);
                     let expected = crate::street::layout_block(
                         wx,
                         wz,
                         &cfg.blended_zone_params(&cell.zone_affinity),
+                        &frame,
                     );
-                    let street_match = CellFlags::IS_STREET.contains(cell.flags)
-                        == CellFlags::IS_STREET.contains(expected);
+                    let street_match = cell.flags.contains(CellFlags::IS_STREET)
+                        == expected.contains(CellFlags::IS_STREET);
                     assert!(street_match, "street mismatch at world ({wx},{wz})");
                     index += 1;
                 }
             }
         }
+    }
+
+    #[test]
+    fn lot_mates_share_interior_and_palette() {
+        // Every cell of one lot carries one interior key and one palette:
+        // group a chunk's built cells by interior_id and require uniformity.
+        use std::collections::HashMap;
+        let (cfg, voronoi) = fixture();
+        let buf = generate_chunk(3, -2, &cfg, &voronoi);
+        let mut groups: HashMap<u64, (u8, usize)> = HashMap::new();
+        for cell in buf.cells() {
+            if cell.height <= 0.0 {
+                continue;
+            }
+            let e = groups
+                .entry(cell.interior_id)
+                .or_insert((cell.palette_id, 0));
+            assert_eq!(e.0, cell.palette_id, "lot splits palette");
+            e.1 += 1;
+        }
+        assert!(!groups.is_empty(), "no built lots sampled");
+        // Lots span multiple cells: at least one lot has mates.
+        assert!(
+            groups.values().any(|(_, n)| *n > 1),
+            "no multi-cell lot found"
+        );
+    }
+
+    #[test]
+    fn sidewalks_ring_the_streets_and_arterials_exist() {
+        // The sidewalk apron must exist wherever streets run, and the
+        // per-zone arterial lattice must produce flagged avenues.
+        let (cfg, voronoi) = fixture();
+        let mut sidewalk = 0usize;
+        let mut arterial = 0usize;
+        let mut street = 0usize;
+        for (cx, cy) in [(0, 0), (5, -3), (-4, 7)] {
+            let buf = generate_chunk(cx, cy, &cfg, &voronoi);
+            for cell in buf.cells() {
+                if cell.flags.contains(CellFlags::IS_STREET) {
+                    street += 1;
+                }
+                if cell.flags.contains(CellFlags::IS_SIDEWALK) {
+                    sidewalk += 1;
+                    assert_eq!(cell.height, 0.0);
+                }
+                if cell.flags.contains(CellFlags::IS_ARTERIAL) {
+                    arterial += 1;
+                    assert!(cell.flags.contains(CellFlags::IS_STREET));
+                }
+            }
+        }
+        assert!(
+            street > 0 && sidewalk > 0,
+            "street={street} sidewalk={sidewalk}"
+        );
+        assert!(arterial > 0, "no arterial avenues generated");
     }
 
     #[test]
@@ -403,8 +567,10 @@ mod tests {
 
     #[test]
     fn park_dominated_cells_are_flagged() {
-        // The `IS_PARK` flag must be set exactly on non-street cells whose Park
-        // affinity (index 4) dominates, and must never be set elsewhere.
+        // The `IS_PARK` flag must be set on unpaved cells whose Park affinity
+        // (index 4) dominates. Residential garden blocks may also flag park;
+        // anywhere else the flag must stay off. Paved cells (street/sidewalk)
+        // never carry it.
         let cfg = WorldConfig {
             seed: 445566,
             voronoi_site_count: 24,
@@ -420,20 +586,25 @@ mod tests {
                 let buf = generate_chunk(cx, cy, &cfg, &voronoi);
                 for cell in buf.cells() {
                     // Use the same dominance rule as `generate_chunk`.
-                    let is_park = dominant_zone(&cell.zone_affinity) == ZoneType::Park;
-                    let is_street = cell.flags.contains(CellFlags::IS_STREET);
+                    let zone = dominant_zone(&cell.zone_affinity);
+                    let paved = cell.flags.contains(CellFlags::IS_STREET)
+                        || cell.flags.contains(CellFlags::IS_SIDEWALK);
                     let has_flag = cell.flags.contains(CellFlags::IS_PARK);
-                    if is_park {
+                    assert!(!paved || !has_flag, "paved cell flagged as park");
+                    if zone == ZoneType::Park {
                         park_cells += 1;
-                        assert_eq!(
-                            has_flag, !is_street,
-                            "park flag wrong at street={is_street}"
-                        );
+                        assert_eq!(has_flag, !paved, "park flag wrong at paved={paved}");
                         if has_flag {
                             flagged += 1;
                         }
+                    } else if zone == ZoneType::Residential {
+                        // Garden blocks: flagged only when unpaved.
+                        if has_flag {
+                            assert!(!paved);
+                            flagged += 1;
+                        }
                     } else {
-                        assert!(!has_flag, "IS_PARK set on non-park-dominant cell");
+                        assert!(!has_flag, "IS_PARK set on {zone:?}-dominant cell");
                     }
                 }
             }

@@ -75,6 +75,12 @@ impl ZoneType {
 /// FFI layer and be interpolated across a fuzzy [zone-affinity] vector.
 ///
 /// [zone-affinity]: crate::zones::zone_params
+///
+/// ## Scale canon (Milestone 11)
+///
+/// 1 cell = 4 m. `block_size` is in cells; multiply by 4 for metres.
+/// `arterial_every` counts ordinary streets: every K-th street is a 2-cell
+/// arterial avenue (`K == 0` means no arterials).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[repr(C)]
 pub struct ZoneParams {
@@ -88,6 +94,19 @@ pub struct ZoneParams {
     pub block_size: u8,
     /// Number of distinct facade palettes available to this zone.
     pub palette_count: u8,
+    /// Every K-th street is a 2-cell arterial avenue. `0` disables arterials.
+    /// Snapped (not blended) from the dominant zone; see [`zone_params`].
+    #[serde(default = "default_arterial_every")]
+    pub arterial_every: u8,
+}
+
+/// Serde default for [`ZoneParams::arterial_every`] so pre-M11 config files
+/// without the field keep parsing (old files get per-zone defaults below
+/// only when the whole `zones` array is omitted; files that specify `zones`
+/// explicitly without the field get `4`, the downtown/commercial norm).
+#[must_use]
+pub const fn default_arterial_every() -> u8 {
+    4
 }
 
 /// Default parameters for a single [`ZoneType`].
@@ -95,6 +114,10 @@ pub struct ZoneParams {
 /// These are the canonical per-zone profiles used as the blend end-points in
 /// [`zone_params`]. Heights deliberately overlap between zones so fuzzy
 /// borders produce gradual, plausible transitions.
+///
+/// Block sizes follow the Milestone 11 scale canon (1 cell = 4 m):
+/// downtown 10 (40 m, permeable), residential 10, commercial 9,
+/// industrial 14 (56 m yard edge), park 18 (green mass).
 #[must_use]
 pub fn zone_defaults(zone: ZoneType) -> ZoneParams {
     match zone {
@@ -102,36 +125,41 @@ pub fn zone_defaults(zone: ZoneType) -> ZoneParams {
             height_min: 40.0,
             height_max: 200.0,
             density: 0.95,
-            block_size: 4,
+            block_size: 11,
             palette_count: 6,
+            arterial_every: 4,
         },
         ZoneType::Residential => ZoneParams {
             height_min: 4.0,
             height_max: 18.0,
             density: 0.80,
-            block_size: 8,
+            block_size: 10,
             palette_count: 5,
+            arterial_every: 5,
         },
         ZoneType::Commercial => ZoneParams {
             height_min: 12.0,
             height_max: 60.0,
             density: 0.90,
-            block_size: 5,
+            block_size: 9,
             palette_count: 7,
+            arterial_every: 4,
         },
         ZoneType::Industrial => ZoneParams {
             height_min: 6.0,
             height_max: 25.0,
             density: 0.70,
-            block_size: 12,
+            block_size: 14,
             palette_count: 4,
+            arterial_every: 6,
         },
         ZoneType::Park => ZoneParams {
             height_min: 0.0,
             height_max: 2.0,
             density: 0.10,
-            block_size: 16,
+            block_size: 18,
             palette_count: 3,
+            arterial_every: 0,
         },
     }
 }
@@ -139,9 +167,13 @@ pub fn zone_defaults(zone: ZoneType) -> ZoneParams {
 /// Blend per-zone parameters from a fuzzy zone-affinity vector.
 ///
 /// `affinity` is a length-`ZONE_COUNT` weight vector (produced by the Voronoi
-/// layer, one entry per [`ZoneType`]) expected to be non-negative. Each
-/// field of the result is the affinity-weighted average of that field across
-/// all zones. If the vector is all-in on a single zone the result equals that
+/// layer, one entry per [`ZoneType`]) expected to be non-negative. Heights,
+/// density, and palette count are affinity-weighted averages. `block_size`
+/// and `arterial_every` are **snapped from the dominant zone** (argmax, ties
+/// toward the lower index) instead of averaged: averaging grid periods
+/// produces hybrid spacings (e.g. 7/9/10) that belong to neither district,
+/// while snapping keeps each block buildable and each fabric legible.
+/// If the vector is all-in on a single zone the result equals that
 /// zone's defaults exactly — the boundary case the tests pin down.
 ///
 /// ## Example
@@ -160,8 +192,10 @@ pub fn zone_params(affinity: &[f32; ZONE_COUNT]) -> ZoneParams {
     let mut min_sum = 0.0f32;
     let mut max_sum = 0.0f32;
     let mut density_sum = 0.0f32;
-    let mut block_sum = 0u32;
     let mut palette_sum = 0.0f32;
+    // Dominant zone (argmax, ties toward lower index) owns the grid period.
+    let mut best_idx = 0usize;
+    let mut best_w = f32::NEG_INFINITY;
 
     for (i, zone) in zones.iter().enumerate() {
         let w = affinity[i];
@@ -171,8 +205,11 @@ pub fn zone_params(affinity: &[f32; ZONE_COUNT]) -> ZoneParams {
         max_sum += w * d.height_max;
         // Density is accumulated as a weighted mean over the *same* total.
         density_sum += w * d.density;
-        block_sum += (w * f32::from(d.block_size)) as u32;
         palette_sum += w * f32::from(d.palette_count);
+        if w > best_w {
+            best_w = w;
+            best_idx = i;
+        }
     }
 
     if total <= f32::EPSILON {
@@ -182,12 +219,14 @@ pub fn zone_params(affinity: &[f32; ZONE_COUNT]) -> ZoneParams {
     }
 
     let inv = 1.0 / total;
+    let grid = zone_defaults(zones[best_idx]);
     ZoneParams {
         height_min: min_sum * inv,
         height_max: max_sum * inv,
         density: density_sum * inv,
-        block_size: (block_sum as f32 * inv).round() as u8,
+        block_size: grid.block_size,
         palette_count: (palette_sum * inv).round() as u8,
+        arterial_every: grid.arterial_every,
     }
 }
 
@@ -208,6 +247,10 @@ mod tests {
             assert!((0.0..=1.0).contains(&p.density));
             assert!(p.block_size > 0);
             assert!(p.palette_count > 0);
+            assert!(
+                p.arterial_every <= 16,
+                "arterial_every out of range for {zone:?}"
+            );
         }
     }
 
@@ -237,5 +280,27 @@ mod tests {
         let p = zone_defaults(ZoneType::Park);
         assert!(z.height_min >= p.height_min && z.height_max <= d.height_max);
         assert!(z.density <= d.density && z.density >= p.density);
+    }
+
+    #[test]
+    fn grid_period_snaps_to_dominant_zone() {
+        // Blend must not average grid periods: 60/40 downtown/park keeps the
+        // downtown block, and the mirror keeps the park block.
+        let mut a = [0.0f32; ZONE_COUNT];
+        a[ZoneType::Downtown as usize] = 0.6;
+        a[ZoneType::Park as usize] = 0.4;
+        let z = zone_params(&a);
+        assert_eq!(z.block_size, zone_defaults(ZoneType::Downtown).block_size);
+        assert_eq!(
+            z.arterial_every,
+            zone_defaults(ZoneType::Downtown).arterial_every
+        );
+        let mut b = [0.0f32; ZONE_COUNT];
+        b[ZoneType::Downtown as usize] = 0.4;
+        b[ZoneType::Park as usize] = 0.6;
+        let z = zone_params(&b);
+        assert_eq!(z.block_size, zone_defaults(ZoneType::Park).block_size);
+        // Heights still blend even though the grid snaps.
+        assert!(z.height_min > zone_defaults(ZoneType::Park).height_min);
     }
 }

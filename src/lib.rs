@@ -20,6 +20,7 @@
 //! - `region`  — the Voronoi layout of districts with fuzzy borders.
 //! - `chunk`   — orchestration of per-chunk cell generation.
 //! - `street`  — street grid and block subdivision.
+//! - `lot`     — district frames, block lattice, and lot subdivision (M11).
 //! - `building`— building footprint, height, and palette assignment.
 //! - `interior`— interior id computation and the (stub) interior hook surface.
 //! - `cache`   — the LRU chunk cache with distance-based eviction.
@@ -49,6 +50,7 @@ pub mod ffi;
 pub mod hash;
 pub mod interior;
 pub mod layout;
+pub mod lot;
 pub mod region;
 pub mod street;
 pub mod zones;

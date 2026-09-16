@@ -1,6 +1,8 @@
 # Believable City Plan — Walkability-First, Varied Fabric (Milestone 11)
 
-Status: ⬜ **PENDING**. Design locked. No implementation yet.
+Status: ✅ **DONE** (released in 0.11.0). This document was the build
+specification; the implementation follows it as built. Notes on as-built
+deviations are marked [AS-BUILT] inline.
 
 This document is the buildable specification for Milestone 11. It refines the
 report findings into file-by-file deliverables under the locked decisions:
@@ -196,8 +198,27 @@ Do not start terrain/water (§8.4) until arterials can follow grades.
 
 ## References
 
-* Pipeline: `docs/world_generation.md:1`, `src/chunk.rs:59`, `src/street.rs:51`,
-  `src/building.rs:53`, `src/zones.rs:157`, `src/region.rs:160`.
+* Pipeline: `docs/world_generation.md:1`, `src/chunk.rs:59`, `src/street.rs`,
+  `src/building.rs`, `src/zones.rs:157`, `src/region.rs:160`.
 * Wire/FFI: `docs/api.md:1`, `src/data.rs:116`, `src/ffi.rs`, `include/urbix.h`.
-* Interiors bridge to preserve: `docs/interiors.md:182`, `src/chunk.rs:143`.
-* Status: `Urbix_Project.md` §7 M11 (pending), `README.md` Status.
+* Interiors bridge: `docs/interiors.md:182`, `src/chunk.rs:interior_context_for`.
+* Status: `Urbix_Project.md` §7 M11 (done), `README.md` Status.
+
+## 11. As-built notes (0.11.0)
+
+* [AS-BUILT] `ZoneParams` gained `arterial_every` without growing: 3×`f32` +
+  3×`u8` still pads to 16 B, so the C struct is source-compatible (recompile
+  the header; no layout migration). `WorldConfig` size is likewise unchanged.
+* [AS-BUILT] Block anatomy stays implicit: courtyard gardens appear as hashed
+  garden blocks (15% of Residential) plus clumped vacancy, not carved
+  per-block courtyards/alleys — perimeter lots already face streets, so the
+  walkability read lands without a 2-D lot packer. Explicit courtyard carving
+  is deferred to a follow-up.
+* [AS-BUILT] `viz` gained a `walk` pedestrian mode; per-lot boundary
+  rendering (`lots` mode) was dropped — lots are not on the wire, and
+  recomputing them in the example would duplicate the pipeline. The
+  `walkability` example gates the acceptance metrics instead.
+* [AS-BUILT] `street::layout_block` and `building::assign_building`
+  signatures changed (framed grid; lot context) — a Rust MINOR break covered
+  by the 0.11.0 bump. The old per-cell behaviour has no fallback flag;
+  pre-11 seeds regenerate with the new fabric.

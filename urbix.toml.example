@@ -34,37 +34,46 @@ interior_floor_height = 4.0
 interior_max_floors = 64
 # interior_blueprints omitted → defaults
 
+# Scale canon (Milestone 11): 1 cell = 4 m. Block sizes are in cells;
+# multiply by 4 for metres. `arterial_every` K makes every K-th street a
+# 2-cell arterial avenue (0 disables arterials).
+
 [[zones]]
 height_min = 40.0
 height_max = 200.0
 density = 0.95
-block_size = 4
+block_size = 11
 palette_count = 6
+arterial_every = 4
 
 [[zones]]
 height_min = 4.0
 height_max = 18.0
 density = 0.80
-block_size = 8
+block_size = 10
 palette_count = 5
+arterial_every = 5
 
 [[zones]]
 height_min = 12.0
 height_max = 60.0
 density = 0.90
-block_size = 5
+block_size = 9
 palette_count = 7
+arterial_every = 4
 
 [[zones]]
 height_min = 6.0
 height_max = 25.0
 density = 0.70
-block_size = 12
+block_size = 14
 palette_count = 4
+arterial_every = 6
 
 [[zones]]
 height_min = 0.0
 height_max = 2.0
 density = 0.10
-block_size = 16
+block_size = 18
 palette_count = 3
+arterial_every = 0
