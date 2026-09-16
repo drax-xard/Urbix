@@ -45,6 +45,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (zone, storey stats, and an ASCII map of a chosen storey) beside the grid.
 - **New `examples/examples.md`** documents how to run and flag every example.
 
+### Docs
+
+- **Believable-city plan (Milestone 11, pending)**: new
+  `docs/believable_city.md` locks the walkability-first, varied-fabric design
+  (1 cell = 4 m, district → block → lot → cell hierarchy, per-district
+  rotation/warp, per-zone arterial spacing, `IS_ARTERIAL`/`IS_PLAZA`/
+  `IS_SIDEWALK` flags). `Urbix_Project.md` gains an M11 pending section + §8.3
+  pointer; `README.md` links the plan. No code changes.
+
 ## [0.9.0] — 2026-09-04
 
 ### Added

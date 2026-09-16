@@ -46,6 +46,7 @@ progress / ⬜ pending). Current version: `0.9.0` (see `CHANGELOG.md`).
 | M8 — Modular customization | ✅ Done (0.8.0) |
 | M9 — Interior layout generation | ✅ Done (0.9.0) |
 | M10 — Interior FFI export | ✅ Done (0.10.0) |
+| M11 — Believable city (walkability-first, varied fabric) | ⬜ Pending (see `docs/believable_city.md`) |
 
 M9 completes data-driven interior layout generation: each built lot gets an
 `InteriorContext` (zone, blended affinity, footprint, height→floor derivation,
@@ -194,8 +195,9 @@ read with `ChunkHeader`/`Cell` or via the FFI header. Example files:
 `urbix.toml.example` / `urbix.json.example`.
 
 For deep dives see `docs/world_generation.md` (Voronoi/ chunk pipeline),
-`docs/api.md` (C ABI + memory contract), and `docs/interiors.md` (interior
-generation & blueprint tables).
+`docs/api.md` (C ABI + memory contract), `docs/interiors.md` (interior
+generation & blueprint tables), and `docs/believable_city.md` (M11
+walkability-first, varied-fabric plan: 1 cell = 4 m, lots, street hierarchy).
 
 ## Verification
 

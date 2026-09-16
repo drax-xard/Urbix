@@ -546,6 +546,33 @@ piece of the FFI-first story (exterior in `UrbixChunkBuffer`, interiors in
 
 ---
 
+### Milestone 11 — Believable City (walkability-first, varied fabric) — ⬜ PENDING
+
+**Goal:** move from per-cell white noise to a deterministic
+district → block → lot → cell hierarchy that reads correctly at eye level,
+with per-district orientation/warp and a street hierarchy. Full buildable
+specification lives in `docs/believable_city.md` (locked decisions: 1 cell =
+4 m, `CellFlags` may grow, arterial spacing is per-zone).
+
+| File | Deliverable |
+|---|---|
+| `src/lot.rs` (new) | `DistrictFrame`, `block_origin_for`, `lot_id_for`, `subdivide_block` (2–6 street-facing lots per block). |
+| `src/street.rs` | Rotated/warped grid + 2-cell arterials every `ZoneParams.arterial_every`; seam jogs where fabrics meet. |
+| `src/building.rs` | Per-lot height/palette/density + ±10% cell jitter; corner bonus; lot-keyed `interior_id`. |
+| `src/data.rs` | New `CellFlags` bits `IS_ARTERIAL`/`IS_PLAZA`/`IS_SIDEWALK`; `Cell` stays 40 B. |
+| `src/config.rs` / `src/zones.rs` | 4 m-scale block re-tune + `arterial_every`; dominant-zone block snap; `is_valid` + file round-trip. |
+| `src/region.rs` | `district_frame()` (nearest-site) + CBD/adjacency rules at generation time. |
+
+**Tests:** lot determinism across chunks; arterial spacing; seam
+chunk-consistency; street-wall continuity up vs `main`; `Cell` 40 B asserts;
+config round-trip; `cargo bench --bench chunk_gen` regression < 2×.
+
+**Exit criteria:** `viz --mode walk` + `interactive` click-through show
+continuous street walls, permeable blocks, plazas/landmarks; 1000-step walk
+still bounded. MINOR bump to `0.11.0` (`ZoneParams`/`WorldConfig` grow).
+
+---
+
 ## 8. Future Extensions (explicitly deferred)
 
 These are deliberately out of scope for the initial build but are designed for
@@ -572,6 +599,9 @@ by the current architecture. Each is listed with the hook already in place.
   including intersections, avenue widths, and junctions, enabling navigation,
   traffic, and pathfinding.
 - Would be a new `road_net.rs` module consuming the same Voronoi/cell data.
+- Near-term step (not deferred): Milestone 11 hierarchy — per-district
+  orientation/warp + per-zone arterials + plazas — specified in
+  `docs/believable_city.md` §4 (11.2–11.3). Full graph/pathfinding stays deferred.
 
 ### 8.4 Terrain & elevation
 - The city currently lives on a flat plane.
