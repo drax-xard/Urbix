@@ -70,6 +70,9 @@ pub mod domain {
     pub const LAYOUT_DOOR: u8 = 44;
     /// Interior furniture slot density (see `layout.rs`).
     pub const LAYOUT_FURNITURE: u8 = 45;
+    /// Building-level circulation core position, constant across floors
+    /// (see `interior.rs`).
+    pub const LAYOUT_CORE: u8 = 46;
 
     /// Lot subdivision slot within a block (see `lot.rs`).
     pub const LOT_SPLIT: u8 = 50;

@@ -153,6 +153,10 @@ impl InteriorState for PlaceholderInteriorState {
 ///     palette_id: 1,
 ///     door_side: DoorSide::West,
 ///     seed: 445566,
+///     corner: false,
+///     frontage_depth: 8,
+///     building_role: urbix::layout::BuildingRole::Ordinary,
+///     secondary_zone: ZoneType::Commercial,
 /// };
 /// let state = generate_interior::<PlaceholderInteriorState>(42, &ctx);
 /// assert_eq!(state.id, 42);
@@ -163,17 +167,25 @@ pub fn generate_interior<S: InteriorState>(id: InteriorId, ctx: &InteriorContext
 }
 
 /// Generate a deterministic, walled [`InteriorLayout`] from an exterior context
-/// and a zone blueprint (Milestone 9).
+/// and a zone blueprint (Milestone 9; vertically structured in Milestone 13).
 ///
-/// Turns a lot's context (zone, floors, footprint, entrance side) plus its
-/// blueprint into one [`Floor`] grid per storey. Each floor is carved as:
+/// Turns a lot's context (zone, floors, lot-rect footprint, entrance side,
+/// building role) plus its blueprint into one [`Floor`] grid per storey.
+/// Storeys carry roles ([`FloorRole`]): floor 0 is Ground (street entrance,
+/// lobby halo), the last is Top (expanded mechanical core), and Typical
+/// floors between repeat one layout — generated once and cloned unless the
+/// blueprint sets `vary_typical`. The circulation core stacks vertically at
+/// one hashed position (building-level `domain::LAYOUT_CORE` draw) unless
+/// the blueprint opts into `wandering_core`. Each floor is otherwise carved
+/// as in Milestone 9:
 ///
 /// 1. A sealed ring of exterior `Wall` tiles (nothing leaks out of the
 ///    footprint).
-/// 2. A hashed vertical-circulation `Core` square (stairs/elevator), sized by
-///    `blueprint.core_size`.
-/// 3. A street-facing entrance: a `Door` on the lot edge recorded in
-///    `ctx.door_side`.
+/// 2. The stacked (or wandering) `Core` square, sized by
+///    `blueprint.core_size` (+1 on Top).
+/// 3. Ground: street entrance `Door` on `ctx.door_side` plus a lobby halo of
+///    `Corridor` around the core. Above ground: a lobby `Door` on the core
+///    edge instead of a street door.
 /// 4. Rooms rolled from `blueprint.room_slice()` (weighted by each template's
 ///    `weight`, sized within its `min`/`max` bounds) and placed greedily
 ///    against the free area, each with a one-tile margin so it opens onto a
@@ -183,22 +195,92 @@ pub fn generate_interior<S: InteriorState>(id: InteriorId, ctx: &InteriorContext
 ///    punched on each room's boundary where it meets circulation.
 ///
 /// Everything is a pure function of `hash(id, floor, seed, domain)`, so the
-/// same lot always yields the same interiors and distinct storeys/seeds differ.
+/// same lot always yields the same interiors and distinct buildings differ.
 #[must_use]
 pub fn generate_layout(
     id: InteriorId,
     ctx: &InteriorContext,
     blueprint: &Blueprint,
 ) -> InteriorLayout {
+    use crate::layout::{floor_role, FloorRole};
     let seed = ctx.seed;
     let (x_id, y_id) = split_id(id);
 
     // Number of floors defaults to the context; a degenerate footprint still
     // yields a usable single (sealed) floor so the result is never empty.
     let floor_count = ctx.floor_count.max(1);
-    let floors = (0..floor_count)
-        .map(|f| generate_floor(x_id, y_id, seed, f, ctx, blueprint))
-        .collect::<Vec<_>>();
+    let gw = usize::from(ctx.footprint_w.max(1));
+    let gd = usize::from(ctx.footprint_d.max(1));
+
+    // Stacked shaft: one core position per building (no floor fold), shared
+    // by every storey so stairs/elevators run vertically. Wander opt-in
+    // (`wandering_core`) falls back to per-floor draws in the loop below.
+    let stacked = if blueprint.wandering_core == 0 {
+        Some(stacked_core_rect(
+            x_id,
+            y_id,
+            seed,
+            gw,
+            gd,
+            blueprint.core_size,
+        ))
+    } else {
+        None
+    };
+
+    // Typical program generates once and clones: a tower's middle floors are
+    // one repeated layout, like a real typical plan (and ~N× cheaper).
+    let has_typical = floor_count > 2;
+    let typical = if has_typical && blueprint.vary_typical == 0 {
+        let (csize, cx, cz) = stacked.unwrap_or_else(|| {
+            core_rect_for_floor(x_id, y_id, seed, 1, gw, gd, blueprint.core_size)
+        });
+        Some(generate_floor(
+            x_id,
+            y_id,
+            seed,
+            1,
+            FloorRole::Typical,
+            (csize, cx, cz),
+            ctx,
+            blueprint,
+        ))
+    } else {
+        None
+    };
+
+    let mut floors = Vec::with_capacity(usize::from(floor_count));
+    for f in 0..floor_count {
+        let role = floor_role(f, floor_count);
+        if role == FloorRole::Typical {
+            if let Some(t) = typical.clone() {
+                floors.push(t);
+                continue;
+            }
+        }
+        let (csize, cx, cz) = stacked.unwrap_or_else(|| {
+            core_rect_for_floor(x_id, y_id, seed, f, gw, gd, blueprint.core_size)
+        });
+        // Top floors expand the mechanical core by one tile.
+        let csize = if role == FloorRole::Top {
+            csize
+                .saturating_add(1)
+                .min(ctx.footprint_w.max(1))
+                .min(ctx.footprint_d.max(1))
+        } else {
+            csize
+        };
+        floors.push(generate_floor(
+            x_id,
+            y_id,
+            seed,
+            f,
+            role,
+            (csize, cx, cz),
+            ctx,
+            blueprint,
+        ));
+    }
 
     InteriorLayout {
         id,
@@ -208,20 +290,131 @@ pub fn generate_layout(
     }
 }
 
-/// Generate the `floor`-th storey of an interior.
+/// Cap a core size to the footprint so the shaft never swallows a small
+/// lot's interior: at most about half the inner area, leaving room for at
+/// least one room and circulation.
+fn cap_core_size(requested: u8, gw: usize, gd: usize) -> u8 {
+    requested
+        .max(1)
+        .min(((gw.saturating_sub(2) as u8) / 2).max(1))
+        .min(((gd.saturating_sub(2) as u8) / 2).max(1))
+}
+
+/// Place a `size` shaft on a `gw×gd` grid from a hash `base`: returns the
+/// top-left `(x, z)`, clamped inside the wall ring. Shared by the stacked
+/// and wandering paths so both obey the same geometry.
+fn place_core(gw: usize, gd: usize, size: u8, base: u64) -> (u8, u8) {
+    let inner_w = (gw.saturating_sub(usize::from(size) + 1)).max(1);
+    let inner_d = (gd.saturating_sub(usize::from(size) + 1)).max(1);
+    let cx = 1u8 + (base % inner_w as u64) as u8;
+    let cz = 1u8 + ((base >> 16) % inner_d as u64) as u8;
+    (cx, cz)
+}
+
+/// One shaft rect `(size, x, z)` per building: no floor fold, so every
+/// storey shares the same vertical circulation.
+fn stacked_core_rect(
+    x_id: i64,
+    y_id: i64,
+    seed: u64,
+    gw: usize,
+    gd: usize,
+    requested: u8,
+) -> (u8, u8, u8) {
+    let size = cap_core_size(requested, gw, gd);
+    let base = hash_coords(x_id, y_id, seed, domain::LAYOUT_CORE);
+    let (cx, cz) = place_core(gw, gd, size, base);
+    (size, cx, cz)
+}
+
+/// One shaft rect `(size, x, z)` for a single wandering floor: the legacy
+/// per-floor draw, kept for blueprints that opt into `wandering_core`.
+fn core_rect_for_floor(
+    x_id: i64,
+    y_id: i64,
+    seed: u64,
+    floor: u8,
+    gw: usize,
+    gd: usize,
+    requested: u8,
+) -> (u8, u8, u8) {
+    let size = cap_core_size(requested, gw, gd);
+    let base = floor_hash(x_id, y_id, seed, floor, domain::LAYOUT_FLOOR);
+    let (cx, cz) = place_core(gw, gd, size, base);
+    (size, cx, cz)
+}
+
+/// Paint a one-tile lobby halo of `Corridor` around the shaft rect (ground
+/// floor only, after rooms). Only `Void` cells convert, so walls, doors,
+/// rooms, and the shaft itself are untouched — rooms placed earlier keep
+/// their cells, and the halo just opens whatever space is left.
+fn paint_lobby_halo(g: &mut Floor, cx: u8, cz: u8, size: u8) {
+    let gw = usize::from(g.width);
+    let gd = usize::from(g.depth);
+    let (cx, cz, size) = (i64::from(cx), i64::from(cz), i64::from(size));
+    for z in cz - 1..=cz + size {
+        for x in cx - 1..=cx + size {
+            if x < 1 || z < 1 || x + 1 >= gw as i64 || z + 1 >= gd as i64 {
+                continue;
+            }
+            let idx = z as usize * gw + x as usize;
+            if g.tiles[idx] == Tile::Void {
+                g.tiles[idx] = Tile::Corridor;
+            }
+        }
+    }
+}
+
+/// Punch a lobby `Door` on the shaft edge: the first `Void` cell facing the
+/// shaft (row-major scan) becomes the elevator/stair door, so upper floors
+/// open onto circulation without a street door. If the shaft is fully
+/// enclosed (cramped lots), nothing happens — corridor fill still reaches it.
+fn punch_core_door(g: &mut Floor, cx: u8, cz: u8, size: u8) {
+    let gw = usize::from(g.width);
+    let gd = usize::from(g.depth);
+    let (cx, cz, size) = (usize::from(cx), usize::from(cz), usize::from(size));
+    for z in cz.saturating_sub(1)..=(cz + size).min(gd.saturating_sub(1)) {
+        for x in cx.saturating_sub(1)..=(cx + size).min(gw.saturating_sub(1)) {
+            // Only cells orthogonally facing a shaft tile qualify (no corner
+            // doors to nowhere).
+            let above_below = (z + 1 == cz || z == cz + size) && x >= cx && x < cx + size;
+            let left_right = (x + 1 == cx || x == cx + size) && z >= cz && z < cz + size;
+            if !(above_below || left_right) {
+                continue;
+            }
+            if x == 0 || z == 0 || x + 1 >= gw || z + 1 >= gd {
+                continue;
+            }
+            let idx = z * gw + x;
+            if g.tiles[idx] == Tile::Void {
+                g.tiles[idx] = Tile::Door;
+                g.kinds[idx] = 0;
+                return;
+            }
+        }
+    }
+}
+
+/// Generate the `floor`-th storey of an interior with a `role`.
 ///
 /// See [`generate_layout`] for the full carving pipeline. `x_id`/`y_id` are the
-/// interior id's coordinate halves and `seed` the world seed; every draw mixes
-/// in the floor number so adjacent storeys vary independently.
+/// interior id's coordinate halves and `seed` the world seed; room and door
+/// draws mix in the floor number so storeys vary, while `core` (size,
+/// position) arrives precomputed — stacked once per building, or wandering
+/// per floor when the blueprint opts in.
 #[must_use]
+#[allow(clippy::too_many_arguments)] // one bundle per pipeline stage; splitting hides the flow
 fn generate_floor(
     x_id: i64,
     y_id: i64,
     seed: u64,
     floor: u8,
+    role: crate::layout::FloorRole,
+    core: (u8, u8, u8),
     ctx: &InteriorContext,
     blueprint: &Blueprint,
 ) -> Floor {
+    use crate::layout::FloorRole;
     let mut g = Floor::empty(ctx.footprint_w, ctx.footprint_d);
     let gw = usize::from(g.width);
     let gd = usize::from(g.depth);
@@ -235,27 +428,25 @@ fn generate_floor(
 
     paint_wall_ring(&mut g);
 
-    // Vertical circulation core: a filled square whose placement is hashed per
-    // floor, clamped inside the wall ring and one tile off every wall. The core
-    // is also capped so it never swallows a small lot's interior: at most about
-    // half the inner area, leaving room for at least one room and circulation.
-    let core = blueprint
-        .core_size
-        .max(1)
-        .min(((gw.saturating_sub(2) as u8) / 2).max(1));
-    let inner_w = (gw.saturating_sub(usize::from(core) + 1)).max(1);
-    let inner_d = (gd.saturating_sub(usize::from(core) + 1)).max(1);
-    let core_base = floor_hash(x_id, y_id, seed, floor, domain::LAYOUT_FLOOR);
-    let cx = 1u8 + (core_base % inner_w as u64) as u8;
-    let cz = 1u8 + ((core_base >> 16) % inner_d as u64) as u8;
-    paint_core(&mut g, cx, cz, core);
+    // Vertical circulation shaft at its precomputed rect (stacked across
+    // floors, or wandering when the blueprint opts in).
+    let (core_size, core_x, core_z) = core;
+    paint_core(&mut g, core_x, core_z, core_size);
 
-    // Street-facing entrance on the lot edge recorded in the context. The cell
-    // just inside the door is reserved as corridor (rooms may hug it but never
-    // claim it), so the street access always connects to the interior.
-    let entrance_base = floor_hash(x_id, y_id, seed, floor, domain::LAYOUT_DOOR);
-    punch_entrance_door(&mut g, ctx.door_side, entrance_base);
-    reserve_entrance(&mut g, ctx.door_side, entrance_base);
+    match role {
+        // Street level: entrance door on the lot edge; the reserved cell
+        // inside stays corridor so arrivals connect. The lobby halo paints
+        // after rooms (below) so it can never starve small floors.
+        FloorRole::Ground => {
+            let entrance_base = floor_hash(x_id, y_id, seed, floor, domain::LAYOUT_DOOR);
+            punch_entrance_door(&mut g, ctx.door_side, entrance_base);
+            reserve_entrance(&mut g, ctx.door_side, entrance_base);
+        }
+        // Upper floors open onto the shaft, never onto the street.
+        FloorRole::Typical | FloorRole::Top => {
+            punch_core_door(&mut g, core_x, core_z, core_size);
+        }
+    }
 
     // Weighted room placement against the free area.
     let rooms = blueprint.room_slice();
@@ -316,6 +507,12 @@ fn generate_floor(
         for rect in placed {
             room_door(&mut g, rect, door_base);
         }
+    }
+
+    // Ground-floor lobby halo, painted after rooms so leftover space becomes
+    // open circulation without ever stealing room cells on small floors.
+    if role == FloorRole::Ground {
+        paint_lobby_halo(&mut g, core_x, core_z, core_size);
     }
 
     // Corridor fill: every leftover free cell becomes circulation, so the
@@ -761,6 +958,9 @@ mod tests {
             1,
             DoorSide::West,
             seed,
+            false,
+            crate::layout::BuildingRole::Ordinary,
+            ZoneType::Commercial,
         )
     }
 
@@ -778,6 +978,9 @@ mod tests {
             2,
             DoorSide::East,
             seed,
+            true,
+            crate::layout::BuildingRole::Landmark,
+            ZoneType::Commercial,
         )
     }
 
@@ -841,7 +1044,130 @@ mod tests {
             1,
             side,
             seed,
+            false,
+            crate::layout::BuildingRole::Ordinary,
+            ZoneType::Commercial,
         )
+    }
+
+    /// Core tile coordinates of a floor, sorted, for cross-floor comparison.
+    fn core_coords(f: &crate::layout::Floor) -> Vec<(u8, u8)> {
+        let mut out = Vec::new();
+        for z in 0..f.depth {
+            for x in 0..f.width {
+                if f.tiles[f.index(x, z)] == Tile::Core {
+                    out.push((x, z));
+                }
+            }
+        }
+        out.sort_unstable();
+        out
+    }
+
+    /// Doors on the outer wall ring (street entrances, never room/core doors,
+    /// which live strictly inside the ring).
+    fn ring_doors(f: &crate::layout::Floor) -> usize {
+        let (w, d) = (f.width, f.depth);
+        let mut n = 0;
+        for x in 0..w {
+            if f.tiles[f.index(x, 0)] == Tile::Door {
+                n += 1;
+            }
+            if f.tiles[f.index(x, d - 1)] == Tile::Door {
+                n += 1;
+            }
+        }
+        for z in 1..d.saturating_sub(1) {
+            if f.tiles[f.index(0, z)] == Tile::Door {
+                n += 1;
+            }
+            if f.tiles[f.index(w - 1, z)] == Tile::Door {
+                n += 1;
+            }
+        }
+        n
+    }
+
+    #[test]
+    fn core_stacks_vertically_across_floors() {
+        // One shaft position per building: every storey carries the same core
+        // tiles (default blueprints stack; wandering is opt-in).
+        let ctx = tower_ctx(7, 42);
+        let bp = crate::layout::blueprint_defaults(ctx.zone);
+        let layout = generate_layout(7, &ctx, &bp);
+        assert!(layout.floors.len() > 3);
+        let first = core_coords(&layout.floors[1]);
+        assert!(!first.is_empty());
+        for f in layout.floors.iter().skip(2).take(layout.floors.len() - 3) {
+            assert_eq!(core_coords(f), first, "shaft wanders between storeys");
+        }
+    }
+
+    #[test]
+    fn typical_floors_repeat_one_layout() {
+        // Middle storeys clone a single typical program; ground and top keep
+        // their own roles.
+        let ctx = tower_ctx(7, 42);
+        let bp = crate::layout::blueprint_defaults(ctx.zone);
+        let layout = generate_layout(7, &ctx, &bp);
+        let n = layout.floors.len();
+        assert!(n > 3);
+        for f in &layout.floors[2..n - 1] {
+            assert_eq!(f, &layout.floors[1], "typical floor not repeated");
+        }
+        assert_ne!(
+            layout.floors[0], layout.floors[1],
+            "ground should differ from typical (entrance + lobby)"
+        );
+    }
+
+    #[test]
+    fn entrance_door_lives_on_the_ground_floor_only() {
+        // Exactly one ring door on floor 0; no street doors above (upper
+        // floors open onto the core instead).
+        let ctx = tower_ctx(7, 42);
+        let bp = crate::layout::blueprint_defaults(ctx.zone);
+        let layout = generate_layout(7, &ctx, &bp);
+        assert_eq!(ring_doors(&layout.floors[0]), 1);
+        for (i, f) in layout.floors.iter().enumerate().skip(1) {
+            assert_eq!(ring_doors(f), 0, "street door on floor {i}");
+        }
+    }
+
+    #[test]
+    fn top_floor_expands_the_mechanical_core() {
+        let ctx = tower_ctx(7, 42);
+        let bp = crate::layout::blueprint_defaults(ctx.zone);
+        let layout = generate_layout(7, &ctx, &bp);
+        let n = layout.floors.len();
+        let typical_core = core_coords(&layout.floors[1]).len();
+        let top_core = core_coords(&layout.floors[n - 1]).len();
+        assert!(top_core >= typical_core, "top core did not expand");
+    }
+
+    #[test]
+    fn vary_typical_opt_in_rerolls_storeys() {
+        let ctx = tower_ctx(7, 42);
+        let mut bp = crate::layout::blueprint_defaults(ctx.zone);
+        bp.vary_typical = 1;
+        let layout = generate_layout(7, &ctx, &bp);
+        assert!(layout.floors.len() > 3);
+        assert_ne!(
+            layout.floors[1], layout.floors[2],
+            "vary_typical should re-roll middle storeys"
+        );
+    }
+
+    #[test]
+    fn wandering_core_opt_in_moves_the_shaft() {
+        let ctx = tower_ctx(11, 99);
+        let mut bp = crate::layout::blueprint_defaults(ctx.zone);
+        bp.wandering_core = 1;
+        let layout = generate_layout(11, &ctx, &bp);
+        let a = core_coords(&layout.floors[0]);
+        let b = core_coords(&layout.floors[1]);
+        assert!(!a.is_empty() && !b.is_empty());
+        assert_ne!(a, b, "wandering core should move between storeys");
     }
 
     #[test]
@@ -1036,6 +1362,9 @@ mod tests {
             2,
             DoorSide::West,
             42,
+            true,
+            crate::layout::BuildingRole::Landmark,
+            ZoneType::Commercial,
         );
         let layout = generate_layout(7, &ctx, &blueprint_defaults(ZoneType::Downtown));
         assert!(!layout.floors.is_empty());
@@ -1061,6 +1390,9 @@ mod tests {
             0,
             DoorSide::North,
             7,
+            false,
+            crate::layout::BuildingRole::Ordinary,
+            ZoneType::Residential,
         );
         let layout = generate_layout(1, &ctx, &crate::layout::blueprint_defaults(ZoneType::Park));
         for floor in &layout.floors {

@@ -125,7 +125,13 @@ fn room_tile_counts(floor: &Floor) -> BTreeMap<u8, usize> {
 /// and an ASCII grid. Cells that cannot have an interior (streets, bare lots)
 /// are reported as such.
 #[must_use]
-pub fn interior_report(config: &WorldConfig, world_x: i64, world_z: i64, cell: &Cell) -> String {
+pub fn interior_report(
+    config: &WorldConfig,
+    voronoi: &urbix::region::VoronoiDiagram,
+    world_x: i64,
+    world_z: i64,
+    cell: &Cell,
+) -> String {
     let mut out = String::new();
 
     let kind = if cell.flags.contains(CellFlags::IS_PLAZA) {
@@ -153,10 +159,18 @@ pub fn interior_report(config: &WorldConfig, world_x: i64, world_z: i64, cell: &
         return out;
     }
 
-    let ctx = interior_context_for(config, world_x, world_z, cell);
+    let ctx = interior_context_for(config, voronoi, world_x, world_z, cell);
     out.push_str(&format!(
-        "context: zone {:?}, footprint {}x{} tiles, {} floors, entrance {:?}\n",
-        ctx.zone, ctx.footprint_w, ctx.footprint_d, ctx.floor_count, ctx.door_side
+        "context: zone {:?} (secondary {:?}, role {:?}{}), footprint {}x{} tiles, {} floors, entrance {:?}, frontage depth {}\n",
+        ctx.zone,
+        ctx.secondary_zone,
+        ctx.building_role,
+        if ctx.corner { ", corner" } else { "" },
+        ctx.footprint_w,
+        ctx.footprint_d,
+        ctx.floor_count,
+        ctx.door_side,
+        ctx.frontage_depth
     ));
 
     let bp = config.blueprint_for(ctx.zone);
@@ -263,6 +277,9 @@ fn main() -> ExitCode {
     let world_x = i64::from(cx) * n + lx;
     let world_z = i64::from(cy) * n + ly;
     let cell = chunk.get_cell((ly * n + lx) as usize);
-    print!("{}", interior_report(&cfg, world_x, world_z, &cell));
+    print!(
+        "{}",
+        interior_report(&cfg, engine.voronoi(), world_x, world_z, &cell)
+    );
     ExitCode::SUCCESS
 }

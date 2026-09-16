@@ -214,6 +214,16 @@ impl WorldEngine {
         &self.config
     }
 
+    /// Read-only reference to the Voronoi district map.
+    ///
+    /// Consumers rebuilding per-cell derivations that need the district
+    /// frame (e.g. `chunk::interior_context_for`) must use the engine's
+    /// map so lot geometry matches generation exactly.
+    #[must_use]
+    pub fn voronoi(&self) -> &VoronoiDiagram {
+        &self.voronoi
+    }
+
     /// Number of chunks that were actually generated (cache misses).
     #[must_use]
     pub fn generated_count(&self) -> u64 {

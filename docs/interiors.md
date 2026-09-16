@@ -16,6 +16,12 @@ Status (Milestone 10): landed. The generated interior crosses the C border via
 `UrbixInterior` / `urbix_generate_interior` / `urbix_interior_free` (see §9),
 so renderers consuming chunks can also render room layouts with no Rust.
 
+Status (Milestone 13): landed. Interiors are vertically structured: lot-true
+contexts (pack-rect footprints, corner/role/secondary-zone), floor roles
+(Ground/Typical×N/Top with typical repetition), one stacked circulation
+shaft per building, and a ground-only street entrance with lobby halo and
+core lobby doors above. See the Roadmap below for M14–M15.
+
 ## 1. Overview
 
 A generated interior is a **separate mini-world**, not part of the outdoor chunk
@@ -52,12 +58,16 @@ override. It is a snapshot of the exterior lot the interior belongs to:
 | `zone_affinity` | blended `[f32; ZONE_COUNT]` — lets layouts blend near fuzzy borders |
 | `height` | exterior building height (world units); 0 = no building |
 | `floor_count` | floors derived from `height` (≥ 1 for a built lot) |
-| `footprint_w/d` | interior grid width/depth in tiles (block-derived, floored at 7×7) |
+| `footprint_w/d` | lot pack-rect width/depth in tiles (`lot::lot_rect`, clamped 3–64) |
 | `palette_id` | exterior facade palette (rooms tint to match) |
 | `door_side` | `DoorSide` of the street-facing entrance (West/East/North/South) |
 | `seed` | world seed used throughout interior derivation |
+| `corner` | lot touches streets on two axes (corner-tower treatment) |
+| `frontage_depth` | lot depth perpendicular to the entrance edge (derived) |
+| `building_role` | `BuildingRole` (Ordinary/Landmark/Market/TowerPark) |
+| `secondary_zone` | affinity runner-up (mixed-use ground floors) |
 
-The constructor `InteriorContext::new` (`src/layout.rs:121`) is the single
+The constructor `InteriorContext::new` (`src/layout.rs`) is the single
 place the **height → floors** rule lives:
 
 ```
@@ -69,11 +79,12 @@ floor_count = height <= 0 ? 0
 footprint_d > 0`.
 
 Production callers don't build it by hand: `chunk::interior_context_for(config,
-world_x, world_z, cell)` (`src/chunk.rs:143`) reconstructs it from a `Cell`
-(dominant zone, clamped block footprint) via `WorldConfig::interior_context`
-(`src/config.rs:388`), and `chunk::door_side_for(world_x, world_z,
-block_size)` selects the street edge the lot faces (ties toward
-West/East/North/South).
+voronoi, world_x, world_z, cell)` (`src/chunk.rs`) reconstructs it from a
+`Cell` — dominant zone, lot pack rect, corner, building role (block program /
+landmark recomputed pure from world coords), secondary zone — via
+`WorldConfig::interior_context` (`src/config.rs`), and
+`chunk::door_side_for(world_x, world_z, block_size)` selects the street edge
+the lot faces (ties toward West/East/North/South).
 
 ## 3. Tile kinds
 
@@ -118,6 +129,8 @@ Blueprints are the per-zone rule tables. Two plain `#[repr(C)]`,
 | `core_size` | width of the vertical-circulation core in tiles |
 | `room_count` | number of live entries in `rooms` (`0..=MAX_BLUEPRINT_ROOMS`) |
 | `rooms` | `[BlueprintRoom; MAX_BLUEPRINT_ROOMS]` fixed array; only `room_count` are live |
+| `vary_typical` | nonzero re-rolls typical floors per storey (`0` = generate once, clone) |
+| `wandering_core` | nonzero re-hashes the core per floor (`0` = one stacked shaft) |
 
 `rooms` is a **fixed-size** array (`MAX_BLUEPRINT_ROOMS = 8`, `src/layout.rs:55`)
 because a `Blueprint` must live inside the `#[repr(C)]` `WorldConfig` and cross
@@ -181,52 +194,58 @@ are opt-in.
 
 ## 7. How blueprints are consumed
 
-`generate_layout(id, ctx, blueprint)` (`src/interior.rs:187`) is the Milestone-9
-generator: one `Floor` per storey, each carved by `generate_floor`
-(`src/interior.rs:216`) as a pure function of `(id, floor, seed, domain)`.
-Every hash stream is a distinct domain (see §8), so storeys vary independently
-while remaining bit-identical for the same lot.
+`generate_layout(id, ctx, blueprint)` (`src/interior.rs`) is the generator:
+storeys carry roles (`FloorRole`: floor 0 is Ground, the last is Top, the
+middle are Typical), each carved by `generate_floor` as a pure function of
+`(id, floor, seed, domain)`. Typical floors generate once and clone (one
+repeated layout, unless the blueprint sets `vary_typical`); every hash
+stream is a distinct domain (see §8), so buildings stay bit-identical for
+the same lot.
 
 Per floor, in order:
 
-1. **Sealed wall ring** (`src/interior.rs:316`): the footprint edge is exterior
+1. **Sealed wall ring**: the footprint edge is exterior
    `Wall`, so nothing leaks out. A footprint narrower than 3 tiles is sealed
    solid instead (still safe for renderers).
-2. **Circulation core** (`src/interior.rs:568`): a `blueprint.core_size`
-   square of `Core` (stairs/elevator), position derived from
-   `domain::LAYOUT_FLOOR`. All floors of a storey have one; it never touches
-   the wall ring. The core is capped to about half the interior so a small
-   lot keeps room for at least one room plus circulation (small-zone lots
-   spawn as 6×6 grids, never as zero-room stubs).
-3. **Street entrance** (`src/interior.rs:335`): a `Door` on the wall ring
+2. **Stacked circulation core**: one `Core` rect per building
+   (`blueprint.core_size`, `domain::LAYOUT_CORE` draw, capped to about half
+   the interior), shared by every storey so shafts run vertically; Top
+   expands it by one tile (mechanical). Blueprints may opt into the legacy
+   per-floor `LAYOUT_FLOOR` draw via `wandering_core`.
+3. **Entrance (Ground only)**: a `Door` on the wall ring
    facing `ctx.door_side`, at a hashed offset along that edge. The cell just
-   inside it is reserved as `Corridor` (`src/interior.rs:360`) so the entrance
-   always opens into the interior.
-4. **Weighted room placement** (`src/interior.rs:257`): candidate anchors are
+   inside it is reserved as `Corridor` so the entrance
+   always opens into the interior. Upper floors punch a lobby `Door` on the
+   core edge instead — never a street door.
+4. **Weighted room placement**: candidate anchors are
    every free cell, visited in a Fisher–Yates order from the `LAYOUT_ROOM`
    stream. At each anchor a template is rolled against `weight` via
-   `roll_room` (`src/interior.rs:550`) and a size within its `min`/`max`
-   bounds is drawn; `try_place_room` (`src/interior.rs:421`) then walks the
+   `roll_room` and a size within its `min`/`max`
+   bounds is drawn; `try_place_room` then walks the
    size candidates closest to the roll and places the first that fits.
-`room_fits` (`src/interior.rs:391`) requires the rectangle to be free and
-    its one-tile margin to contain no other room — the margin, plus the fact
-    rooms may hug walls and the core, is what keeps every room reachable.
-    Rooms are painted with their opaque `kind` tag (`src/interior.rs:457`).
-    When the rolled template cannot fit the remaining free area (typical on
-    small lots), placement retries once with the blueprint's smallest template,
-    so no lot degrades to a corridor-only shell.
-5. **Doors** (`src/interior.rs:474`): the `LAYOUT_DOOR` stream rotates each
+   `room_fits` requires the rectangle to be free and
+   its one-tile margin to contain no other room — the margin, plus the fact
+   rooms may hug walls and the core, is what keeps every room reachable.
+   Rooms are painted with their opaque `kind` tag.
+   When the rolled template cannot fit the remaining free area (typical on
+   small lots), placement retries once with the blueprint's smallest template,
+   so no lot degrades to a corridor-only shell.
+5. **Lobby halo (Ground, after rooms)**: leftover `Void` around the shaft
+   becomes `Corridor`, opening arrivals without ever stealing room cells.
+6. **Doors**: the `LAYOUT_DOOR` stream rotates each
    room's perimeter (k=1 onward, after the entrance at k=0) and turns the
    first facing margin cell into a `Door`, so every room has exactly one
    opening into circulation.
-6. **Corridor fill**: every leftover free cell becomes `Corridor`, so the
+7. **Corridor fill**: every leftover free cell becomes `Corridor`, so the
    margin channels connect all rooms, the core, and the street entrance into
    one navigable interior.
 
 The result is deterministic, sealed (only entrance/room `Door`s break the
-ring), and every room opens onto circulation — covered by the unit tests in
+ring), vertically coherent (one shaft, one entrance, repeated typicals), and
+every room opens onto circulation — covered by the unit tests in
 `src/interior.rs` (`rooms_are_placed_walled_sealed_and_reachable`,
-`interiors_vary_across_floors_and_seeds`, `entrance_door_faces_the_context_side`,
+`core_stacks_vertically_across_floors`, `typical_floors_repeat_one_layout`,
+`entrance_door_lives_on_the_ground_floor_only`,
 `degenerate_footprint_is_sealed`).
 
 ## 8. Hash domains
@@ -239,8 +258,9 @@ Reserved for interior work (see `src/hash.rs:62` and `include/urbix.h`):
 | 41 | `LAYOUT_FLOOR` | core placement; per-floor variation |
 | 42 | `LAYOUT_ROOM` | room-kind rolls, anchor shuffle, size draws |
 | 43 | `LAYOUT_ROOM_SIZE` | size draws (reserved; sizes draw on the room stream) |
-| 44 | `LAYOUT_DOOR` | entrance pick (k=0) + room doors (k≥1) |
-| 45 | `LAYOUT_FURNITURE` | slot density (reserved for a later milestone) |
+| 44 | `LAYOUT_DOOR` | entrance pick (k=0) + room/core doors (k≥1) |
+| 45 | `LAYOUT_FURNITURE` | slot density (reserved for M15) |
+| 46 | `LAYOUT_CORE` | building-level shaft position (stacked cores) |
 
 ## 9. Interior FFI export (Milestone 10)
 

@@ -229,6 +229,16 @@ typedef struct Blueprint {
      * Room templates weighted for this zone; only `room_count` are live.
      */
     struct BlueprintRoom rooms[MAX_BLUEPRINT_ROOMS];
+    /**
+     * Typical floors generate once and clone (`0`) vs re-roll per storey
+     * (nonzero). Serde-defaulted so pre-M13 files parse.
+     */
+    uint8_t vary_typical;
+    /**
+     * Circulation core wanders per floor (nonzero) vs stacks vertically
+     * (`0`, the default). Serde-defaulted so pre-M13 files parse.
+     */
+    uint8_t wandering_core;
 } Blueprint;
 
 /**

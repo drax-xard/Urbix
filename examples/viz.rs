@@ -275,7 +275,13 @@ fn room_tile_counts(floor: &Floor) -> BTreeMap<u8, usize> {
 /// Full textual report on the interior of the cell at absolute world
 /// coordinates `(world_x, world_z)` — same output as `examples/cli_demo.rs`.
 #[must_use]
-pub fn interior_report(config: &WorldConfig, world_x: i64, world_z: i64, cell: &Cell) -> String {
+pub fn interior_report(
+    config: &WorldConfig,
+    voronoi: &urbix::region::VoronoiDiagram,
+    world_x: i64,
+    world_z: i64,
+    cell: &Cell,
+) -> String {
     let mut out = String::new();
 
     let kind = if cell.flags.contains(CellFlags::IS_PLAZA) {
@@ -303,10 +309,18 @@ pub fn interior_report(config: &WorldConfig, world_x: i64, world_z: i64, cell: &
         return out;
     }
 
-    let ctx = urbix::chunk::interior_context_for(config, world_x, world_z, cell);
+    let ctx = urbix::chunk::interior_context_for(config, voronoi, world_x, world_z, cell);
     out.push_str(&format!(
-        "context: zone {:?}, footprint {}x{} tiles, {} floors, entrance {:?}\n",
-        ctx.zone, ctx.footprint_w, ctx.footprint_d, ctx.floor_count, ctx.door_side
+        "context: zone {:?} (secondary {:?}, role {:?}{}), footprint {}x{} tiles, {} floors, entrance {:?}, frontage depth {}\n",
+        ctx.zone,
+        ctx.secondary_zone,
+        ctx.building_role,
+        if ctx.corner { ", corner" } else { "" },
+        ctx.footprint_w,
+        ctx.footprint_d,
+        ctx.floor_count,
+        ctx.door_side,
+        ctx.frontage_depth
     ));
 
     let bp = config.blueprint_for(ctx.zone);
@@ -445,7 +459,7 @@ fn main() -> ExitCode {
         let lz = wz.rem_euclid(n);
         let chunk = generate_chunk(cx as i32, cz as i32, &config, &voronoi);
         let cell = chunk.get_cell((lz * n + lx) as usize);
-        print!("{}", interior_report(&config, wx, wz, &cell));
+        print!("{}", interior_report(&config, &voronoi, wx, wz, &cell));
     }
 
     ExitCode::SUCCESS

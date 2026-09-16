@@ -55,7 +55,7 @@ exclude = [
     "DIAGONAL",
     "SPECIAL",
     "GREENWAY",
-]
+    "LAYOUT_CORE",]
 
 # Rename Rust names to the Urbix-prefixed names used in §2.3.
 [export.rename]

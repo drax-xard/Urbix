@@ -86,6 +86,68 @@ pub enum DoorSide {
     South = 3,
 }
 
+/// What a lot's building is, beyond its zone.
+///
+/// Recomputed pure from world coordinates alongside the other context fields
+/// (`chunk::interior_context_for`), so the generator can give a market shed,
+/// a tower-park tower, or a landmark a different program from an ordinary
+/// lot on the same street.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum BuildingRole {
+    /// Ordinary lot: the zone blueprint's default program.
+    Ordinary = 0,
+    /// Wayfinding tower: heightened version of the ordinary program.
+    Landmark = 1,
+    /// Market shed district: low, fully-built rows.
+    Market = 2,
+    /// Single tower rising in a green block.
+    TowerPark = 3,
+}
+
+/// A storey's role within its building.
+///
+/// Ground floors face the street (entrance, lobby, retail-capable rooms);
+/// typical floors repeat one layout (drawn once, cloned); top floors close
+/// the building (expanded core, no entrance). Single-storey buildings are
+/// all Ground.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum FloorRole {
+    /// Street level: entrance door, lobby halo, retail-capable rooms.
+    Ground = 0,
+    /// Repeated middle floors: one layout generated once, then cloned.
+    Typical = 1,
+    /// Crown: expanded mechanical core, no entrance.
+    Top = 2,
+}
+
+/// Role of storey `floor` in a building of `floor_count` storeys.
+///
+/// Index 0 is always Ground; the last index (when `floor_count >= 2`) is
+/// Top; everything between is Typical. A zero `floor_count` still reports
+/// Ground so degenerate lots yield one usable sealed floor.
+///
+/// ## Example
+///
+/// ```
+/// use urbix::layout::{floor_role, FloorRole};
+/// assert_eq!(floor_role(0, 5), FloorRole::Ground);
+/// assert_eq!(floor_role(2, 5), FloorRole::Typical);
+/// assert_eq!(floor_role(4, 5), FloorRole::Top);
+/// assert_eq!(floor_role(0, 1), FloorRole::Ground);
+/// ```
+#[must_use]
+pub const fn floor_role(floor: u8, floor_count: u8) -> FloorRole {
+    if floor == 0 || floor_count <= 1 {
+        FloorRole::Ground
+    } else if floor + 1 >= floor_count {
+        FloorRole::Top
+    } else {
+        FloorRole::Typical
+    }
+}
+
 /// Snapshot of the exterior lot an interior belongs to.
 ///
 /// This is the "information from the exterior map" the generator reacts to:
@@ -95,8 +157,15 @@ pub enum DoorSide {
 /// and palette via the building hash) and seeded, so the same lot always yields
 /// the same context — and thus the same interior.
 ///
+/// `footprint_w/d` is the lot's true pack-rect size in tiles (see
+/// `crate::lot::lot_rect`), not a square block estimate, so narrow lots get
+/// narrow interiors. `corner`, `frontage_depth`, and `building_role` let the
+/// generator shape corner towers, shallow shopfronts, and market sheds
+/// differently; `secondary_zone` (affinity runner-up) drives mixed-use
+/// ground floors.
+///
 /// `#[repr(C)]` so it can be handed across the FFI boundary for a renderer or
-/// tool to inspect or override.
+/// tool to inspect or override. New fields are always appended.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[repr(C)]
 pub struct InteriorContext {
@@ -111,9 +180,9 @@ pub struct InteriorContext {
     pub height: f32,
     /// Number of interior floors derived from `height` (>= 1 for a built lot).
     pub floor_count: u8,
-    /// Interior grid width in tiles (footprint derived from the block size).
+    /// Interior grid width in tiles (lot pack-rect width).
     pub footprint_w: u8,
-    /// Interior grid depth in tiles.
+    /// Interior grid depth in tiles (lot pack-rect depth).
     pub footprint_d: u8,
     /// Exterior facade palette id (rooms tinted to match the building).
     pub palette_id: u8,
@@ -121,6 +190,15 @@ pub struct InteriorContext {
     pub door_side: DoorSide,
     /// World seed used throughout interior derivation.
     pub seed: u64,
+    /// The lot touches streets on two axes (corner tower treatment).
+    pub corner: bool,
+    /// Lot depth in tiles perpendicular to the entrance edge (shopfront
+    /// depth, lobby depth); derived from the rect and `door_side`.
+    pub frontage_depth: u8,
+    /// What the lot's building is beyond its zone (market, tower, landmark).
+    pub building_role: BuildingRole,
+    /// Affinity runner-up behind `zone`; drives mixed-use ground floors.
+    pub secondary_zone: ZoneType,
 }
 
 impl InteriorContext {
@@ -151,6 +229,9 @@ impl InteriorContext {
         palette_id: u8,
         door_side: DoorSide,
         seed: u64,
+        corner: bool,
+        building_role: BuildingRole,
+        secondary_zone: ZoneType,
     ) -> Self {
         let floor_count = if height <= 0.0 {
             0
@@ -158,6 +239,11 @@ impl InteriorContext {
             let fh = f64::from(floor_height.max(1e-6));
             let n = (f64::from(height) / fh).ceil();
             n.max(1.0).min(f64::from(max_floors)) as u8
+        };
+        // Frontage depth: lot extent perpendicular to the entrance edge.
+        let frontage_depth = match door_side {
+            DoorSide::West | DoorSide::East => footprint_w,
+            DoorSide::North | DoorSide::South => footprint_d,
         };
         Self {
             id,
@@ -170,6 +256,10 @@ impl InteriorContext {
             palette_id,
             door_side,
             seed,
+            corner,
+            frontage_depth,
+            building_role,
+            secondary_zone,
         }
     }
 
@@ -271,6 +361,14 @@ pub struct Blueprint {
     pub room_count: u8,
     /// Room templates weighted for this zone; only `room_count` are live.
     pub rooms: [BlueprintRoom; MAX_BLUEPRINT_ROOMS],
+    /// Typical floors generate once and clone (`0`) vs re-roll per storey
+    /// (nonzero). Serde-defaulted so pre-M13 files parse.
+    #[serde(default)]
+    pub vary_typical: u8,
+    /// Circulation core wanders per floor (nonzero) vs stacks vertically
+    /// (`0`, the default). Serde-defaulted so pre-M13 files parse.
+    #[serde(default)]
+    pub wandering_core: u8,
 }
 
 impl Blueprint {
@@ -338,6 +436,8 @@ pub fn blueprint_defaults(zone: ZoneType) -> Blueprint {
         core_size,
         room_count: room_slice.len() as u8,
         rooms,
+        vary_typical: 0,
+        wandering_core: 0,
     }
 }
 
@@ -443,6 +543,9 @@ mod tests {
             1,
             DoorSide::West,
             42,
+            false,
+            BuildingRole::Ordinary,
+            ZoneType::Commercial,
         );
         assert_eq!(ctx.floor_count, 2);
         assert!(ctx.is_built());
@@ -463,6 +566,9 @@ mod tests {
             2,
             DoorSide::East,
             5,
+            true,
+            BuildingRole::Landmark,
+            ZoneType::Commercial,
         );
         assert_eq!(ctx.floor_count, 8);
     }
@@ -481,6 +587,9 @@ mod tests {
             0,
             DoorSide::South,
             5,
+            false,
+            BuildingRole::Ordinary,
+            ZoneType::Residential,
         );
         assert_eq!(ctx.floor_count, 0);
         assert!(!ctx.is_built());
@@ -502,6 +611,46 @@ mod tests {
         let bp = blueprint_defaults(ZoneType::Residential);
         // room_count is the number of live entries; slice matches it.
         assert_eq!(bp.room_slice().len(), usize::from(bp.room_count));
+    }
+
+    #[test]
+    fn frontage_depth_follows_entrance_edge() {
+        // Depth is the lot extent perpendicular to the entrance: an 8x5 lot
+        // entered from the west is 8 deep; from the north it is 5 deep.
+        let west = InteriorContext::new(
+            1,
+            ZoneType::Commercial,
+            [0.0; 5],
+            12.0,
+            4.0,
+            64,
+            8,
+            5,
+            1,
+            DoorSide::West,
+            9,
+            false,
+            BuildingRole::Ordinary,
+            ZoneType::Residential,
+        );
+        assert_eq!(west.frontage_depth, 8);
+        let north = InteriorContext::new(
+            1,
+            ZoneType::Commercial,
+            [0.0; 5],
+            12.0,
+            4.0,
+            64,
+            8,
+            5,
+            1,
+            DoorSide::North,
+            9,
+            false,
+            BuildingRole::Ordinary,
+            ZoneType::Residential,
+        );
+        assert_eq!(north.frontage_depth, 5);
     }
 
     #[test]

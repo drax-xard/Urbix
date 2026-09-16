@@ -238,15 +238,7 @@ pub fn lot_slot(loc: &BlockLoc, block_size: u8, seed: u64) -> LotSlot {
     let buildable = b - 1;
     // Pack shape from the block hash: 1–3 lots per axis, tightened for
     // narrow blocks so lots never sliver.
-    let per_axis = (buildable / 5).clamp(1, 3);
-    let nx_roll = hash_unit(loc.bx, loc.bz, seed, domain::LOT_SPLIT);
-    let nz_roll = hash_unit(loc.bz, loc.bx, seed, domain::LOT_SPLIT);
-    let nx = (1 + (nx_roll * per_axis as f32) as i64).clamp(1, per_axis) as u8;
-    let nz = (1 + (nz_roll * per_axis as f32) as i64).clamp(1, per_axis) as u8;
-    let ix = ((loc.rx - 1).clamp(0, buildable - 1) * i64::from(nx) / buildable)
-        .clamp(0, i64::from(nx) - 1);
-    let iz = ((loc.rz - 1).clamp(0, buildable - 1) * i64::from(nz) / buildable)
-        .clamp(0, i64::from(nz) - 1);
+    let (nx, nz, ix, iz) = pack_indices(loc, buildable, seed);
     let slot = (iz * i64::from(nx) + ix) as u8;
     let count = nx * nz;
     let lot_id = hash_coords(
@@ -261,6 +253,59 @@ pub fn lot_slot(loc: &BlockLoc, block_size: u8, seed: u64) -> LotSlot {
         count,
         corner: (ix == 0 || ix + 1 == i64::from(nx)) && (iz == 0 || iz + 1 == i64::from(nz)),
     }
+}
+
+/// Pack shape and cell indices for a block interior.
+///
+/// Returns `(nx, nz, ix, iz)`: the pack grid dimensions and this cell's pack
+/// coordinates. Shared by [`lot_slot`] and [`lot_rect`] so slot identity and
+/// rectangle geometry always agree.
+fn pack_indices(loc: &BlockLoc, buildable: i64, seed: u64) -> (u8, u8, i64, i64) {
+    let per_axis = (buildable / 5).clamp(1, 3);
+    let nx_roll = hash_unit(loc.bx, loc.bz, seed, domain::LOT_SPLIT);
+    let nz_roll = hash_unit(loc.bz, loc.bx, seed, domain::LOT_SPLIT);
+    let nx = (1 + (nx_roll * per_axis as f32) as i64).clamp(1, per_axis) as u8;
+    let nz = (1 + (nz_roll * per_axis as f32) as i64).clamp(1, per_axis) as u8;
+    let ix = ((loc.rx - 1).clamp(0, buildable - 1) * i64::from(nx) / buildable)
+        .clamp(0, i64::from(nx) - 1);
+    let iz = ((loc.rz - 1).clamp(0, buildable - 1) * i64::from(nz) / buildable)
+        .clamp(0, i64::from(nz) - 1);
+    (nx, nz, ix, iz)
+}
+
+/// This cell's lot rectangle inside the block's buildable interior.
+///
+/// Returns `(w, d)`: the lot's width/depth in cells. Every cell of one lot
+/// reports the same rectangle — it is what `InteriorContext` footprints are
+/// built from, so narrow lots get narrow interiors. Single-lot blocks span
+/// the whole interior.
+///
+/// ## Example
+///
+/// ```
+/// use urbix::lot::{DistrictFrame, block_loc, lot_rect, lot_slot};
+/// let frame = DistrictFrame::identity();
+/// let loc = block_loc(3, 3, 11, &frame);
+/// let (w, d) = lot_rect(&loc, 11, 445566);
+/// assert!(w >= 1 && d >= 1);
+/// // Same lot, same rect.
+/// let loc2 = block_loc(4, 3, 11, &frame);
+/// if lot_slot(&loc, 11, 445566).lot_id == lot_slot(&loc2, 11, 445566).lot_id {
+///     assert_eq!((w, d), lot_rect(&loc2, 11, 445566));
+/// }
+/// ```
+#[must_use]
+pub fn lot_rect(loc: &BlockLoc, block_size: u8, seed: u64) -> (u8, u8) {
+    let b = i64::from(block_size.max(1));
+    if b <= 5 {
+        return ((b - 1).max(1) as u8, (b - 1).max(1) as u8);
+    }
+    let buildable = b - 1;
+    let (nx, nz, ix, iz) = pack_indices(loc, buildable, seed);
+    // Lot ix spans [ix*buildable/nx, (ix+1)*buildable/nx): width is the span.
+    let w = ((ix + 1) * buildable / i64::from(nx) - ix * buildable / i64::from(nx)).max(1);
+    let d = ((iz + 1) * buildable / i64::from(nz) - iz * buildable / i64::from(nz)).max(1);
+    (w as u8, d as u8)
 }
 
 /// Per-block correlated draw in `[0, 1)`.

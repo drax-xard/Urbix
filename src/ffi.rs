@@ -214,7 +214,13 @@ pub unsafe extern "C" fn urbix_generate_interior(
     }
 
     let config = engine.config();
-    let ctx = crate::chunk::interior_context_for(config, i64::from(wx), i64::from(wz), &cell);
+    let ctx = crate::chunk::interior_context_for(
+        config,
+        engine.voronoi(),
+        i64::from(wx),
+        i64::from(wz),
+        &cell,
+    );
     let blueprint = config.blueprint_for(ctx.zone);
     let layout = crate::interior::generate_layout(cell.interior_id, &ctx, &blueprint);
 
@@ -522,8 +528,8 @@ mod tests {
         assert!(i1.door_side <= 3, "door_side is a valid DoorSide");
         assert!(i1.floor_count >= 1);
         assert!(
-            i1.footprint_w >= 7 && i1.footprint_d >= 7,
-            "footprint floored at 7"
+            i1.footprint_w >= 3 && i1.footprint_d >= 3,
+            "footprint is the truthful lot rect (clamped at 3)"
         );
         let expected =
             u64::from(i1.floor_count) * 2 * u64::from(i1.footprint_w) * u64::from(i1.footprint_d);

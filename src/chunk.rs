@@ -376,36 +376,80 @@ fn interior_id_for_lot(block_bx: i64, block_bz: i64, slot: u8, seed: u64) -> Int
 /// affinity, height, palette, and interior id), so this recomputes the
 /// exterior→interior bridge deterministically from those fields plus the
 /// config's floor mapping. `world_x`/`world_z` are the cell's absolute
-/// coordinates: the context's entrance side (which lot edge faces a street) is
-/// derived from where the cell sits within its street block. This is what a
-/// consumer regenerates when it wants an interior for a cell. Only meaningful
-/// when `cell.height > 0`.
+/// coordinates: lot geometry (pack rect, corner, entrance side) and the
+/// building role re-derive from the same framed block pipeline generation
+/// uses, so every cell of one lot reconstructs the same context. This is
+/// what a consumer regenerates when it wants an interior for a cell. Only
+/// meaningful when `cell.height > 0`.
 #[must_use]
 pub fn interior_context_for(
     config: &crate::config::WorldConfig,
+    voronoi: &VoronoiDiagram,
     world_x: i64,
     world_z: i64,
     cell: &crate::data::Cell,
 ) -> crate::layout::InteriorContext {
-    // Footprint: the lot spans the zone's street block. The block size is
-    // floored at 7 cells (the smallest footprint whose interior always keeps a
-    // 2x2 room window free even with a centered 2x2 circulation core), so tiny
-    // blocks like Downtown's 4-cell grid never render zero-room stubs.
     let params = config.blended_zone_params(&cell.zone_affinity);
-    let side = params.block_size.clamp(7, 32);
+    let zone = dominant_zone(&cell.zone_affinity);
+    let frame = voronoi.district_frame_for(world_x as f64, world_z as f64);
+    let block = crate::lot::block_loc(world_x, world_z, params.block_size, &frame);
+    let slot = crate::lot::lot_slot(&block, params.block_size, config.seed);
+    // Truthful footprint: the lot's pack-rect size, bounded so degenerate
+    // configs stay renderable.
+    let (rw, rd) = crate::lot::lot_rect(&block, params.block_size, config.seed);
+    let (footprint_w, footprint_d) = (rw.clamp(3, 64), rd.clamp(3, 64));
     let door_side = door_side_for(world_x, world_z, params.block_size);
+    let role = {
+        let special = special_for(block.bx, block.bz, zone, config.seed);
+        match special {
+            SpecialKind::Market => crate::layout::BuildingRole::Market,
+            SpecialKind::TowerPark => crate::layout::BuildingRole::TowerPark,
+            SpecialKind::Plaza | SpecialKind::None
+                if is_landmark(slot.lot_id, zone, config.seed) =>
+            {
+                crate::layout::BuildingRole::Landmark
+            }
+            SpecialKind::Plaza | SpecialKind::None => crate::layout::BuildingRole::Ordinary,
+        }
+    };
 
     config.interior_context(
         cell.interior_id,
-        dominant_zone(&cell.zone_affinity),
+        zone,
         &cell.zone_affinity,
         cell.height,
-        side,
-        side,
+        footprint_w,
+        footprint_d,
         cell.palette_id,
         door_side,
         config.seed,
+        slot.corner,
+        role,
+        secondary_zone(&cell.zone_affinity, zone),
     )
+}
+
+/// Affinity runner-up behind `dominant` (ties toward the lower index, like
+/// [`dominant_zone`]). Drives mixed-use ground floors; never equals the
+/// dominant zone unless the vector is degenerate.
+fn secondary_zone(affinity: &[f32; crate::zones::ZONE_COUNT], dominant: ZoneType) -> ZoneType {
+    let mut best = if dominant == ZoneType::Downtown {
+        ZoneType::Residential
+    } else {
+        ZoneType::Downtown
+    };
+    let mut best_w = f32::NEG_INFINITY;
+    for zone in ZoneType::all() {
+        if zone == dominant {
+            continue;
+        }
+        let w = affinity[zone as usize];
+        if w > best_w {
+            best_w = w;
+            best = zone;
+        }
+    }
+    best
 }
 
 /// Which edge of the cell's lot faces the nearest street.
@@ -525,14 +569,15 @@ mod tests {
 
     #[test]
     fn downtown_cells_never_render_zero_room_interiors() {
-        // `interior_context_for` floors the footprint at 7x7 and the generator
-        // caps the core, so a built lot keeps at least one room per storey.
-        // The bridge is tested on a synthetic pure-Downtown cell so the
-        // assertion never depends on a seed's street geometry.
+        // `interior_context_for` reports the lot's true pack rect and the
+        // generator caps the core, so a built lot keeps at least one room per
+        // storey. The bridge is tested on a synthetic pure-Downtown cell so
+        // the assertion never depends on a seed's street geometry.
         let cfg = WorldConfig {
             seed: 1234,
             ..Default::default()
         };
+        let voronoi = VoronoiDiagram::generate(cfg.seed, cfg.voronoi_site_count);
         let mut affinity = [0.0f32; crate::zones::ZONE_COUNT];
         affinity[crate::zones::ZoneType::Downtown as usize] = 1.0;
         let cell = crate::data::Cell {
@@ -543,14 +588,18 @@ mod tests {
             _pad: 0,
             interior_id: 1,
         };
-        let ctx = interior_context_for(&cfg, 10, 10, &cell);
+        let ctx = interior_context_for(&cfg, &voronoi, 10, 10, &cell);
         assert_eq!(ctx.zone, crate::zones::ZoneType::Downtown);
-        assert!(
-            ctx.footprint_w >= 7 && ctx.footprint_d >= 7,
-            "downtown footprint {}x{} below the roomable floor",
-            ctx.footprint_w,
-            ctx.footprint_d
+        // Truthful lot geometry: footprint matches the pack rect at (10,10).
+        let params = cfg.blended_zone_params(&cell.zone_affinity);
+        let frame = voronoi.district_frame_for(10.0, 10.0);
+        let block = crate::lot::block_loc(10, 10, params.block_size, &frame);
+        let (rw, rd) = crate::lot::lot_rect(&block, params.block_size, cfg.seed);
+        assert_eq!(
+            (ctx.footprint_w, ctx.footprint_d),
+            (rw.clamp(3, 64), rd.clamp(3, 64))
         );
+        assert_ne!(ctx.secondary_zone, ctx.zone);
         let layout = generate_layout(cell.interior_id, &ctx, &cfg.blueprint_for(ctx.zone));
         assert!(!layout.floors.is_empty());
         for floor in &layout.floors {

@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-09-16
+
+### Added
+
+- **Interior structure** (Milestone 13 — vertically coherent buildings):
+  - Lot-true `InteriorContext`: pack-rect footprints (`lot::lot_rect`),
+    corner flag, frontage depth, `BuildingRole`
+    (Ordinary/Landmark/Market/TowerPark), affinity runner-up
+    `secondary_zone` — recomputed pure from world coords in
+    `chunk::interior_context_for` (now takes the engine Voronoi map;
+    `Cell` untouched). New `WorldEngine::voronoi()` accessor.
+  - Floor roles (`FloorRole::Ground/Typical/Top`): typical floors generate
+    once and clone; Top expands the mechanical core; single-storey lots
+    stay all-Ground.
+  - Stacked circulation shaft (`domain::LAYOUT_CORE`): one core position
+    per building shared by every storey; `wandering_core` blueprint
+    opt-in keeps the legacy per-floor draw.
+  - Ground-only street entrance (lobby halo painted after rooms so small
+    floors never starve); lobby `Door` on the core edge above.
+  - Blueprint gains `vary_typical` / `wandering_core` (serde-defaulted;
+    `WorldConfig` size grows → header regenerated).
+  - Tests: stacked cores, typical repetition, entrance ring-door counts,
+    top expansion, both opt-ins, lot-truth footprints.
+
+### Changed
+
+- `InteriorContext::new` / `WorldConfig::interior_context` /
+  `chunk::interior_context_for` signatures grow (MINOR break);
+  `examples/{cli_demo,viz,interactive}` thread the Voronoi map through.
+- Docs: `docs/interiors.md` §§2/4/7/8 rewritten for M13; `Urbix_Project.md`
+  M13 ✅; `README.md` updated.
+
 ### Docs
 
 - **Interior overhaul plan (M13–M15, pending)**: `docs/interiors.md` gains a

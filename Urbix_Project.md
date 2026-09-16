@@ -603,7 +603,7 @@ boulevards cutting grids; 1000-step walk still bounded. MINOR bump to
 
 ---
 
-### Milestone 13 — Interior structure (stacked, role-driven floors) — ⬜ PENDING
+### Milestone 13 — Interior structure (stacked, role-driven floors) — ✅ DONE
 
 **Goal:** interiors read vertically like their exteriors — one shaft, a real
 ground floor, repeated typical floors — driven by lot truth. Specified in

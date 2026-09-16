@@ -140,7 +140,13 @@ impl App {
             .generate_chunk(cx, cz)
             .get_cell((lz * n + lx) as usize);
         let layout = if cell.height > 0.0 {
-            let ctx = interior_context_for(self.engine.config(), world_x, world_z, &cell);
+            let ctx = interior_context_for(
+                self.engine.config(),
+                self.engine.voronoi(),
+                world_x,
+                world_z,
+                &cell,
+            );
             let bp = self.engine.config().blueprint_for(ctx.zone);
             Some(generate_layout(cell.interior_id, &ctx, &bp))
         } else {
