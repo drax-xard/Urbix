@@ -94,6 +94,9 @@ impl CellFlags {
     /// The cell is a sidewalk apron: the 1-cell ring inside the street edge.
     /// No-build, height 0; renderers draw curb/pavement, not asphalt.
     pub const IS_SIDEWALK: CellFlags = CellFlags(1 << 4);
+    /// The cell is a greenway: a dropped street segment reborn as a linear
+    /// park. No-build, height 0; renderers draw green, like `IS_PARK`.
+    pub const IS_GREENWAY: CellFlags = CellFlags(1 << 5);
 
     /// Whether all flags in `rhs` are present.
     ///

@@ -222,3 +222,47 @@ Do not start terrain/water (§8.4) until arterials can follow grades.
   signatures changed (framed grid; lot context) — a Rust MINOR break covered
   by the 0.11.0 bump. The old per-cell behaviour has no fallback flag;
   pre-11 seeds regenerate with the new fabric.
+
+## 12. Variation pass (0.12.0) — DONE
+
+The M11 fabric varied *between* districts but stayed a perfect grid *within*
+them. This pass breaks intra-district monotony while keeping every M11
+invariant (pure hash functions, cross-chunk consistency, 40 B `Cell`):
+
+* **Street dropout** (`src/street.rs:street_info`, `domain::STREET_DROP`):
+  ~8% of local stretches vanish between arterials (keyed per boundary line +
+  arterial band), merging neighbours into superblocks that terminate at
+  avenues as T-junctions. Arterials, boulevards, and plazas never drop.
+* **Greenways** (`IS_GREENWAY`, bit 5; `domain::GREENWAY`): 60% of dropped
+  stretches reopen as linear parks instead of merging — the city gains
+  green corridors at the scale of whole street stretches.
+* **Diagonal boulevards** (`src/lot.rs:Diagonal`, `src/region.rs:diagonals`):
+  two global seed-derived avenues (an X pair 90° apart, 2 cells wide,
+  arterial-flagged) in world coordinates, seamless across chunks and
+  districts. Diagonal∩grid crossings earn plazas at 15%.
+* **2-D lot packs** (`src/lot.rs:lot_slot`): blocks split into up to 3×3
+  packs from the block hash instead of 1-D strips; grain varies block to
+  block.
+* **Special blocks** (`src/chunk.rs:special_for`, `domain::SPECIAL`): hashed
+  accents — civic `Plaza` squares (2% downtown/commercial), `Market` shed
+  rows ≤ 10 u (commercial/industrial), `TowerPark` single towers ×1.35 in
+  green blocks (downtown).
+* **Stronger warp + wider angles**: 7 quantized orientations
+  (`{0°, ±10°, ±18°, ±27°}`) and a second warp octave (0.3–1.0 over 12–30).
+* `street::layout_block` is unchanged (base lattice, no dropout/diagonals)
+  so existing lattice tests still pin the grid; `chunk.rs` consumes the new
+  `street_info`. `viz`/`interactive`/`cli_demo`/`walkability` cover the new
+  greenway ground kind. Bump to 0.12.0 (new `IS_GREENWAY` wire bit).
+
+## 13. Seam parkways (0.12.0) — DONE
+
+Playtesting the interactive explorer showed district borders tearing: each
+cell used its own district's frame, so both grids dead-ended into slivers
+instead of connecting. The fix gives every border a continuous road: cells
+within ~1 cell of a Voronoi bisector (`VoronoiDiagram::seam_distance`, exact
+bisector distance `|d1²−d2²|/2·gap` from a top-2 site scan) pave as an
+arterial parkway both grids tee into — the seam reads as a boundary
+boulevard, the same world-space trick the global diagonals already used.
+Seams are immune to dropout; `street_info` takes the per-cell seam flag and
+`chunk.rs` (including the sidewalk ring) threads it through. Covered by
+seam-distance/parkway tests; folded into the uncommitted 0.12.0 release.

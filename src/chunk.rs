@@ -87,44 +87,75 @@ pub fn generate_chunk(
             // transition bands never produce hybrid spacings.
             let params = config.blended_zone_params(&affinity);
             let zone = dominant_zone(&affinity);
-            // District fabric: one orientation frame per nearest site.
+            // District fabric: one orientation frame per nearest site, plus
+            // the global diagonal boulevards cutting across every grid.
             let frame = voronoi.district_frame_for(world_x as f64, world_z as f64);
+            let diags = voronoi.diagonals();
 
             // Streets first; a street cell never becomes a building. The
-            // frame is shared so neighbour checks below stay consistent.
-            let mut flags = street::layout_block(world_x, world_z, &params, &frame);
+            // frame, params, diagonals, and seam flag are shared so neighbour
+            // checks below stay consistent.
+            let seam = voronoi.is_seam_road(world_x as f64, world_z as f64);
+            let info = street::street_info(world_x, world_z, &params, &frame, diags, seam, seed);
+            let mut flags = CellFlags::NONE;
+            if info.street {
+                flags = flags.insert(CellFlags::IS_STREET);
+                if info.arterial {
+                    flags = flags.insert(CellFlags::IS_ARTERIAL);
+                }
+            } else if info.greenway {
+                // Dropped segments reborn as linear parks (no-build green).
+                flags = flags.insert(CellFlags::IS_GREENWAY);
+            }
 
-            // Plazas: a small hashed share of downtown/commercial
-            // intersections widens into pedestrian ground (keeps IS_STREET
-            // so old renderers still draw pavement).
+            // Plazas: a small hashed share of downtown/commercial grid
+            // intersections widens into pedestrian ground, and diagonal
+            // crossings earn squares more often (keeps IS_STREET so old
+            // renderers still draw pavement).
+            let grid_crossing = is_intersection(world_x, world_z, &params, &frame);
             if flags.contains(CellFlags::IS_STREET)
-                && is_intersection(world_x, world_z, &params, &frame)
-                && (zone == ZoneType::Downtown || zone == ZoneType::Commercial)
-                && hash_unit(world_x, world_z, seed, domain::PLAZA) < 0.02
+                && ((grid_crossing
+                    && (zone == ZoneType::Downtown || zone == ZoneType::Commercial)
+                    && hash_unit(world_x, world_z, seed, domain::PLAZA) < 0.02)
+                    || (info.diagonal
+                        && grid_crossing
+                        && hash_unit(world_x, world_z, seed, domain::PLAZA) < 0.15))
             {
                 flags = flags.insert(CellFlags::IS_PLAZA);
             }
 
-            // Sidewalk ring: non-street cells abutting any street cell become
-            // paved apron (no-build, height 0). Checked with the same framed
-            // query so chunk edges agree.
+            // Sidewalk ring: non-street, non-green cells abutting any street
+            // cell become paved apron (no-build, height 0). Checked with the
+            // same full query so chunk edges agree.
             if !flags.contains(CellFlags::IS_STREET)
-                && abuts_street(world_x, world_z, &params, &frame)
+                && !flags.contains(CellFlags::IS_GREENWAY)
+                && abuts_street(world_x, world_z, &params, &frame, diags, voronoi, seed)
             {
                 flags = flags.insert(CellFlags::IS_SIDEWALK);
             }
 
-            // A cell dominated by the Park district (and not paved) is
-            // flagged as greenery. Residential garden blocks (a hashed 15%
+            // A cell dominated by the Park district (and not paved or green)
+            // is flagged as greenery. Residential garden blocks (a hashed 15%
             // of residential blocks) read as courtyard green the same way.
             let block = block_loc(world_x, world_z, params.block_size, &frame);
             let garden_block = zone == ZoneType::Residential
                 && hash_unit(block.bx, block.bz, seed, domain::BLOCK_NOISE) < 0.15;
             if !flags.contains(CellFlags::IS_STREET)
                 && !flags.contains(CellFlags::IS_SIDEWALK)
+                && !flags.contains(CellFlags::IS_GREENWAY)
                 && (zone == ZoneType::Park || garden_block)
             {
                 flags = flags.insert(CellFlags::IS_PARK);
+            }
+
+            // Special blocks: a hashed few per zone rewrite the block's
+            // program — civic plaza, market sheds, or a tower in a park.
+            let special = special_for(block.bx, block.bz, zone, seed);
+            if special == SpecialKind::Plaza
+                && !flags.contains(CellFlags::IS_STREET)
+                && !flags.contains(CellFlags::IS_SIDEWALK)
+            {
+                flags = flags.insert(CellFlags::IS_PLAZA);
             }
 
             let mut cell = Cell {
@@ -136,13 +167,16 @@ pub fn generate_chunk(
                 interior_id: 0,
             };
 
-            let paved =
-                flags.contains(CellFlags::IS_STREET) || flags.contains(CellFlags::IS_SIDEWALK);
-            if !paved && !flags.contains(CellFlags::IS_PARK) {
+            let paved = flags.contains(CellFlags::IS_STREET)
+                || flags.contains(CellFlags::IS_SIDEWALK)
+                || flags.contains(CellFlags::IS_PLAZA);
+            let green =
+                flags.contains(CellFlags::IS_PARK) || flags.contains(CellFlags::IS_GREENWAY);
+            if !paved && !green {
                 let slot = lot_slot(&block, params.block_size, seed);
                 let clump = block_noise(block.bx, block.bz, seed);
                 let boost = voronoi.cbd_factor(world_x as f64, world_z as f64);
-                let (mut height, palette) = building::assign_building(
+                let (mut height, mut palette) = building::assign_building(
                     slot.lot_id,
                     slot.corner,
                     clump,
@@ -151,10 +185,39 @@ pub fn generate_chunk(
                     &params,
                     seed,
                 );
-                // Landmarks: a hashed share of lots per zone rises ~1.5× —
-                // the wayfinding towers above the street wall.
-                if height > 0.0 && is_landmark(slot.lot_id, zone, seed) {
+                match special {
+                    // Market sheds: every lot builds low and tight.
+                    SpecialKind::Market => {
+                        if height <= 0.0 {
+                            (height, palette) = market_shed(slot.lot_id, &params, seed);
+                        }
+                        height = height.min(10.0);
+                    }
+                    // Tower in a park: only the middle lot rises (×1.35);
+                    // the rest of the block goes green below.
+                    SpecialKind::TowerPark if slot.slot != slot.count / 2 => {
+                        height = 0.0;
+                    }
+                    SpecialKind::TowerPark => {
+                        if height <= 0.0 {
+                            height = 8.0;
+                        }
+                        height = (height * 1.35).min(params.height_max * 1.6 + 1.0);
+                    }
+                    SpecialKind::Plaza | SpecialKind::None => {}
+                }
+                // Landmarks: a hashed share of ordinary and tower lots rises
+                // ~1.5× — the wayfinding towers above the street wall.
+                // Market sheds stay low (no landmark boost).
+                let landmark_ok = special == SpecialKind::None || special == SpecialKind::TowerPark;
+                if height > 0.0 && landmark_ok && is_landmark(slot.lot_id, zone, seed) {
                     height = (height * 1.5).min(params.height_max * 1.6 + 1.0);
+                }
+                // Tower-park non-tower lots and shed-less empties stay open.
+                if height <= 0.0 && special == SpecialKind::TowerPark && slot.slot != slot.count / 2
+                {
+                    flags = flags.insert(CellFlags::IS_PARK);
+                    cell.flags = flags;
                 }
                 cell.height = height;
                 cell.palette_id = palette;
@@ -185,20 +248,96 @@ fn is_intersection(
     loc.rx == 0 && loc.rz == 0
 }
 
-/// Whether any 4-neighbour of a world cell is a street (same framed query).
+/// Whether any 4-neighbour of a world cell is a street (same full query).
 /// Used for the sidewalk ring; pure over absolute coords, hence
-/// cross-chunk consistent.
+/// cross-chunk consistent. Dropped segments read as interior/green, never
+/// as streets, so the ring hugs real roads only. Neighbour seam flags come
+/// from the neighbour's own position (seams are frame-independent).
 fn abuts_street(
     world_x: i64,
     world_z: i64,
     params: &crate::zones::ZoneParams,
     frame: &crate::lot::DistrictFrame,
+    diagonals: &[crate::lot::Diagonal],
+    voronoi: &VoronoiDiagram,
+    seed: u64,
 ) -> bool {
     const DIRS: [(i64, i64); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
     DIRS.iter().any(|(dx, dz)| {
-        street::layout_block(world_x + dx, world_z + dz, params, frame)
-            .contains(CellFlags::IS_STREET)
+        let nx = world_x + dx;
+        let nz = world_z + dz;
+        let seam = voronoi.is_seam_road(nx as f64, nz as f64);
+        street::street_info(nx, nz, params, frame, diagonals, seam, seed).street
     })
+}
+
+/// A block's rewritten program, if any.
+///
+/// Most blocks are `None` (ordinary lots). A hashed few per zone become:
+/// - `Plaza`: civic square — the whole interior is pedestrian ground.
+/// - `Market`: shed district — every lot builds low (≤ 10 u) and tight.
+/// - `TowerPark`: one middle lot rises (×1.35) in a green block.
+///
+/// Deterministic per `(block, zone, seed)`; probabilities stay low so the
+/// ordinary fabric dominates and specials read as accents.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SpecialKind {
+    /// Ordinary lots.
+    None,
+    /// Civic square.
+    Plaza,
+    /// Low shed district.
+    Market,
+    /// Tower in a park.
+    TowerPark,
+}
+
+fn special_for(bx: i64, bz: i64, zone: ZoneType, seed: u64) -> SpecialKind {
+    let r = hash_unit(bx, bz, seed, domain::SPECIAL);
+    match zone {
+        ZoneType::Downtown => {
+            if r < 0.02 {
+                SpecialKind::Plaza
+            } else if r < 0.04 {
+                SpecialKind::TowerPark
+            } else {
+                SpecialKind::None
+            }
+        }
+        ZoneType::Commercial => {
+            if r < 0.02 {
+                SpecialKind::Plaza
+            } else if r < 0.05 {
+                SpecialKind::Market
+            } else {
+                SpecialKind::None
+            }
+        }
+        ZoneType::Industrial => {
+            if r < 0.03 {
+                SpecialKind::Market
+            } else {
+                SpecialKind::None
+            }
+        }
+        ZoneType::Residential | ZoneType::Park => SpecialKind::None,
+    }
+}
+
+/// Height and palette for a market shed: low (4–10 u), always built.
+///
+/// Sheds ignore the lot density fate — the whole block builds — but keep a
+/// per-lot palette so the row still varies.
+fn market_shed(lot_id: u64, params: &crate::zones::ZoneParams, seed: u64) -> (f32, u8) {
+    let h = 4.0
+        + hash_unit(
+            lot_id as i64,
+            (lot_id >> 32) as i64,
+            seed,
+            domain::LOT_HEIGHT,
+        ) * 6.0;
+    let raw = hash_coords(lot_id as i64, (lot_id >> 32) as i64, seed, domain::PALETTE);
+    (h, (raw % (params.palette_count.max(1) as u64)) as u8)
 }
 
 /// Whether a lot is a landmark tower for its zone.
@@ -224,7 +363,7 @@ fn is_landmark(lot_id: u64, zone: ZoneType, seed: u64) -> bool {
 /// so the id does not correlate with height or palette draws.
 fn interior_id_for_lot(block_bx: i64, block_bz: i64, slot: u8, seed: u64) -> InteriorId {
     hash_coords(
-        block_bx.wrapping_mul(8).wrapping_add(i64::from(slot)),
+        block_bx.wrapping_mul(16).wrapping_add(i64::from(slot)),
         block_bz,
         seed,
         domain::INTERIOR,
@@ -424,13 +563,15 @@ mod tests {
 
     #[test]
     fn street_flags_match_independent_recomputation() {
-        // Cross-chunk edges stay consistent because a cell's street flag is a
-        // pure function of its *absolute* world coordinates in the district
-        // frame (via layout_block), never of which chunk generated it.
-        // Recompute each cell's street status from the same continuous zone
-        // params + frame and require a match. (Plazas keep IS_STREET, so the
-        // street bit still matches the base query.)
+        // Cross-chunk edges stay consistent because a cell's street flags are
+        // a pure function of its *absolute* world coordinates in the district
+        // frame (via street_info), never of which chunk generated it.
+        // Recompute each cell's full street answer from the same continuous
+        // zone params + frame + diagonals and require a match on every bit
+        // the pipeline sets (street, arterial, greenway). (Plazas keep
+        // IS_STREET, so the street bit still matches the base answer.)
         let (cfg, voronoi) = fixture();
+        let diags = voronoi.diagonals().to_vec();
         let n = i64::from(cfg.chunk_size);
         for (cx, cy) in [(0, 0), (1, 0), (0, 1), (-1, -1)] {
             let buf = generate_chunk(cx, cy, &cfg, &voronoi);
@@ -441,18 +582,259 @@ mod tests {
                     let wz = i64::from(cy) * n + local_y;
                     let cell = buf.get_cell(index);
                     let frame = voronoi.district_frame_for(wx as f64, wz as f64);
-                    let expected = crate::street::layout_block(
+                    let seam = voronoi.is_seam_road(wx as f64, wz as f64);
+                    let expected = crate::street::street_info(
                         wx,
                         wz,
                         &cfg.blended_zone_params(&cell.zone_affinity),
                         &frame,
+                        &diags,
+                        seam,
+                        cfg.seed,
                     );
-                    let street_match = cell.flags.contains(CellFlags::IS_STREET)
-                        == expected.contains(CellFlags::IS_STREET);
-                    assert!(street_match, "street mismatch at world ({wx},{wz})");
+                    assert_eq!(
+                        cell.flags.contains(CellFlags::IS_STREET),
+                        expected.street,
+                        "street mismatch at world ({wx},{wz})"
+                    );
+                    assert_eq!(
+                        cell.flags.contains(CellFlags::IS_ARTERIAL),
+                        expected.arterial,
+                        "arterial mismatch at world ({wx},{wz})"
+                    );
+                    assert_eq!(
+                        cell.flags.contains(CellFlags::IS_GREENWAY),
+                        expected.greenway,
+                        "greenway mismatch at world ({wx},{wz})"
+                    );
                     index += 1;
                 }
             }
+        }
+    }
+
+    #[test]
+    fn dropout_greenways_and_diagonals_texture_the_city() {
+        // A wide sample must contain dropped greenways (height 0, green
+        // flag). Diagonal boulevards are sampled where they provably run:
+        // chunks around each boulevard's closest approach to the origin.
+        let cfg = WorldConfig {
+            seed: 445566,
+            voronoi_site_count: 24,
+            ..Default::default()
+        };
+        let voronoi = VoronoiDiagram::generate(cfg.seed, cfg.voronoi_site_count);
+        let diags = voronoi.diagonals().to_vec();
+        assert_eq!(diags.len(), 2);
+        const SPREAD: [i32; 5] = [-60, -20, 0, 20, 60];
+        let mut greenway = 0usize;
+        for &cx in &SPREAD {
+            for &cy in &SPREAD {
+                let buf = generate_chunk(cx, cy, &cfg, &voronoi);
+                for cell in buf.cells() {
+                    if cell.flags.contains(CellFlags::IS_GREENWAY) {
+                        greenway += 1;
+                        assert_eq!(cell.height, 0.0);
+                        assert_eq!(cell.interior_id, 0);
+                    }
+                }
+            }
+        }
+        assert!(greenway > 0, "no greenways sampled");
+        // Boulevard-proximal chunks: closest point to the origin per diagonal.
+        let n = i64::from(cfg.chunk_size);
+        for d in &diags {
+            let nx = -d.angle_rad.sin();
+            let nz = d.angle_rad.cos();
+            let px = d.offset * nx;
+            let pz = d.offset * nz;
+            let ccx = (px as i64).div_euclid(n) as i32;
+            let ccz = (pz as i64).div_euclid(n) as i32;
+            let mut diagonal = 0usize;
+            for cx in ccx - 1..=ccx + 1 {
+                for cy in ccz - 1..=ccz + 1 {
+                    let buf = generate_chunk(cx, cy, &cfg, &voronoi);
+                    let mut index = 0;
+                    for ly in 0..n {
+                        for lx in 0..n {
+                            let wx = i64::from(cx) * n + lx;
+                            let wz = i64::from(cy) * n + ly;
+                            let cell = buf.get_cell(index);
+                            index += 1;
+                            let frame = voronoi.district_frame_for(wx as f64, wz as f64);
+                            let seam = voronoi.is_seam_road(wx as f64, wz as f64);
+                            let info = crate::street::street_info(
+                                wx,
+                                wz,
+                                &cfg.blended_zone_params(&cell.zone_affinity),
+                                &frame,
+                                &diags,
+                                seam,
+                                cfg.seed,
+                            );
+                            if info.diagonal && info.street {
+                                diagonal += 1;
+                                assert!(cell.flags.contains(CellFlags::IS_ARTERIAL));
+                            }
+                        }
+                    }
+                }
+            }
+            assert!(
+                diagonal > 0,
+                "boulevard at offset {} paves nothing",
+                d.offset
+            );
+        }
+    }
+
+    #[test]
+    fn seam_parkways_pave_district_borders() {
+        // Wherever the Voronoi seam runs, cells read as arterial streets —
+        // the border becomes a parkway both grids tee into, never a tear.
+        // The test locates a real border first (midpoint of a close,
+        // unowned site pair), then checks the parkway around it.
+        let cfg = WorldConfig {
+            seed: 445566,
+            voronoi_site_count: 24,
+            ..Default::default()
+        };
+        let voronoi = VoronoiDiagram::generate(cfg.seed, cfg.voronoi_site_count);
+        let n = i64::from(cfg.chunk_size);
+        let sites = voronoi.sites().to_vec();
+        let mut checked = 0;
+        for (i, a) in sites.iter().enumerate() {
+            let mut best = f64::INFINITY;
+            let mut nb = 0usize;
+            for (j, b) in sites.iter().enumerate() {
+                if i == j {
+                    continue;
+                }
+                let d2 = (a.x - b.x).powi(2) + (a.y - b.y).powi(2);
+                if d2 < best {
+                    best = d2;
+                    nb = j;
+                }
+            }
+            let gap = best.sqrt();
+            if !(500.0..=3000.0).contains(&gap) {
+                continue;
+            }
+            let b = &sites[nb];
+            let mx = (a.x + b.x) / 2.0;
+            let mz = (a.y + b.y) / 2.0;
+            // Skip borders a third site owns (same guard as region tests).
+            let owned_by_third = sites.iter().enumerate().any(|(k, s)| {
+                k != i
+                    && k != nb
+                    && ((s.x - mx).powi(2) + (s.y - mz).powi(2)).sqrt() < gap / 2.0 - 1e-9
+            });
+            if owned_by_third || !voronoi.is_seam_road(mx, mz) {
+                continue;
+            }
+            let ccx = (mx as i64).div_euclid(n) as i32;
+            let ccz = (mz as i64).div_euclid(n) as i32;
+            let mut seam_cells = 0usize;
+            for cx in ccx - 1..=ccx + 1 {
+                for cy in ccz - 1..=ccz + 1 {
+                    let buf = generate_chunk(cx, cy, &cfg, &voronoi);
+                    let mut index = 0;
+                    for ly in 0..n {
+                        for lx in 0..n {
+                            let wx = i64::from(cx) * n + lx;
+                            let wz = i64::from(cy) * n + ly;
+                            let cell = buf.get_cell(index);
+                            index += 1;
+                            if voronoi.is_seam_road(wx as f64, wz as f64) {
+                                seam_cells += 1;
+                                assert!(
+                                    cell.flags.contains(CellFlags::IS_STREET),
+                                    "seam tear at world ({wx},{wz})"
+                                );
+                                assert!(cell.flags.contains(CellFlags::IS_ARTERIAL));
+                                assert_eq!(cell.height, 0.0);
+                            }
+                        }
+                    }
+                }
+            }
+            assert!(seam_cells >= 10, "seam parkway too thin ({seam_cells})");
+            checked += 1;
+        }
+        assert!(checked > 0, "no seam borders sampled");
+    }
+
+    #[test]
+    fn special_blocks_follow_their_program() {
+        // Plaza blocks build nothing (all interior is pedestrian ground);
+        // market blocks cap at shed height; tower-park blocks raise exactly
+        // one lot.
+        use std::collections::{HashMap, HashSet};
+        let cfg = WorldConfig {
+            seed: 445566,
+            voronoi_site_count: 24,
+            ..Default::default()
+        };
+        let voronoi = VoronoiDiagram::generate(cfg.seed, cfg.voronoi_site_count);
+        const SPREAD: [i32; 7] = [-150, -60, -20, 0, 20, 60, 150];
+        // (block, chunk-frame params) → cells. Frame/params vary per cell, so
+        // regroup by lattice block recomputed per cell (public API only).
+        let mut plaza_blocks: HashSet<(i64, i64)> = HashSet::new();
+        let mut market_tall = false;
+        let mut towerpark_lots: HashMap<(i64, i64), HashSet<u64>> = HashMap::new();
+        for &cx in &SPREAD {
+            for &cy in &SPREAD {
+                let buf = generate_chunk(cx, cy, &cfg, &voronoi);
+                let n = i64::from(cfg.chunk_size);
+                let mut index = 0;
+                for ly in 0..n {
+                    for lx in 0..n {
+                        let wx = i64::from(cx) * n + lx;
+                        let wz = i64::from(cy) * n + ly;
+                        let cell = buf.get_cell(index);
+                        index += 1;
+                        let frame = voronoi.district_frame_for(wx as f64, wz as f64);
+                        let params = cfg.blended_zone_params(&cell.zone_affinity);
+                        let block = crate::lot::block_loc(wx, wz, params.block_size, &frame);
+                        let zone = dominant_zone(&cell.zone_affinity);
+                        match special_for(block.bx, block.bz, zone, cfg.seed) {
+                            SpecialKind::Plaza => {
+                                plaza_blocks.insert((block.bx, block.bz));
+                                if !cell.flags.contains(CellFlags::IS_STREET)
+                                    && !cell.flags.contains(CellFlags::IS_SIDEWALK)
+                                {
+                                    assert_eq!(cell.height, 0.0);
+                                    assert!(cell.flags.contains(CellFlags::IS_PLAZA));
+                                }
+                            }
+                            SpecialKind::Market => {
+                                if cell.height > 10.0 {
+                                    market_tall = true;
+                                }
+                            }
+                            SpecialKind::TowerPark => {
+                                if cell.height > 0.0 {
+                                    towerpark_lots
+                                        .entry((block.bx, block.bz))
+                                        .or_default()
+                                        .insert(cell.interior_id);
+                                }
+                            }
+                            SpecialKind::None => {}
+                        }
+                    }
+                }
+            }
+        }
+        assert!(!plaza_blocks.is_empty(), "no plaza blocks sampled");
+        assert!(!market_tall, "market block exceeds shed height");
+        assert!(!towerpark_lots.is_empty(), "no tower-park blocks sampled");
+        for ((bx, bz), lots) in &towerpark_lots {
+            assert_eq!(
+                lots.len(),
+                1,
+                "tower-park block ({bx},{bz}) raises {lots:?}"
+            );
         }
     }
 
@@ -584,27 +966,52 @@ mod tests {
         for &cx in &SPREAD {
             for &cy in &SPREAD {
                 let buf = generate_chunk(cx, cy, &cfg, &voronoi);
-                for cell in buf.cells() {
-                    // Use the same dominance rule as `generate_chunk`.
-                    let zone = dominant_zone(&cell.zone_affinity);
-                    let paved = cell.flags.contains(CellFlags::IS_STREET)
-                        || cell.flags.contains(CellFlags::IS_SIDEWALK);
-                    let has_flag = cell.flags.contains(CellFlags::IS_PARK);
-                    assert!(!paved || !has_flag, "paved cell flagged as park");
-                    if zone == ZoneType::Park {
-                        park_cells += 1;
-                        assert_eq!(has_flag, !paved, "park flag wrong at paved={paved}");
-                        if has_flag {
-                            flagged += 1;
-                        }
-                    } else if zone == ZoneType::Residential {
-                        // Garden blocks: flagged only when unpaved.
-                        if has_flag {
+                let n = i64::from(cfg.chunk_size);
+                let mut index = 0;
+                for ly in 0..n {
+                    for lx in 0..n {
+                        let wx = i64::from(cx) * n + lx;
+                        let wz = i64::from(cy) * n + ly;
+                        let cell = buf.get_cell(index);
+                        index += 1;
+                        // Use the same dominance rule as `generate_chunk`.
+                        let zone = dominant_zone(&cell.zone_affinity);
+                        let paved = cell.flags.contains(CellFlags::IS_STREET)
+                            || cell.flags.contains(CellFlags::IS_SIDEWALK);
+                        let has_flag = cell.flags.contains(CellFlags::IS_PARK);
+                        assert!(!paved || !has_flag, "paved cell flagged as park");
+                        if zone == ZoneType::Park {
+                            park_cells += 1;
+                            // Park green reads as IS_PARK, or as a greenway
+                            // where a street dropped out of the park grid.
+                            let green_any = has_flag || cell.flags.contains(CellFlags::IS_GREENWAY);
+                            assert_eq!(green_any, !paved, "park flag wrong at paved={paved}");
+                            if green_any {
+                                flagged += 1;
+                            }
+                        } else if zone == ZoneType::Residential {
+                            // Garden blocks: flagged only when unpaved.
+                            if has_flag {
+                                assert!(!paved);
+                                flagged += 1;
+                            }
+                        } else if has_flag {
+                            // Tower-park green: non-tower lots of a Downtown
+                            // tower-park block read as park. Recompute the
+                            // block program and require exactly that.
                             assert!(!paved);
+                            let frame = voronoi.district_frame_for(wx as f64, wz as f64);
+                            let params = cfg.blended_zone_params(&cell.zone_affinity);
+                            let block = crate::lot::block_loc(wx, wz, params.block_size, &frame);
+                            assert_eq!(
+                                special_for(block.bx, block.bz, zone, cfg.seed),
+                                SpecialKind::TowerPark,
+                                "IS_PARK on {zone:?}-dominant cell outside tower-park"
+                            );
+                            let slot = crate::lot::lot_slot(&block, params.block_size, cfg.seed);
+                            assert_ne!(slot.slot, slot.count / 2, "tower lot flagged park");
                             flagged += 1;
                         }
-                    } else {
-                        assert!(!has_flag, "IS_PARK set on {zone:?}-dominant cell");
                     }
                 }
             }

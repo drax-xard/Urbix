@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-09-16
+
+### Added
+
+- **Variation pass** (Milestone 12 — breaks intra-district grid monotony;
+  spec in `docs/believable_city.md` §12):
+  - **Street dropout** (`src/street.rs:street_info`, `domain::STREET_DROP`):
+    ~8% of local stretches vanish between arterials (keyed per boundary
+    line + arterial band), merging neighbours into superblocks that end at
+    avenues as T-junctions. Arterials, boulevards, and plazas never drop.
+  - **Greenways** (`IS_GREENWAY`, bit 5; `domain::GREENWAY`): 60% of dropped
+    stretches reopen as linear parks (`Cell` stays 40 B; cbindgen export +
+    `URBIX_FLAG_GREENWAY` shim).
+  - **Diagonal boulevards** (`src/lot.rs:Diagonal`,
+    `src/region.rs:diagonals`): two global seed-derived avenues (X pair 90°
+    apart, 2 cells wide, arterial-flagged, `domain::DIAGONAL`), seamless in
+    world coordinates; diagonal∩grid crossings earn plazas at 15%.
+  - **2-D lot packs** (`src/lot.rs:lot_slot`): up to 3×3 packs per block
+    from the block hash instead of 1-D strips.
+  - **Special blocks** (`src/chunk.rs`, `domain::SPECIAL`): civic `Plaza`
+    squares, `Market` shed rows (≤ 10 u, no landmark boost), `TowerPark`
+    single towers (×1.35) in green blocks.
+  - Stronger fabric: 7 quantized orientations, second warp octave.
+  - `viz`/`interactive` greenway colours, `cli_demo` greenway kind,
+    `walkability` greenway share; `docs/world_generation.md`,
+    `docs/api.md`, `docs/believable_city.md` updated.
+- **Seam parkways**: cells within ~1 cell of a district bisector
+  (`VoronoiDiagram::seam_distance`/`is_seam_road`, exact bisector distance
+  from a top-2 site scan) pave as arterial avenues both grids tee into —
+  borders read as boundary boulevards instead of tearing. Immune to
+  dropout; threaded through `street_info`, the sidewalk ring, and the
+  street-match tests (`docs/believable_city.md` §13).
+
+### Changed
+
+- `street::layout_block` keeps its signature and base-lattice behaviour
+  (no dropout/diagonals); `chunk.rs` consumes the new `street_info`.
+- Pre-12 seeds regenerate with the varied fabric (no fallback).
+
 ## [0.11.0] — 2026-09-16
 
 ### Added

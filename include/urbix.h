@@ -391,6 +391,11 @@ typedef uint8_t CellFlags;
  * No-build, height 0; renderers draw curb/pavement, not asphalt.
  */
 #define CellFlags_IS_SIDEWALK (1 << 4)
+/**
+ * The cell is a greenway: a dropped street segment reborn as a linear
+ * park. No-build, height 0; renderers draw green, like `IS_PARK`.
+ */
+#define CellFlags_IS_GREENWAY (1 << 5)
 
 /**
  * Deterministic id of a built lot's future interior.
@@ -569,6 +574,7 @@ void urbix_set_config(struct UrbixEngine *engine, const struct WorldConfig *conf
 #define URBIX_FLAG_ARTERIAL CellFlags_IS_ARTERIAL
 #define URBIX_FLAG_PLAZA CellFlags_IS_PLAZA
 #define URBIX_FLAG_SIDEWALK CellFlags_IS_SIDEWALK
+#define URBIX_FLAG_GREENWAY CellFlags_IS_GREENWAY
 
 /* ---- Compile-time layout checks (inside include guard) ---- */
 _Static_assert(sizeof(UrbixChunkHeader) == 32, "UrbixChunkHeader must be 32 bytes");

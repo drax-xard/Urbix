@@ -138,6 +138,14 @@ fn colour_cell(cell: &Cell, mode: &str) -> [u8; 3] {
     if cell.flags.contains(CellFlags::IS_SIDEWALK) {
         return SIDEWALK_RGB;
     }
+    // Greenways read as park green in every mode (vivid in walk mode).
+    if cell.flags.contains(CellFlags::IS_GREENWAY) {
+        return if mode == "walk" {
+            WALK_PARK_RGB
+        } else {
+            ZONE_HUES[4]
+        };
+    }
     if cell.flags.contains(CellFlags::IS_STREET) {
         return ROAD_RGB;
     }
@@ -272,6 +280,8 @@ pub fn interior_report(config: &WorldConfig, world_x: i64, world_z: i64, cell: &
 
     let kind = if cell.flags.contains(CellFlags::IS_PLAZA) {
         "plaza"
+    } else if cell.flags.contains(CellFlags::IS_GREENWAY) {
+        "greenway"
     } else if cell.flags.contains(CellFlags::IS_ARTERIAL) {
         "arterial street"
     } else if cell.flags.contains(CellFlags::IS_SIDEWALK) {

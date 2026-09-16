@@ -47,6 +47,7 @@ progress / ⬜ pending). Current version: `0.9.0` (see `CHANGELOG.md`).
 | M9 — Interior layout generation | ✅ Done (0.9.0) |
 | M10 — Interior FFI export | ✅ Done (0.10.0) |
 | M11 — Believable city (walkability-first, varied fabric) | ✅ Done (0.11.0, see `docs/believable_city.md`) |
+| M12 — Variation pass (dropout, boulevards, specials) | ✅ Done (0.12.0, see `docs/believable_city.md` §12) |
 
 M9 completes data-driven interior layout generation: each built lot gets an
 `InteriorContext` (zone, blended affinity, footprint, height→floor derivation,

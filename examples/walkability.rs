@@ -1,9 +1,10 @@
 //! # walkability.rs — walkability metrics for the generated city
 //!
-//! A headless acceptance check for Milestone 11: generates an `extent ×
-//! extent` grid of chunks and reports ground-plane statistics — paved shares,
-//! plaza counts, mean uninterrupted street-wall length, junction mix, and
-//! tall-cell density per km² (scale canon: 1 cell = 4 m, so one cell is 16 m²).
+//! A headless acceptance check for Milestones 11–12: generates an `extent ×
+//! extent` grid of chunks and reports ground-plane statistics — paved shares
+//! (streets, arterials, sidewalks, plazas, greenways), plaza counts, mean
+//! uninterrupted street-wall length, junction mix, and tall-cell density per
+//! km² (scale canon: 1 cell = 4 m, so one cell is 16 m²).
 //!
 //! ## Usage
 //!
@@ -101,6 +102,7 @@ fn main() -> ExitCode {
     let mut sidewalk = 0u64;
     let mut plaza = 0u64;
     let mut park = 0u64;
+    let mut greenway = 0u64;
     let mut built = 0u64;
     let mut landmark_tall = 0u64;
     let mut junctions = 0u64;
@@ -156,6 +158,10 @@ fn main() -> ExitCode {
                         park += 1;
                         run = 0;
                     }
+                    if f.contains(CellFlags::IS_GREENWAY) {
+                        greenway += 1;
+                        run = 0;
+                    }
                     if cell.height > 0.0 {
                         built += 1;
                         run += 1;
@@ -197,16 +203,17 @@ fn main() -> ExitCode {
         extent * extent
     );
     println!(
-        "  paved: street {:.1}%  arterial {:.1}%  sidewalk {:.1}%  plazas {} ({:.2}/km2)",
+        "  paved: street {:.1}%  arterial {:.1}%  sidewalk {:.1}%  plaza cells {} ({:.1}%)",
         pct(street),
         pct(arterial),
         pct(sidewalk),
         plaza,
-        plaza as f64 / area_km2.max(1e-9)
+        pct(plaza)
     );
     println!(
-        "  green/built: park {:.1}%  built {:.1}%  tall cells {} ({:.1}/km2)",
+        "  green/built: park {:.1}%  greenway {:.1}%  built {:.1}%  tall cells {} ({:.1}/km2)",
         pct(park),
+        pct(greenway),
         pct(built),
         landmark_tall,
         landmark_tall as f64 / area_km2.max(1e-9)

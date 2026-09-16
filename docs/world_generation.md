@@ -59,7 +59,9 @@ Diagnostics covered in `src/region.rs` tests: determinism, near-1.0 at a site,
 unit-sum, and bisector-sweep continuity — plus the Milestone 11 district
 rules: CBD anchor (site nearest the origin is Downtown), adjacency buffer
 (Industrial re-tagged Commercial when its nearest neighbour is Residential),
-quantized district frames, and the `1.0–1.5` CBD peak factor.
+quantized district frames, and the `1.0–1.5` CBD peak factor. Milestone 12
+adds two global diagonal boulevards per diagram (an X pair 90° apart, defined
+in world coordinates so they cross chunks and districts seamlessly).
 
 ## 3. Chunk Layer (`src/chunk.rs`)
 
@@ -72,18 +74,25 @@ cy, &config, &voronoi) -> ChunkBuffer` walks `local_x/y` in row-major order:
    heights/density/palette blended; `block_size`/`arterial_every` snapped from
    the dominant zone so transition bands never average grid periods.
 4. `frame = voronoi.district_frame_for(...)` — the district's quantized
-   rotation + sine warp (`src/lot.rs`).
-5. `flags = street::layout_block(world_x, world_z, &params, &frame)`
+   rotation (7 angles) + two-octave sine warp (`src/lot.rs`).
+5. `info = street::street_info(world_x, world_z, &params, &frame, diags, seam, seed)`
    (`src/street.rs`) — 1-cell local streets plus 2-cell arterials every
-   `arterial_every` streets (`IS_ARTERIAL`). Intersections in
-   Downtown/Commercial become `IS_PLAZA` on a 2% hash.
-6. Sidewalk ring: a non-street cell abutting any street cell (same framed
-   query on 4-neighbours) becomes `IS_SIDEWALK` — paved, no-build.
-7. Lots: `lot::block_loc` + `lot::lot_slot` split the block interior into
-   1–6 street-facing strips with one stable `lot_id`
-   (`domain::LOT_SPLIT`). `building::assign_building` derives one
-   height/palette per lot (block-noise clumping, CBD boost, corner bonus,
-   landmark 1.5×) with ±10% per-cell jitter (`domain::LOT_HEIGHT`).
+   `arterial_every` streets (`IS_ARTERIAL`), two global diagonal boulevards
+   (arterial, world-space lines), district-seam parkways (cells within ~1
+   cell of a Voronoi bisector pave as arterial avenues both grids tee into),
+   and hashed dropout: ~8% of local stretches vanish between arterials
+   (superblocks), reopening as `IS_GREENWAY` linear parks 60% of the time.
+   Intersections in Downtown/Commercial become `IS_PLAZA` on a 2% hash (15%
+   where a diagonal crosses the grid).
+6. Sidewalk ring: a non-street, non-green cell abutting any street cell (same
+   full query on 4-neighbours) becomes `IS_SIDEWALK` — paved, no-build.
+7. Lots: `lot::block_loc` + `lot::lot_slot` split the block interior into a
+   2-D pack of up to 9 lots (`domain::LOT_SPLIT`).
+   `building::assign_building` derives one height/palette per lot
+   (block-noise clumping, CBD boost, corner bonus, landmark 1.5×) with ±10%
+   per-cell jitter (`domain::LOT_HEIGHT`). Special blocks rewrite the
+   program: civic `Plaza` squares, `Market` shed rows (≤ 10 u), `TowerPark`
+   single towers (×1.35) in green blocks (`domain::SPECIAL`).
 8. If `height > 0`, `interior_id = interior_id_for_lot(block, slot, seed)`
    (`src/chunk.rs:225`, `domain::INTERIOR`) — one key per lot, shared by
    every cell in it.

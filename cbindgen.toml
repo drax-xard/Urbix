@@ -51,6 +51,10 @@ exclude = [
     "ORIENTATION",
     "LANDMARK",
     "PLAZA",
+    "STREET_DROP",
+    "DIAGONAL",
+    "SPECIAL",
+    "GREENWAY",
 ]
 
 # Rename Rust names to the Urbix-prefixed names used in §2.3.

@@ -33,6 +33,7 @@ const ROAD_RGB: [u8; 3] = [40, 40, 46];
 const ARTERIAL_RGB: [u8; 3] = [86, 72, 110];
 const SIDEWALK_RGB: [u8; 3] = [118, 118, 128];
 const PLAZA_RGB: [u8; 3] = [216, 200, 160];
+const GREENWAY_RGB: [u8; 3] = [140, 205, 120];
 
 fn dominant_zone(cell: &Cell) -> usize {
     let mut best = 0;
@@ -56,6 +57,9 @@ fn colour_cell(cell: &Cell, mode: &str, config: &WorldConfig) -> [u8; 3] {
     }
     if cell.flags.contains(CellFlags::IS_SIDEWALK) {
         return SIDEWALK_RGB;
+    }
+    if cell.flags.contains(CellFlags::IS_GREENWAY) {
+        return GREENWAY_RGB;
     }
     if cell.flags.contains(CellFlags::IS_STREET) {
         return ROAD_RGB;

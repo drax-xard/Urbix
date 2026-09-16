@@ -83,6 +83,14 @@ pub mod domain {
     pub const LANDMARK: u8 = 54;
     /// Plaza intersections (see `chunk.rs`).
     pub const PLAZA: u8 = 55;
+    /// Dropped street segments / superblocks (see `street.rs`).
+    pub const STREET_DROP: u8 = 56;
+    /// Global diagonal boulevards (see `region.rs`).
+    pub const DIAGONAL: u8 = 57;
+    /// Special blocks: plaza / market / tower-park (see `chunk.rs`).
+    pub const SPECIAL: u8 = 58;
+    /// Dropped streets reborn as linear parks (see `street.rs`).
+    pub const GREENWAY: u8 = 59;
 }
 
 /// Hash a coordinate pair under a seed and domain into a `u64`.

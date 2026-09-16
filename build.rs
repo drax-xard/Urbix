@@ -84,6 +84,7 @@ fn main() {
         "#define URBIX_FLAG_ARTERIAL CellFlags_IS_ARTERIAL\n",
         "#define URBIX_FLAG_PLAZA CellFlags_IS_PLAZA\n",
         "#define URBIX_FLAG_SIDEWALK CellFlags_IS_SIDEWALK\n",
+        "#define URBIX_FLAG_GREENWAY CellFlags_IS_GREENWAY\n",
         "\n/* ---- Compile-time layout checks (inside include guard) ---- */\n",
         "_Static_assert(sizeof(UrbixChunkHeader) == 32, \"UrbixChunkHeader must be 32 bytes\");\n",
         "_Static_assert(sizeof(UrbixCell) == 40,      \"UrbixCell must be 40 bytes\");\n",

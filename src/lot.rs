@@ -29,23 +29,28 @@
 //! frame; the rounding is deterministic and identical for every caller.
 
 use crate::hash::{domain, hash_coords, hash_unit};
-
 /// Per-district street orientation frame.
 ///
-/// `angle_rad` is quantized to `{0°, ±12°, ±24°}` so neighbouring fabrics
-/// meet with legible jogs rather than slivers. `warp_amp` (0.5–1.5 cells)
-/// and `warp_len` (40–80 cells) bend the grid gently; `warp_phase` decorrelates
-/// districts. The identity frame reproduces the legacy axis-aligned grid.
+/// `angle_rad` is quantized (see `region.rs`) so neighbouring fabrics meet
+/// with legible jogs rather than slivers. Two sine warp octaves bend the
+/// grid: the long octave (`warp_amp` 0.5–1.5 cells over `warp_len` 40–80
+/// cells) drifts avenues, the short octave (`warp_amp2` 0.3–1.0 over
+/// `warp_len2` 12–30) wiggles individual streets. The identity frame
+/// reproduces the legacy axis-aligned grid.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DistrictFrame {
     /// Street rotation in radians (quantized, see above).
     pub angle_rad: f64,
-    /// Sine warp amplitude in cells.
+    /// Long-octave sine warp amplitude in cells.
     pub warp_amp: f64,
-    /// Sine warp wavelength in cells.
+    /// Long-octave sine warp wavelength in cells.
     pub warp_len: f64,
-    /// Sine warp phase in radians.
+    /// Sine warp phase in radians (shared seed for both octaves).
     pub warp_phase: f64,
+    /// Short-octave sine warp amplitude in cells.
+    pub warp_amp2: f64,
+    /// Short-octave sine warp wavelength in cells.
+    pub warp_len2: f64,
 }
 
 impl DistrictFrame {
@@ -65,30 +70,79 @@ impl DistrictFrame {
             warp_amp: 0.0,
             warp_len: 64.0,
             warp_phase: 0.0,
+            warp_amp2: 0.0,
+            warp_len2: 20.0,
         }
     }
 
     /// Map absolute world cell coordinates into the district's local frame.
     ///
-    /// Applies the sine warp first (in world space, so warps stay smooth
-    /// across blocks) then rotates by `-angle` about the origin. The result
-    /// is in "local cells" (fractional); callers quantize with `round()`
-    /// before running the integer block grid.
+    /// Applies both sine warp octaves first (in world space, so warps stay
+    /// smooth across blocks) then rotates by `-angle` about the origin. The
+    /// result is in "local cells" (fractional); callers quantize with
+    /// `round()` before running the integer block grid.
     #[must_use]
     pub fn transform(&self, world_x: i64, world_z: i64) -> (f64, f64) {
         let x = world_x as f64;
         let z = world_z as f64;
-        let (wx, wz) = if self.warp_amp > 0.0 {
-            let two_pi = std::f64::consts::TAU;
-            let ax = self.warp_amp * (two_pi * z / self.warp_len + self.warp_phase).sin();
-            let az = self.warp_amp * (two_pi * x / self.warp_len + self.warp_phase * 1.7).sin();
-            (x + ax, z + az)
-        } else {
-            (x, z)
-        };
+        let two_pi = std::f64::consts::TAU;
+        let mut ax = 0.0;
+        let mut az = 0.0;
+        if self.warp_amp > 0.0 {
+            ax += self.warp_amp * (two_pi * z / self.warp_len + self.warp_phase).sin();
+            az += self.warp_amp * (two_pi * x / self.warp_len + self.warp_phase * 1.7).sin();
+        }
+        if self.warp_amp2 > 0.0 {
+            ax += self.warp_amp2 * (two_pi * z / self.warp_len2 + self.warp_phase * 2.3).sin();
+            az += self.warp_amp2 * (two_pi * x / self.warp_len2 + self.warp_phase * 0.7).sin();
+        }
+        let (wx, wz) = (x + ax, z + az);
         // Rotate by -angle: local = Rot(-a) * world.
         let (s, c) = self.angle_rad.sin_cos();
         (c * wx + s * wz, -s * wx + c * wz)
+    }
+}
+
+/// A global diagonal boulevard: a city-scale avenue cutting across district
+/// grids, Broadway-style.
+///
+/// Defined in absolute world coordinates (angle + signed offset from the
+/// origin), so it is seamless across chunks and districts by construction.
+/// Cells within `half_width` of the line read as 2-cell arterial streets;
+/// where a diagonal crosses the local grid, `chunk.rs` stamps plazas.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Diagonal {
+    /// Boulevard direction in radians.
+    pub angle_rad: f64,
+    /// Signed perpendicular offset from the origin, in cells.
+    pub offset: f64,
+    /// Half-width in cells (1.0 → a 2-cell avenue).
+    pub half_width: f64,
+}
+
+impl Diagonal {
+    /// Perpendicular distance from a world cell to the boulevard centreline.
+    ///
+    /// ## Example
+    ///
+    /// ```
+    /// use urbix::lot::Diagonal;
+    /// use std::f64::consts::FRAC_PI_4;
+    /// let d = Diagonal { angle_rad: 0.0, offset: 0.0, half_width: 1.0 };
+    /// assert!(d.distance(5, 0) < 1.0); // on the east-running line
+    /// assert!(d.distance(5, 3) > 1.0); // three cells off it
+    /// ```
+    #[must_use]
+    pub fn distance(&self, world_x: i64, world_z: i64) -> f64 {
+        let (s, c) = self.angle_rad.sin_cos();
+        // Normal form: n = (-sin a, cos a); dist = |n·p - offset|.
+        ((-(world_x as f64) * s + (world_z as f64) * c) - self.offset).abs()
+    }
+
+    /// Whether a world cell lies on the boulevard pavement.
+    #[must_use]
+    pub fn covers(&self, world_x: i64, world_z: i64) -> bool {
+        self.distance(world_x, world_z) <= self.half_width
     }
 }
 
@@ -135,29 +189,26 @@ pub fn block_loc(world_x: i64, world_y: i64, block_size: u8, frame: &DistrictFra
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LotSlot {
     /// Stable lot key: unique per `(block, slot)`, shared by every cell in
-    /// the lot. Folded as `bx * 8 + slot` so neighbouring blocks never
-    /// collide (slot < 8 always).
+    /// the lot. Folded as `bx * 16 + slot` so neighbouring blocks never
+    /// collide (slot < 16 always).
     pub lot_id: u64,
     /// Index of this lot within the block (`0..count`).
     pub slot: u8,
     /// Number of lots in the block.
     pub count: u8,
-    /// Whether the lot touches a street on two axes (first/last strip, or a
-    /// single-lot block). Corner lots earn a height bonus in `building.rs`.
+    /// Whether the lot touches streets on two axes (edge pack on both axes,
+    /// or a single-lot block). Corner lots earn a height bonus in
+    /// `building.rs`.
     pub corner: bool,
 }
 
-/// Split a block interior into street-facing lots and identify this cell's lot.
+/// Split a block interior into lots and identify this cell's lot.
 ///
 /// The buildable interior is `1..block_size` on each axis (offset 0 is the
-/// street). Lots are 1-D strips along one axis — every lot keeps street
-/// frontage, which is what makes ground floors walkable. The split axis and
-/// count derive from the block hash (`domain::LOT_SPLIT`) so they are stable
-/// per block:
-///
-/// - `count = clamp(buildable / 4, 1, 6)` (a 10-cell frontage yields 2 lots).
-/// - Axis alternates per block so neighbouring blocks vary.
-/// - `slot = pos * count / buildable` along the split axis.
+/// street). Lots form a small 2-D pack — up to 3 × 3 per block from the block
+/// hash (`domain::LOT_SPLIT`) — so neighbouring blocks vary in grain while
+/// every lot keeps street frontage. Narrow strips emerge naturally when one
+/// axis rolls 1. Counts clamp so a pack never exceeds 9 lots.
 ///
 /// Small blocks (`block_size <= 5`) stay single-lot.
 ///
@@ -175,7 +226,7 @@ pub fn lot_slot(loc: &BlockLoc, block_size: u8, seed: u64) -> LotSlot {
     let b = i64::from(block_size.max(1));
     if b <= 5 {
         // Tiny block: one lot touching every street — trivially a corner.
-        let lot_id = hash_coords(loc.bx.wrapping_mul(8), loc.bz, seed, domain::LOT_SPLIT);
+        let lot_id = hash_coords(loc.bx.wrapping_mul(16), loc.bz, seed, domain::LOT_SPLIT);
         return LotSlot {
             lot_id,
             slot: 0,
@@ -185,18 +236,22 @@ pub fn lot_slot(loc: &BlockLoc, block_size: u8, seed: u64) -> LotSlot {
     }
     // Buildable run excludes the street row at offset 0.
     let buildable = b - 1;
-    let axis_roll = hash_unit(loc.bx, loc.bz, seed, domain::LOT_SPLIT);
-    let along_x = axis_roll < 0.5;
-    let pos = if along_x {
-        (loc.rx - 1).clamp(0, buildable - 1)
-    } else {
-        (loc.rz - 1).clamp(0, buildable - 1)
-    };
-    let count = ((buildable / 4).clamp(1, 6)) as u8;
-    let slot = ((pos * i64::from(count) / buildable).clamp(0, i64::from(count) - 1)) as u8;
+    // Pack shape from the block hash: 1–3 lots per axis, tightened for
+    // narrow blocks so lots never sliver.
+    let per_axis = (buildable / 5).clamp(1, 3);
+    let nx_roll = hash_unit(loc.bx, loc.bz, seed, domain::LOT_SPLIT);
+    let nz_roll = hash_unit(loc.bz, loc.bx, seed, domain::LOT_SPLIT);
+    let nx = (1 + (nx_roll * per_axis as f32) as i64).clamp(1, per_axis) as u8;
+    let nz = (1 + (nz_roll * per_axis as f32) as i64).clamp(1, per_axis) as u8;
+    let ix = ((loc.rx - 1).clamp(0, buildable - 1) * i64::from(nx) / buildable)
+        .clamp(0, i64::from(nx) - 1);
+    let iz = ((loc.rz - 1).clamp(0, buildable - 1) * i64::from(nz) / buildable)
+        .clamp(0, i64::from(nz) - 1);
+    let slot = (iz * i64::from(nx) + ix) as u8;
+    let count = nx * nz;
     let lot_id = hash_coords(
-        loc.bx.wrapping_mul(8).wrapping_add(i64::from(slot)),
-        loc.bz.wrapping_add(if along_x { 0 } else { 1009 }),
+        loc.bx.wrapping_mul(16).wrapping_add(i64::from(slot)),
+        loc.bz,
         seed,
         domain::LOT_SPLIT,
     );
@@ -204,7 +259,7 @@ pub fn lot_slot(loc: &BlockLoc, block_size: u8, seed: u64) -> LotSlot {
         lot_id,
         slot,
         count,
-        corner: slot == 0 || slot + 1 == count,
+        corner: (ix == 0 || ix + 1 == i64::from(nx)) && (iz == 0 || iz + 1 == i64::from(nz)),
     }
 }
 
@@ -285,11 +340,25 @@ mod tests {
         let f = DistrictFrame::identity();
         for b in [6u8, 9, 11, 14, 18, 32] {
             for x in 0..40 {
-                let lot = lot_slot(&block_loc(x, 5, b, &f), b, 1234);
-                assert!((1..=6).contains(&lot.count), "b={b} count={}", lot.count);
-                assert!(lot.slot < lot.count, "b={b}");
+                for z in 0..40 {
+                    let lot = lot_slot(&block_loc(x, z, b, &f), b, 1234);
+                    assert!((1..=9).contains(&lot.count), "b={b} count={}", lot.count);
+                    assert!(lot.slot < lot.count, "b={b}");
+                }
             }
         }
+    }
+
+    #[test]
+    fn packs_vary_grain_across_blocks() {
+        // Neighbouring blocks roll different pack shapes from the block hash.
+        let f = DistrictFrame::identity();
+        let mut shapes = std::collections::HashSet::new();
+        for bx in 0..12 {
+            let lot = lot_slot(&block_loc(bx * 11 + 5, 5, 11, &f), 11, 99);
+            shapes.insert(lot.count);
+        }
+        assert!(shapes.len() > 1, "all blocks share one pack shape");
     }
 
     #[test]

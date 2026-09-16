@@ -579,6 +579,30 @@ still bounded. MINOR bump to `0.11.0` (`ZoneParams`/`WorldConfig` grow).
 
 ---
 
+### Milestone 12 — Variation pass (intra-district texture) — ✅ DONE
+
+**Goal:** break the perfect-grid monotony *within* districts (M11 varied
+fabrics between them) while keeping every determinism/FFI invariant.
+Specified in `docs/believable_city.md` §12.
+
+| File | Deliverable |
+|---|---|
+| `src/street.rs` | `street_info` (dropout ~8% keyed per line+band, 60% greenways, diagonals); `layout_block` unchanged base lattice. |
+| `src/lot.rs` | `Diagonal` type, 2-octave `DistrictFrame`, 2-D lot packs (≤ 9). |
+| `src/region.rs` | Two global diagonal boulevards (X pair), 7-angle frames. |
+| `src/region.rs` | Seam parkways: bisector-distance roads both grids tee into. |
+| `src/chunk.rs` | Greenway/special-block wiring, diagonal-crossing plazas. |
+| `src/data.rs` | `IS_GREENWAY` (bit 5); `Cell` stays 40 B. |
+
+**Tests:** dropout minority + arterial immunity; greenway/diagonal presence;
+special-block programs; lattice regression intact.
+
+**Exit criteria:** `walkability` shows greenways + superblocks; viz shows
+boulevards cutting grids; 1000-step walk still bounded. MINOR bump to
+`0.12.0` (new wire bit).
+
+---
+
 ## 8. Future Extensions (explicitly deferred)
 
 These are deliberately out of scope for the initial build but are designed for

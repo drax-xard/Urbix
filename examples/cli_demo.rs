@@ -130,6 +130,8 @@ pub fn interior_report(config: &WorldConfig, world_x: i64, world_z: i64, cell: &
 
     let kind = if cell.flags.contains(CellFlags::IS_PLAZA) {
         "plaza"
+    } else if cell.flags.contains(CellFlags::IS_GREENWAY) {
+        "greenway"
     } else if cell.flags.contains(CellFlags::IS_ARTERIAL) {
         "arterial street"
     } else if cell.flags.contains(CellFlags::IS_SIDEWALK) {

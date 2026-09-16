@@ -25,7 +25,7 @@
 use crate::config::WorldConfig;
 use crate::hash::domain;
 use crate::hash::{hash_coords, hash_unit};
-use crate::lot::DistrictFrame;
+use crate::lot::{Diagonal, DistrictFrame};
 use crate::zones::{ZoneType, ZONE_COUNT};
 
 /// Half-extent of the coordinate span sites are spread across. Sites are
@@ -74,12 +74,16 @@ pub struct VoronoiSite {
 /// legible CBD anchor for the skyline peak), and Industrial sites whose
 /// nearest neighbour is Residential are re-tagged Commercial (no grimy
 /// factory abutting quiet homes without a buffer).
+///
+/// Milestone 12 adds two global diagonal boulevards (Broadway-style avenues
+/// cutting across district grids, derived from the seed) alongside the sites.
 #[derive(Clone, Debug, PartialEq)]
 pub struct VoronoiDiagram {
     sites: Vec<VoronoiSite>,
     shepard_power: f64,
     shepard_epsilon: f64,
     seed: u64,
+    diagonals: Vec<Diagonal>,
 }
 
 impl VoronoiDiagram {
@@ -174,11 +178,33 @@ impl VoronoiDiagram {
                 }
             }
         }
+        // Global diagonal boulevards: two seed-derived avenues spanning the
+        // whole map in world coordinates, so they cross chunks and districts
+        // seamlessly. The first runs 30–60° off the cardinal grid; the second
+        // crosses it at 90° (an X pair, always distinct gestures). Offsets
+        // spread across the site span so boulevards land somewhere built.
+        let base = hash_unit(0, 0, seed, domain::DIAGONAL);
+        let angle0_deg = 30.0 + base * 30.0;
+        let sign = if hash_unit(0, 1, seed, domain::DIAGONAL) < 0.5 {
+            1.0f64
+        } else {
+            -1.0f64
+        };
+        let mut diagonals = Vec::with_capacity(2);
+        for (k, extra_deg) in [(0i64, 0.0f64), (1i64, 90.0f64)] {
+            let span_choice = hash_unit(k, 2, seed, domain::DIAGONAL) as f64 * 2.0 - 1.0;
+            diagonals.push(Diagonal {
+                angle_rad: (sign * angle0_deg as f64 + extra_deg) * std::f64::consts::PI / 180.0,
+                offset: span_choice * span,
+                half_width: 1.0,
+            });
+        }
         Self {
             sites,
             shepard_power: config.shepard_power,
             shepard_epsilon: config.shepard_epsilon,
             seed,
+            diagonals,
         }
     }
 
@@ -186,6 +212,15 @@ impl VoronoiDiagram {
     #[must_use]
     pub fn sites(&self) -> &[VoronoiSite] {
         &self.sites
+    }
+
+    /// Borrow the global diagonal boulevards (two seed-derived avenues).
+    ///
+    /// Defined in absolute world coordinates, so they are seamless across
+    /// chunks and districts by construction.
+    #[must_use]
+    pub fn diagonals(&self) -> &[Diagonal] {
+        &self.diagonals
     }
 
     /// Index of the site nearest `(world_x, world_z)` (linear scan; the map
@@ -209,14 +244,78 @@ impl VoronoiDiagram {
         best_idx
     }
 
+    /// Distance from a world point to the nearest district seam (Voronoi
+    /// bisector), in cells.
+    ///
+    /// Uses the two nearest sites: for the perpendicular bisector the exact
+    /// distance is `|d1² − d2²| / (2·gap)`, a pure function of position, so
+    /// every chunk agrees on every cell. Returns `INFINITY` for diagrams
+    /// with fewer than two sites (no seam can exist).
+    ///
+    /// ## Example
+    ///
+    /// ```
+    /// use urbix::region::VoronoiDiagram;
+    /// let d = VoronoiDiagram::generate(42, 32);
+    /// // Atop a site we are half a site-gap from any seam: far away.
+    /// let s = d.sites()[0];
+    /// assert!(d.seam_distance(s.x, s.y) > 1.0);
+    /// ```
+    #[must_use]
+    pub fn seam_distance(&self, world_x: f64, world_z: f64) -> f64 {
+        if self.sites.len() < 2 {
+            return f64::INFINITY;
+        }
+        let mut b1 = 0usize;
+        let mut b2 = 0usize;
+        let mut d1 = f64::INFINITY;
+        let mut d2 = f64::INFINITY;
+        for (i, site) in self.sites.iter().enumerate() {
+            let dx = site.x - world_x;
+            let dy = site.y - world_z;
+            let d = dx * dx + dy * dy;
+            if d < d1 {
+                d2 = d1;
+                b2 = b1;
+                d1 = d;
+                b1 = i;
+            } else if d < d2 {
+                d2 = d;
+                b2 = i;
+            }
+        }
+        if !d2.is_finite() {
+            return f64::INFINITY;
+        }
+        let a = &self.sites[b1];
+        let b = &self.sites[b2];
+        let gap = ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt();
+        if gap < 1e-9 {
+            return f64::INFINITY;
+        }
+        (d2 - d1).abs() / (2.0 * gap)
+    }
+
+    /// Whether a world cell carries the district-seam parkway.
+    ///
+    /// Cells within ~1 cell of a bisector become a continuous boundary
+    /// boulevard that both adjoining grids tee into — the seam reads as a
+    /// parkway instead of a tear. World-space and chunk-consistent like
+    /// everything else in this module.
+    #[must_use]
+    pub fn is_seam_road(&self, world_x: f64, world_z: f64) -> bool {
+        self.seam_distance(world_x, world_z) <= 1.0
+    }
+
     /// Per-district street orientation frame at a world coordinate.
     ///
     /// Piecewise constant per nearest site (not blended): every cell whose
     /// nearest site is `i` shares site `i`'s frame, so fabrics differ per
     /// district and meet with intentional jogs at bisectors. The frame
     /// derives from `(site_idx, seed, domain::ORIENTATION)` hashes —
-    /// quantized to `{0°, ±12°, ±24°}` with warp `0.5–1.5` cells over
-    /// `40–80` cells — so it is stable across chunks and runs.
+    /// quantized to `{0°, ±10°, ±18°, ±27°}` with a long warp octave
+    /// (`0.5–1.5` cells over `40–80`) plus a short wiggle octave (`0.3–1.0`
+    /// over `12–30`) — so it is stable across chunks and runs.
     ///
     /// ## Example
     ///
@@ -232,7 +331,7 @@ impl VoronoiDiagram {
             return DistrictFrame::identity();
         }
         let idx = self.nearest_site_idx(world_x, world_z) as i64;
-        let angles = [0.0, 12.0, -12.0, 24.0, -24.0];
+        let angles = [0.0, 10.0, -10.0, 18.0, -18.0, 27.0, -27.0];
         let pick =
             (hash_coords(idx, 0, self.seed, domain::ORIENTATION) % angles.len() as u64) as usize;
         let angle_rad = angles[pick] * std::f64::consts::PI / 180.0;
@@ -240,11 +339,15 @@ impl VoronoiDiagram {
         let len = 40.0 + hash_unit(idx, 2, self.seed, domain::ORIENTATION) as f64 * 40.0;
         let phase = hash_unit(idx, 3, self.seed, domain::ORIENTATION) as f64
             * std::f64::consts::TAU as f32 as f64;
+        let amp2 = 0.3 + hash_unit(idx, 4, self.seed, domain::ORIENTATION) as f64 * 0.7;
+        let len2 = 12.0 + hash_unit(idx, 5, self.seed, domain::ORIENTATION) as f64 * 18.0;
         DistrictFrame {
             angle_rad,
             warp_amp: amp,
             warp_len: len,
             warp_phase: phase,
+            warp_amp2: amp2,
+            warp_len2: len2,
         }
     }
 
@@ -466,16 +569,106 @@ mod tests {
         let d = VoronoiDiagram::generate(42, 32);
         let a = d.district_frame_for(100.0, 200.0);
         assert_eq!(a, d.district_frame_for(100.0, 200.0));
-        // Angle is one of the quantized set; warp stays in band.
+        // Angle is one of the quantized set; warps stay in band.
         let deg = a.angle_rad * 180.0 / std::f64::consts::PI;
         assert!(
-            [0.0, 12.0, -12.0, 24.0, -24.0]
+            [0.0, 10.0, -10.0, 18.0, -18.0, 27.0, -27.0]
                 .iter()
                 .any(|v| (v - deg).abs() < 1e-9),
             "angle {deg} not quantized"
         );
         assert!((0.5..=1.5).contains(&a.warp_amp));
         assert!((40.0..=80.0).contains(&a.warp_len));
+        assert!((0.3..=1.0).contains(&a.warp_amp2));
+        assert!((12.0..=30.0).contains(&a.warp_len2));
+    }
+
+    #[test]
+    fn diagonals_are_deterministic_distinct_and_global() {
+        // Two boulevards per diagram, stable across calls, 90° apart.
+        let d = VoronoiDiagram::generate(42, 32);
+        let ds = d.diagonals();
+        assert_eq!(ds.len(), 2);
+        assert_eq!(ds, VoronoiDiagram::generate(42, 32).diagonals());
+        let sep =
+            ((ds[0].angle_rad - ds[1].angle_rad).abs() * 180.0 / std::f64::consts::PI) % 180.0;
+        assert!((sep - 90.0).abs() < 1e-6, "separation {sep}");
+        // Global: defined in world coords, so a boulevard crosses the map —
+        // sweeping perpendicular finds pavement far from the origin.
+        for diag in ds {
+            let mut covered = 0;
+            for t in (-5000..5000).step_by(7) {
+                // Walk the normal direction; count cells on the pavement.
+                let nx = -diag.angle_rad.sin();
+                let nz = diag.angle_rad.cos();
+                let wx = (diag.offset * nx + t as f64 * diag.angle_rad.cos()) as i64;
+                let wz = (diag.offset * nz + t as f64 * diag.angle_rad.sin()) as i64;
+                if diag.covers(wx, wz) {
+                    covered += 1;
+                }
+            }
+            assert!(covered > 100, "boulevard covers nothing");
+        }
+    }
+
+    #[test]
+    fn seam_road_hugs_bisectors_not_site_cores() {
+        // Midpoints between nearby sites sit on the seam; site cores are far.
+        // Pairs whose border never reaches the midpoint (a third site owns
+        // it) are skipped — the assertion only covers true a/b borders.
+        let d = VoronoiDiagram::generate(42, 32);
+        let sites = d.sites();
+        let mut found = 0;
+        for (i, a) in sites.iter().enumerate() {
+            // Nearest neighbour of `a`.
+            let mut best = f64::INFINITY;
+            let mut nb = 0usize;
+            for (j, b) in sites.iter().enumerate() {
+                if i == j {
+                    continue;
+                }
+                let d2 = (a.x - b.x).powi(2) + (a.y - b.y).powi(2);
+                if d2 < best {
+                    best = d2;
+                    nb = j;
+                }
+            }
+            if best.sqrt() > 3000.0 {
+                continue; // only close pairs give crisp seams
+            }
+            let b = &sites[nb];
+            let mx = (a.x + b.x) / 2.0;
+            let mz = (a.y + b.y) / 2.0;
+            let mid_to_a = (best / 4.0).sqrt();
+            let owned_by_third = sites.iter().enumerate().any(|(k, s)| {
+                k != i
+                    && k != nb
+                    && ((s.x - mx).powi(2) + (s.y - mz).powi(2)).sqrt() < mid_to_a - 1e-9
+            });
+            if owned_by_third {
+                continue;
+            }
+            assert!(
+                d.is_seam_road(mx, mz),
+                "midpoint of close pair is not a seam road"
+            );
+            found += 1;
+        }
+        assert!(found > 0, "no close site pairs sampled");
+        // Cores stay road-free.
+        for s in sites {
+            assert!(!d.is_seam_road(s.x, s.y), "site core flagged as seam");
+        }
+    }
+
+    #[test]
+    fn seam_queries_are_deterministic() {
+        let d = VoronoiDiagram::generate(7, 32);
+        assert_eq!(
+            d.seam_distance(123.0, -456.0),
+            d.seam_distance(123.0, -456.0)
+        );
+        assert_eq!(d.is_seam_road(123.0, -456.0), d.is_seam_road(123.0, -456.0));
     }
 
     #[test]
