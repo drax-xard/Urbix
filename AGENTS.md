@@ -4,11 +4,11 @@ Guidance for working in this repository.
 
 ## Project state
 
-Urbix is an early-stage Rust crate (v0.1.0) for a deterministic, infinite
-procedural city engine. **All `src/*.rs` modules are placeholders** — they
-contain only doc-comment headers and `// TODO(Milestone N)` markers. There is
-no implemented generation logic yet. Do not search for algorithms that don't
-exist; read `Urbix_Project.md` §7 for the milestone roadmap instead.
+Urbix is a deterministic, infinite procedural city engine (Rust crate).
+Generation is implemented through Milestone 13 (exterior lots, streets,
+districts, and vertically structured interiors). Source of truth for what
+exists is the milestone table in `Urbix_Project.md` §7 and the status table
+in `README.md` — not this file's history.
 
 ## Toolchain (important gotcha)
 
@@ -33,14 +33,24 @@ cargo fmt --check    # fix with: cargo fmt
 Example/bench scaffolding require a `fn main()` to compile; keeping them
 compiling is required since `cargo build --all-targets` and `cargo test` build them.
 
+For spatial/generation changes also smoke-test (release mode; debug is too
+slow for image-sized output) and gate on the headless metrics:
+
+```sh
+cargo run --release --example viz -- --seed 445566 --extent 8 --mode walk --out /tmp/smoke
+cargo run --release --example walkability -- --seed 445566 --extent 8
+cargo bench --bench chunk_gen --no-run
+```
+
 ## Architecture constraints (from `Urbix_Project.md`)
 
 - **Deterministic generation**: everything derives from `hash(x, y, seed,
   domain)`. No global RNG, no cross-chunk write dependencies. Any new
   generator must follow this.
 - **FFI-first / language-agnostic**: public data types are `#[repr(C)]`.
-  `include/urbix.h` is auto-generated from `src/ffi.rs` via cbindgen (not yet
-  wired in `build.rs`). Keep public signatures C-compatible.
+  `include/urbix.h` is auto-generated from `src/ffi.rs` via cbindgen in
+  `build.rs` (regenerates on build; check the diff in). Keep public signatures
+  C-compatible.
 - **Fuzzy Voronoi districts**: a fixed set of seed-derived Voronoi sites
   (24–48) mapped to 5 zone types, queried continuously for zone affinity, not
   a per-chunk static map.
@@ -56,6 +66,23 @@ compiling is required since `cargo build --all-targets` and `cargo test` build t
   `Urbix_Project.md` §5.
 - `.gitignore` excludes `/target` and `Cargo.lock` (library crate, lockfile
   intentionally untracked).
+
+## Gotchas (learned the hard way)
+
+- **cbindgen excludes**: every new `hash::domain` constant must be added to
+  the `exclude` list in `cbindgen.toml`, or it leaks into `include/urbix.h`.
+  `build.rs` also carries a manual `ZoneParams` fallback definition and the
+  `URBIX_FLAG_*` shims — update both when flags/params change.
+- **Wire invariants**: `Cell` is 40 B / header 32 B (compile asserts);
+  `CellFlags` bits are additive; `ZoneParams` padding has absorbed new `u8`
+  fields so far. `Cell` itself is frozen — grow context/FFI types instead
+  (MINOR bumps).
+- **Flag checks read `cell.flags.contains(FLAG)`**, never the reverse.
+- **Seed-agnostic tests**: hashed axes/rotations vary per block, so scan for
+  test fixtures (e.g. a same-lot pair) instead of hardcoding coordinates;
+  float asserts use range-`contains`.
+- **Vendored header**: `3d-explorer-sdk/` pins its own `urbix.h` copy —
+  leave it alone unless working on the SDK.
 
 ## Git
 
@@ -74,3 +101,6 @@ compiling is required since `cargo build --all-targets` and `cargo test` build t
   FFI surface, milestone plan (§2, §3, §7).
 - `README.md` — top-level intent (minimal; keep in sync if expanded).
 - `CHANGELOG.md` — versioned history.
+- `docs/` — deeper write-ups (`world_generation.md`, `api.md`,
+  `interiors.md`, `believable_city.md`); `docs/session_report.md` carries
+  cross-session handoff notes when present.
