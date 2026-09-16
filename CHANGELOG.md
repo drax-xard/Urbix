@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Docs
+
+- **Interior overhaul plan (M13–M15, pending)**: `docs/interiors.md` gains a
+  Roadmap section (structure → program → finish, with locked decisions and
+  cross-cutting determinism rules); `Urbix_Project.md` gains M13/M14/M15
+  pending milestones and a refreshed §8.1; `README.md` links the roadmap.
+  No code changes.
+
 ## [0.12.0] — 2026-09-16
 
 ### Added

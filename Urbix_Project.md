@@ -603,6 +603,63 @@ boulevards cutting grids; 1000-step walk still bounded. MINOR bump to
 
 ---
 
+### Milestone 13 — Interior structure (stacked, role-driven floors) — ⬜ PENDING
+
+**Goal:** interiors read vertically like their exteriors — one shaft, a real
+ground floor, repeated typical floors — driven by lot truth. Specified in
+`docs/interiors.md` Roadmap.
+
+| File | Deliverable |
+|---|---|
+| `src/layout.rs` | `InteriorContext` gains pack rect, corner, frontage depth, `building_role`, `secondary_zone` (appended `#[repr(C)]` fields, serde defaults). |
+| `src/chunk.rs` | `interior_context_for` recomputes lot truth pure from world coords; `Cell` untouched. |
+| `src/interior.rs` | Floor roles Ground/Typical×N/Top (typical generates once, clones); stacked core; ground-only entrance, lobby doors above. |
+
+**Tests:** core identical across floors; typical byte-equal; one entrance on
+floor 0; context serde round-trip; FFI determinism green.
+
+**Exit criteria:** towers show one shaft + lobby + repeated floors; MINOR
+bump to `0.13.0` (context growth).
+
+---
+
+### Milestone 14 — Interior program (units, wet stacks, rules) — ⬜ PENDING
+
+**Goal:** rooms that make sense per building — apartments with front doors,
+plumbing stacked vertically, artist-tunable rules. Specified in
+`docs/interiors.md` Roadmap.
+
+| File | Deliverable |
+|---|---|
+| `src/layout.rs` | Blueprint v2: per-room `min_count`, adjacency tags, `doors`; corridor/unit/core policies; mixed-use ground override (fixed-array pattern kept). |
+| `src/interior.rs` | Unit subdivision (guillotine splits → in-unit rooms); wet-stack snapping to 1–2 shafts; retail base under housing. |
+
+**Tests:** unit doors == units; kitchens+baths per unit; wet tiles share ≤2
+columns; minimums hold.
+
+**Exit criteria:** homes read as apartments, offices as open plans; MINOR
+bump to `0.14.0`.
+
+---
+
+### Milestone 15 — Interior finish (furniture, metadata, cache) — ⬜ PENDING
+
+**Goal:** lived-in rooms a consumer can render and query, served fast.
+Specified in `docs/interiors.md` Roadmap.
+
+| File | Deliverable |
+|---|---|
+| `src/interior.rs` | Furniture on `LAYOUT_FURNITURE` (per-kind templates, density knob); windows derived first. |
+| `src/ffi.rs` | Additive `urbix_generate_interior_rooms` (+ free fn); `UrbixInterior` untouched; FFI path uses `InteriorCache`. |
+
+**Tests:** furniture deterministic + bounded; room records match grids;
+cache-hit path deterministic.
+
+**Exit criteria:** extended `interior_report` + interiors gate example;
+MINOR bump to `0.15.0`.
+
+---
+
 ## 8. Future Extensions (explicitly deferred)
 
 These are deliberately out of scope for the initial build but are designed for
@@ -611,8 +668,11 @@ by the current architecture. Each is listed with the hook already in place.
 ### 8.1 Interior generation & rendering
 - `interior.rs` already exposes the `InteriorState` trait and computes a stable
   `InteriorId` for every built cell.
-- Future work: implement real room layouts (grid, corridors, doors), per-room
-  fog/palette, furniture placement, and an enter/exit teleport API.
+- Room layouts are generated per zone blueprint with corridors, doors, and a
+  street-facing entrance; interiors cross the FFI as flat tile grids.
+- Next (M13–M15, specified in `docs/interiors.md` Roadmap): vertical structure
+  (stacked cores, floor roles, typical repetition), room programs (units, wet
+  stacks, rules), then furniture, room metadata, and enter/exit teleport.
 - The design treats interiors as a separate mini-world with its own cache,
   so they never interact with outdoor chunk eviction.
 

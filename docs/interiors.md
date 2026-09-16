@@ -306,6 +306,48 @@ fetches the matching room grid on demand when the player steps inside — the
 engine caches the chunk, and interiors are re-derived cheaply per request
 (no interior cache is crossed over the FFI yet).
 
+## Roadmap — M13 Structure, M14 Program, M15 Finish (⬜ PENDING)
+
+Locked decisions: structure before program; `InteriorContext` and the FFI
+interior payload may grow (MINOR bumps, `Cell` stays 40 B); end state serves
+furnished rooms + per-room metadata. Full milestone plan lives in
+`Urbix_Project.md` §7 (M13–M15). Cross-cutting rules for all three:
+
+* New hash domains per use (`FLOOR_ROLE`, `UNIT_SPLIT`, `WET_SHAFT`,
+  `FURNISH`, …); floor folding stays in `floor_hash` (`src/interior.rs`).
+* Same `(id, floor, seed)` → same bytes, asserted per feature.
+* Serde defaults on new blueprint/context fields so old TOML/JSON parses.
+* `docs/interiors.md` rewritten per milestone as each lands.
+
+### M13 — Structure: make it a building
+
+* `InteriorContext` gains lot truth recomputed pure from world coords in
+  `chunk::interior_context_for` (real pack rect, corner flag, frontage
+  depth, `building_role`, `secondary_zone`); `Cell` untouched.
+* Floor roles Ground / Typical×N / Top; typical floors generate once and
+  clone; stacked core drawn once per building; entrance door on Ground only
+  (lobby doors off the core above).
+* Tests: core identical across floors; typical byte-equal; one entrance on
+  floor 0; context serde round-trip; FFI determinism still green.
+
+### M14 — Program: rooms that make sense
+
+* Blueprint v2 (same fixed-array pattern): per-room `min_count`, adjacency
+  tags (WET/QUIET/PUBLIC/STREET_FACING), `doors`; corridor/unit/core
+  policies; mixed-use ground override.
+* Residential unit subdivision (guillotine splits → front doors → in-unit
+  rooms with kitchen+bath minimums); wet-stack snapping to 1–2 vertical
+  shafts; retail base under housing when commercial affinity is high.
+* Tests: unit doors == units; wet tiles share ≤2 columns; minimums hold.
+
+### M15 — Finish: lived-in + export
+
+* Furniture on reserved `LAYOUT_FURNITURE` (per-kind templates, density
+  knob); windows derived renderer-side first; additive
+  `urbix_generate_interior_rooms` (rect/kind/area per room) leaving
+  `UrbixInterior` untouched; FFI path routed through `InteriorCache`.
+* Acceptance: extended `interior_report` + interiors gate example.
+
 ## Reference
 
 - Data model: `src/layout.rs` (context, tiles, floors, blueprints, defaults).
