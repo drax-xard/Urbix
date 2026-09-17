@@ -5,10 +5,10 @@ Guidance for working in this repository.
 ## Project state
 
 Urbix is a deterministic, infinite procedural city engine (Rust crate).
-Generation is implemented through Milestone 13 (exterior lots, streets,
-districts, and vertically structured interiors). Source of truth for what
-exists is the milestone table in `Urbix_Project.md` §7 and the status table
-in `README.md` — not this file's history.
+Generation is implemented through Milestone 14 (exterior lots, streets,
+districts, vertically structured interiors with unit programs). Source of
+truth for what exists is the milestone table in `Urbix_Project.md` §7 and
+the status table in `README.md` — not this file's history.
 
 ## Toolchain (important gotcha)
 
@@ -77,6 +77,9 @@ cargo bench --bench chunk_gen --no-run
   `CellFlags` bits are additive; `ZoneParams` padding has absorbed new `u8`
   fields so far. `Cell` itself is frozen — grow context/FFI types instead
   (MINOR bumps).
+- **Schema evolution**: new `#[repr(C)]`/serde fields get `#[serde(default)]`
+  so old TOML/JSON files keep parsing; prove it with a strip-and-reparse
+  round-trip test (`config.rs`). Validate new knobs in `is_valid`.
 - **Flag checks read `cell.flags.contains(FLAG)`**, never the reverse.
 - **Seed-agnostic tests**: hashed axes/rotations vary per block, so scan for
   test fixtures (e.g. a same-lot pair) instead of hardcoding coordinates;

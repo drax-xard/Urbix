@@ -1,7 +1,7 @@
-# Session report — city believability + interiors M11 → M13
+# Session report — city believability + interiors M11 → M14
 
-> Working handoff note, not project documentation. Written 2026-09-16 to
-> carry context into the next session. Tree is clean at `6c6a6ad`.
+> Working handoff note, not project documentation. Written 2026-09-16,
+> last updated after M14. Tree is clean at `dc2e074`.
 
 ## Timeline (all requested, built, verified, committed locally; user pushes)
 
@@ -43,15 +43,32 @@
    ground-only entrance + core lobby doors + post-room lobby halo (the halo
    ordering fixed a real narrow-lot starvation bug the truthful footprints
    exposed). New `WorldEngine::voronoi()` accessor.
+10. **AGENTS.md refresh + this report committed** (`15e392b`): fixed stale
+    v0.1.0/placeholder claims and the un-wired-cbindgen note; added smoke
+    commands, Gotchas (cbindgen excludes, wire invariants, contains
+    direction, seed-agnostic tests, vendored SDK header), docs pointers.
+11. **M14 implementation → `0.14.0`** (`dc2e074`): Blueprint v2
+    (`min_count`, `TAG_WET/QUIET/PUBLIC/STREET`, `doors`, `unit_max`,
+    `wet_shafts`, `ground_zone`, `corridor` — all serde-defaulted, compat
+    proven by strip-and-reparse test); guillotine unit subdivision with
+    shaft-aware cuts (no unit orphaned from every stack), per-unit anchors,
+    minimums-first-then-fill, room-less guarantee (non-wet), unit front
+    doors; wet-stack snapping (`LAYOUT_WET`, building-constant columns,
+    fill-phase skips so every placed wet room provably stacks);
+    `resolve_ground_override` + `generate_layout_with_ground` (retail base
+    under 3+ storey homes); multi-door rooms; single-loaded band policy.
+    Fixture lesson reused: seed 10 rolls no retail (1-in-9) — mixed-use
+    test scans seeds for its fixture instead of hardcoding.
 
 ## Current state
 
-* `main` at `6c6a6ad`; `Cargo.toml` `0.13.0`; M13 ✅ in `Urbix_Project.md` §7
-  and README; M14/M15 ⬜ pending with specs in `docs/interiors.md` Roadmap.
-* Suite green at commit: 132 lib + integration + 32 doctests;
+* `main` at `dc2e074`; `Cargo.toml` `0.14.0`; M14 ✅ in `Urbix_Project.md` §7
+  and README; M15 ⬜ pending with spec in `docs/interiors.md` Roadmap.
+* Suite green at commit: 143 lib + integration + 32 doctests;
   `cargo clippy` clean (only pre-existing third-party `block` notice);
   `cargo fmt --check` clean; bench compiles; `walkability` gate passes;
-  `cli_demo`/`viz --inspect` smoke-tested.
+  `cli_demo`/`viz --inspect` smoke-tested; ASCII floor maps eyeballed
+  (stacked shaft, entrance, kitchen/bath alignment).
 
 ## Conventions that bit (remember next session)
 
@@ -74,18 +91,22 @@
 * Test-writing lessons: rotation/split-axis assumptions must be
   seed-agnostic (scan for pairs instead of hardcoding cells); float asserts
   use range-`contains`; `CellFlags::contains` direction is
-  `cell.flags.contains(FLAG)`.
+  `cell.flags.contains(FLAG)`; when a rolled outcome misses on one seed,
+  scan seeds for the fixture rather than weakening the assert — and prefer
+  making the generator rule strict (skip instead of sprawl) so tests can
+  stay exact.
 
 ## Open threads / next up
 
-* **M14 next** (spec ready in `docs/interiors.md` Roadmap): Blueprint v2
-  (min_count, adjacency tags, policies), unit subdivision, wet-stack
-  snapping, mixed-use ground. `secondary_zone` is stored but unconsumed —
-  M14's entry point.
+* **M15 next** (spec ready in `docs/interiors.md` Roadmap): furniture on
+  reserved `LAYOUT_FURNITURE`, windows (derive renderer-side first),
+  additive `urbix_generate_interior_rooms` + free fn, FFI path through
+  `InteriorCache`, extended `interior_report` + interiors gate example.
+  Entry points: `PlacedRoom` deliberately keeps rects (unit rects available
+  via `split_units`); unit doors are plain `Door` tiles awaiting unit tags
+  in room records.
 * Offered but unconfirmed: perpendicular snapping for seam-stub
   T-junctions in the explorer.
-* FFI path still regenerates interiors per request instead of using
-  `InteriorCache` (slated for M15).
 * Pre-existing debt noticed, not touched: `README` version line vs
   `Cargo.toml`; `docs/interiors.md` old line-number references;
   `walkability` "tall cells" is a height proxy, not true landmarks.
