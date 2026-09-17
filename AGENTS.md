@@ -5,10 +5,11 @@ Guidance for working in this repository.
 ## Project state
 
 Urbix is a deterministic, infinite procedural city engine (Rust crate).
-Generation is implemented through Milestone 14 (exterior lots, streets,
-districts, vertically structured interiors with unit programs). Source of
-truth for what exists is the milestone table in `Urbix_Project.md` §7 and
-the status table in `README.md` — not this file's history.
+Generation is implemented through Milestone 15 (exterior lots, streets,
+districts, and fully finished interiors with programs, furniture, and
+queryable rooms). Source of truth for what exists is the milestone table
+in `Urbix_Project.md` §7 and the status table in `README.md` — not this
+file's history.
 
 ## Toolchain (important gotcha)
 
@@ -39,6 +40,7 @@ slow for image-sized output) and gate on the headless metrics:
 ```sh
 cargo run --release --example viz -- --seed 445566 --extent 8 --mode walk --out /tmp/smoke
 cargo run --release --example walkability -- --seed 445566 --extent 8
+cargo run --release --example interiors_gate
 cargo bench --bench chunk_gen --no-run
 ```
 
@@ -77,6 +79,9 @@ cargo bench --bench chunk_gen --no-run
   `CellFlags` bits are additive; `ZoneParams` padding has absorbed new `u8`
   fields so far. `Cell` itself is frozen — grow context/FFI types instead
   (MINOR bumps).
+- **Payload growth appends, never interleaves**: new FFI layers go at the
+  end so old readers slicing a prefix keep working; pin new layouts with
+  `_Static_assert`s in `build.rs`.
 - **Schema evolution**: new `#[repr(C)]`/serde fields get `#[serde(default)]`
   so old TOML/JSON files keep parsing; prove it with a strip-and-reparse
   round-trip test (`config.rs`). Validate new knobs in `is_valid`.

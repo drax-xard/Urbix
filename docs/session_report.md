@@ -1,7 +1,7 @@
-# Session report — city believability + interiors M11 → M14
+# Session report — city believability + interiors M11 → M15
 
 > Working handoff note, not project documentation. Written 2026-09-16,
-> last updated after M14. Tree is clean at `dc2e074`.
+> last updated after M15. Tree is clean at `5dda131`.
 
 ## Timeline (all requested, built, verified, committed locally; user pushes)
 
@@ -59,16 +59,30 @@
     under 3+ storey homes); multi-door rooms; single-loaded band policy.
     Fixture lesson reused: seed 10 rolls no retail (1-in-9) — mixed-use
     test scans seeds for its fixture instead of hardcoding.
+12. **AGENTS.md touch-up + report committed** (`341f72b`): milestone line to
+    M14, schema-evolution Gotcha (serde defaults + strip-and-reparse +
+    `is_valid`).
+13. **M15 implementation → `0.15.0`** (`5dda131`): furniture sets per kind
+    stamped into a parallel `Floor.furn` layer (primary always, secondary
+    rolls `furn_density`; tile semantics frozen; payload ×3 grids, prefix-
+    compatible); `Floor::window_cells` + renderer recipe (no wire tile);
+    `rooms_of_floor` + published `unit_rects_for_floor`/`building_shafts`/
+    `split_units`/`PlaceRegion`; additive `urbix_generate_interior_rooms`/
+    free (`UrbixRoom` 10 B, header-asserted); engine-side `InteriorCache`
+    on both FFI paths (`interior_cache_len`); `examples/interiors_gate.rs`
+    (synthetic + 18 sampled lots); ASCII uppercase furnished rooms, report
+    stats. Notable fix en route: my own FFI assert compared furn tiles to
+    `== 1` (Wall) instead of `== 5` (Room) — caught by the test run.
 
 ## Current state
 
-* `main` at `dc2e074`; `Cargo.toml` `0.14.0`; M14 ✅ in `Urbix_Project.md` §7
-  and README; M15 ⬜ pending with spec in `docs/interiors.md` Roadmap.
-* Suite green at commit: 143 lib + integration + 32 doctests;
+* `main` at `5dda131`; `Cargo.toml` `0.15.0`; all milestones M1–M15 ✅ in
+  `Urbix_Project.md` §7 and README — no pending milestones remain.
+* Suite green at commit: 149 lib + integration + 35 doctests;
   `cargo clippy` clean (only pre-existing third-party `block` notice);
-  `cargo fmt --check` clean; bench compiles; `walkability` gate passes;
-  `cli_demo`/`viz --inspect` smoke-tested; ASCII floor maps eyeballed
-  (stacked shaft, entrance, kitchen/bath alignment).
+  `cargo fmt --check` clean; bench compiles; `walkability` and
+  `interiors_gate` gates pass; demos smoke-tested with ASCII floor
+  eyeballed (stacked shaft, entrance, aligned kitchens/baths, furniture).
 
 ## Conventions that bit (remember next session)
 
@@ -98,13 +112,10 @@
 
 ## Open threads / next up
 
-* **M15 next** (spec ready in `docs/interiors.md` Roadmap): furniture on
-  reserved `LAYOUT_FURNITURE`, windows (derive renderer-side first),
-  additive `urbix_generate_interior_rooms` + free fn, FFI path through
-  `InteriorCache`, extended `interior_report` + interiors gate example.
-  Entry points: `PlacedRoom` deliberately keeps rects (unit rects available
-  via `split_units`); unit doors are plain `Door` tiles awaiting unit tags
-  in room records.
+* **No pending milestones** — §7 is all green through M15. Natural next
+  epics (none specced): enter/exit teleport API, terrain/water (§8.4),
+  road-graph navigation (§8.3), time/weather data (§8.5), dynamic overlays
+  (§8.6), language bindings / WASM (§8.7).
 * Offered but unconfirmed: perpendicular snapping for seam-stub
   T-junctions in the explorer.
 * Pre-existing debt noticed, not touched: `README` version line vs
