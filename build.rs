@@ -88,6 +88,7 @@ fn main() {
         "\n/* ---- Compile-time layout checks (inside include guard) ---- */\n",
         "_Static_assert(sizeof(UrbixChunkHeader) == 32, \"UrbixChunkHeader must be 32 bytes\");\n",
         "_Static_assert(sizeof(UrbixCell) == 40,      \"UrbixCell must be 40 bytes\");\n",
+        "_Static_assert(sizeof(UrbixRoom) == 10,      \"UrbixRoom must be 10 bytes\");\n",
         "_Static_assert(_Alignof(UrbixChunkHeader) == 8, \"UrbixChunkHeader must be 8-byte aligned\");\n",
         "_Static_assert(_Alignof(UrbixCell) == 8,       \"UrbixCell must be 8-byte aligned\");\n",
     );

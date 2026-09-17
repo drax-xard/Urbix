@@ -20,7 +20,16 @@ Status (Milestone 13): landed. Interiors are vertically structured: lot-true
 contexts (pack-rect footprints, corner/role/secondary-zone), floor roles
 (Ground/Typical×N/Top with typical repetition), one stacked circulation
 shaft per building, and a ground-only street entrance with lobby halo and
-core lobby doors above. See the Roadmap below for M14–M15.
+core lobby doors above.
+
+Status (Milestone 14): landed. Room programs: apartment subdivision with
+front doors, kitchen+bath minimums, wet-stack plumbing columns, mixed-use
+retail bases, multi-door rooms, and a single-loaded corridor policy — all
+driven by Blueprint v2 rule tables.
+
+Status (Milestone 15): landed. Furnished rooms (parallel `furn` layer),
+window derivation helper, per-room FFI records, and the engine-side
+interior cache, gated by `examples/interiors_gate.rs`.
 
 ## 1. Overview
 
@@ -286,6 +295,18 @@ Covered by `units_partition_the_floor_and_hold_rooms`,
 `splits_keep_every_unit_on_a_shaft`, and
 `unplaceable_minimums_skip_without_panic`.
 
+### Furniture (Milestone 15)
+
+After doors, each placed room stamps its kind's `furniture_set` (two
+`(code, w, d)` pieces; see the table in `src/layout.rs` — beds in bedrooms,
+counters in kitchens, desks in offices) into `Floor.furn`: the primary
+piece always stamps (clamped to the room rect, hashed corner), the
+secondary rolls `furn_density` percent. Only `Room` tiles that are still
+bare convert, pieces never overlap, and tile semantics never change —
+renderers overlay `furn` codes (0 bare, 1 bed, 2 table, 3 counter, 4 desk,
+5 shelf, 6 bath). Covered by `furniture_lives_only_on_room_tiles` and
+`furniture_density_gates_second_pieces`.
+
 ## 8. Hash domains
 
 Reserved for interior work (see `src/hash.rs:62` and `include/urbix.h`):
@@ -347,24 +368,54 @@ The record is a `#[repr(C)]` flat buffer (`src/ffi.rs`):
 ```
 tiles[footprint_w * footprint_d]   // Tile enum bytes, row-major
 kinds[footprint_w * footprint_d]   // opaque room-kind tags (0 = not a room)
+furn[footprint_w * footprint_d]    // furniture codes (0 = bare), M15
 ```
 
-Tile bytes are the `Tile` enum values (`src/layout.rs:195`): 0 void, 1 wall,
-2 door, 3 core, 4 corridor, 5 room. Because every floor shares the same grid,
-`len = floor_count * 2 * footprint_w * footprint_d`. Room `kind`s are
+Tile bytes are the `Tile` enum values (`src/layout.rs`): 0 void, 1 wall,
+2 door, 3 core, 4 corridor, 5 room. Furniture bytes are the `FURN_*` codes
+(`src/layout.rs`: 0 bare, 1 bed, 2 table, 3 counter, 4 desk, 5 shelf,
+6 bath), set only where the tile is `Room`. Because every floor shares the
+same grid, `len = floor_count * 3 * footprint_w * footprint_d`. The
+furniture layer is appended, never interleaved: readers slicing the first
+two thirds (tiles, kinds) keep working unchanged. Room `kind`s are
 consumer-meaningful tags the engine only passes through (blueprint
 `BlueprintRoom.kind`), so a renderer can tint a "kitchen" differently from an
 "office" without the engine knowing what either is.
+
+### Room records (Milestone 15)
+
+```c
+UrbixRoomList rooms = urbix_generate_interior_rooms(engine, wx, wz);
+// rooms.data[i]: {floor, x, z, w, d, kind, unit, area} — 10 B each
+urbix_interior_rooms_free(rooms);   // null data is a safe no-op
+```
+
+Rooms never touch orthogonally (placement margin rule), so 4-connected
+components of `Room` tiles ARE rooms; the engine labels them with rect,
+kind, apartment index (`255` = outside every unit), and tile area, in
+row-major scan order. Records agree bit-for-bit with the grids above
+(covered by the FFI round-trip test). `UrbixRoom` is 10 B (asserted in the
+generated header).
+
+### Windows (Milestone 15)
+
+No wire tile: renderers derive glazing with `Floor::window_cells(floor,
+side)` — exterior ring walls on an edge, minus corners and doors. A window
+is a wall with daylight outside and a room inside; the helper is pure
+geometry, no hash. Facade-facing rooms (STREET-tagged living/retail/lobby
+by default) sit against those edges by placement preference.
 
 ### Streaming a city with interiors
 
 Pair the interior query with the chunk stream from `docs/api.md` §8: for each
 built cell you already rendered as an exterior box, `urbix_generate_interior`
 fetches the matching room grid on demand when the player steps inside — the
-engine caches the chunk, and interiors are re-derived cheaply per request
-(no interior cache is crossed over the FFI yet).
+engine caches the chunk, and interiors come from the bounded engine-side
+`InteriorCache` (capacity 64, LRU; `WorldEngine::interior_cache_len`
+exposes its fill). Fetch room records alongside when gameplay needs
+per-room queries (unit, area, kind) without scanning grids.
 
-## Roadmap — M13 Structure, M14 Program, M15 Finish (⬜ PENDING)
+## Roadmap — M13 Structure, M14 Program, M15 Finish (✅ DONE)
 
 Locked decisions: structure before program; `InteriorContext` and the FFI
 interior payload may grow (MINOR bumps, `Cell` stays 40 B); end state serves
@@ -398,13 +449,18 @@ furnished rooms + per-room metadata. Full milestone plan lives in
   shafts; retail base under housing when commercial affinity is high.
 * Tests: unit doors == units; wet tiles share ≤2 columns; minimums hold.
 
-### M15 — Finish: lived-in + export
+### M15 — Finish: lived-in + export — ✅ DONE (0.15.0)
 
-* Furniture on reserved `LAYOUT_FURNITURE` (per-kind templates, density
-  knob); windows derived renderer-side first; additive
-  `urbix_generate_interior_rooms` (rect/kind/area per room) leaving
-  `UrbixInterior` untouched; FFI path routed through `InteriorCache`.
-* Acceptance: extended `interior_report` + interiors gate example.
+* Furniture on `LAYOUT_FURNITURE` (per-kind `(code, w, d)` sets, primary
+  always stamps clamped, secondary rolls `furn_density` percent) into a
+  parallel `Floor.furn` layer — tile semantics frozen; payload grows to 3
+  grids per floor (prefix-compatible).
+* `Floor::window_cells` derivation helper + renderer recipe (no wire tile).
+* Additive `urbix_generate_interior_rooms` / `urbix_interior_rooms_free`
+  (`UrbixRoom` 10 B, header-asserted); FFI path routed through the
+  engine-side `InteriorCache` (`interior_cache_len` accessor).
+* Acceptance: extended `interior_report` (units/shafts/furniture stats) +
+  `examples/interiors_gate.rs` (synthetic fixture + sampled lots).
 
 ## Reference
 

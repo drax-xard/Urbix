@@ -642,7 +642,7 @@ bump to `0.14.0`.
 
 ---
 
-### Milestone 15 — Interior finish (furniture, metadata, cache) — ⬜ PENDING
+### Milestone 15 — Interior finish (furniture, metadata, cache) — ✅ DONE
 
 **Goal:** lived-in rooms a consumer can render and query, served fast.
 Specified in `docs/interiors.md` Roadmap.

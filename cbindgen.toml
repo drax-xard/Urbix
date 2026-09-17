@@ -24,6 +24,8 @@ include = [
     "Cell",
     "CellFlags",
     "InteriorId",
+    "UrbixRoom",
+    "UrbixRoomList",
     "WorldConfig",
 ]
 exclude = [

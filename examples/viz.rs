@@ -234,15 +234,23 @@ fn write_ppm(path: &str, width: u32, height: u32, pixels: &[u8]) -> std::io::Res
     std::fs::write(path, data)
 }
 
-/// Legend glyph for a tile (shared with `examples/cli_demo.rs`).
-fn tile_glyph(tile: Tile, kind: u8) -> char {
+/// Legend glyph for a tile (shared with `examples/cli_demo.rs`; furnished
+/// rooms print uppercase).
+fn tile_glyph(tile: Tile, kind: u8, furn: u8) -> char {
     match tile {
         Tile::Void => '.',
         Tile::Wall => '#',
         Tile::Door => 'D',
         Tile::Core => '+',
         Tile::Corridor => ' ',
-        Tile::Room => char::from(b'a' + kind % 26),
+        Tile::Room => {
+            let c = char::from(b'a' + kind % 26);
+            if furn == 0 {
+                c
+            } else {
+                c.to_ascii_uppercase()
+            }
+        }
     }
 }
 
@@ -254,7 +262,7 @@ fn floor_rows(floor: &Floor) -> Vec<String> {
             let mut row = String::with_capacity(w);
             for x in 0..w {
                 let i = z * w + x;
-                row.push(tile_glyph(floor.tiles[i], floor.kinds[i]));
+                row.push(tile_glyph(floor.tiles[i], floor.kinds[i], floor.furn[i]));
             }
             row
         })
@@ -342,6 +350,26 @@ pub fn interior_report(
             urbix::interior::resolve_ground_override(&ctx, &bp, &config.interior_blueprints);
         generate_layout_with_ground(cell.interior_id, &ctx, &bp, ground)
     };
+    {
+        let gw = usize::from(ctx.footprint_w.max(1));
+        let shafts =
+            urbix::interior::building_shafts(cell.interior_id, ctx.seed, gw, bp.wet_shafts);
+        let ground_bp =
+            urbix::interior::resolve_ground_override(&ctx, &bp, &config.interior_blueprints);
+        let units =
+            urbix::interior::unit_rects_for_floor(cell.interior_id, &ctx, 0, ground_bp, &bp);
+        let furn: usize = layout
+            .floors
+            .iter()
+            .map(|f| f.furn.iter().filter(|c| **c != 0).count())
+            .sum();
+        out.push_str(&format!(
+            "structure: {} ground unit(s), shafts {:?}, {} furnished tiles\n",
+            units.len(),
+            shafts,
+            furn
+        ));
+    }
     out.push_str(&format!(
         "{} storey(s), seed {}\n",
         layout.floors.len(),
@@ -387,7 +415,7 @@ pub fn interior_report(
             out.push('\n');
         }
     }
-    out.push_str("legend: # wall, + core, D door, ' ' corridor, a..z rooms, . void\n");
+    out.push_str("legend: # wall, + core, D door, ' ' corridor, a..z rooms (UPPERCASE = furnished), . void\n");
     out
 }
 

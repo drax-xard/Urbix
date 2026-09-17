@@ -90,6 +90,41 @@
 #define TAG_STREET (1 << 3)
 
 /**
+ * No furniture (bare tile).
+ */
+#define FURN_NONE 0
+
+/**
+ * Bed (bedrooms).
+ */
+#define FURN_BED 1
+
+/**
+ * Table (living, meeting, work bays).
+ */
+#define FURN_TABLE 2
+
+/**
+ * Counter run (kitchens, retail, washrooms).
+ */
+#define FURN_COUNTER 3
+
+/**
+ * Desk (offices, lobbies, receptions).
+ */
+#define FURN_DESK 4
+
+/**
+ * Shelf (stockrooms, living rooms, utility).
+ */
+#define FURN_SHELF 5
+
+/**
+ * Bath fixture (bathrooms).
+ */
+#define FURN_BATH 6
+
+/**
  * The number of distinct zone types.
  */
 #define ZONE_COUNT 5
@@ -131,14 +166,19 @@ typedef struct UrbixChunkBuffer {
  * floor i (i in 0..floor_count):
  *   tiles[footprint_w * footprint_d]   // one Tile byte each, row-major
  *   kinds[footprint_w * footprint_d]   // room-kind tag byte each, 0 = not room
+ *   furn[footprint_w * footprint_d]    // furniture code byte each, 0 = bare (M15)
  * ```
  *
  * Every floor shares the same `footprint_w × footprint_d` grid, so `len` is
- * exactly `floor_count * 2 * footprint_w * footprint_d`. `Tile` bytes are the
+ * exactly `floor_count * 3 * footprint_w * footprint_d`. The furniture layer
+ * is appended (never interleaved): readers slicing the first two thirds
+ * keep working unchanged. `Tile` bytes are the
  * [`crate::layout::Tile`] enum values (0 = void, 1 = wall, 2 = door, 3 = core,
- * 4 = corridor, 5 = room). The caller owns this payload and must release it
- * with [`urbix_interior_free`]. An unbuilt cell (height ≤ 0) or null engine
- * yields a zeroed header with `data == null` and `len == 0`.
+ * 4 = corridor, 5 = room); furniture bytes are the `FURN_*` codes
+ * (`crate::layout`, 0 = bare, set only where the tile is `Room`). The caller
+ * owns this payload and must release it with [`urbix_interior_free`]. An
+ * unbuilt cell (height ≤ 0) or null engine yields a zeroed header with
+ * `data == null` and `len == 0`.
  */
 typedef struct UrbixInterior {
     /**
@@ -166,7 +206,7 @@ typedef struct UrbixInterior {
      */
     uint8_t footprint_d;
     /**
-     * Number of storeys (`len` = `floor_count * 2 * footprint_w * footprint_d`).
+     * Number of storeys (`len` = `floor_count * 3 * footprint_w * footprint_d`).
      */
     uint16_t floor_count;
     /**
@@ -178,6 +218,68 @@ typedef struct UrbixInterior {
      */
     uint8_t *data;
 } UrbixInterior;
+
+/**
+ * One enumerated room: rect plus kind, apartment, and area.
+ *
+ * Produced by [`urbix_generate_interior_rooms`] from the same finished
+ * floors [`urbix_generate_interior`] ships, so grids and records always
+ * agree. `unit` indexes the floor's apartment list (`255` = outside every
+ * unit); `kind` is the opaque blueprint room tag; `area` counts tiles.
+ */
+typedef struct UrbixRoom {
+    /**
+     * Storey index within the interior.
+     */
+    uint8_t floor;
+    /**
+     * Left edge in grid cells.
+     */
+    uint8_t x;
+    /**
+     * Top edge in grid cells.
+     */
+    uint8_t z;
+    /**
+     * Width in cells.
+     */
+    uint8_t w;
+    /**
+     * Depth in cells.
+     */
+    uint8_t d;
+    /**
+     * Opaque room-kind tag (blueprint semantics).
+     */
+    uint8_t kind;
+    /**
+     * Apartment index on this floor (`255` = outside every unit).
+     */
+    uint8_t unit;
+    /**
+     * Floor area in tiles.
+     */
+    uint16_t area;
+} UrbixRoom;
+
+/**
+ * An owned room list handed to foreign code.
+ *
+ * `data` points at `count` packed [`UrbixRoom`] records in deterministic
+ * (row-major scan) order. The caller owns the buffer and must release it
+ * with [`urbix_interior_rooms_free`]. Unbuilt cells and null engines yield
+ * `{null, 0}`.
+ */
+typedef struct UrbixRoomList {
+    /**
+     * Start of the record array; null when empty.
+     */
+    struct UrbixRoom *data;
+    /**
+     * Number of records.
+     */
+    uint64_t count;
+} UrbixRoomList;
 
 /**
  * A blended zone-affinity vector, one weight per [`crate::zones::ZoneType`].
@@ -302,6 +404,12 @@ typedef struct Blueprint {
      * Serde-defaulted so pre-M14 files parse.
      */
     uint8_t corridor;
+    /**
+     * Second-furniture-piece probability in percent (`0–100`): every room
+     * always stamps its primary piece when it fits; the secondary piece
+     * rolls against this density. Serde-defaulted so pre-M15 files parse.
+     */
+    uint8_t furn_density;
 } Blueprint;
 
 /**
@@ -589,6 +697,33 @@ struct UrbixInterior urbix_generate_interior(struct UrbixEngine *engine, int32_t
 void urbix_interior_free(struct UrbixInterior interior);
 
 /**
+ * Enumerate every room of the built cell at world space `(wx, wz)`.
+ *
+ * Same lookup path as [`urbix_generate_interior`] (chunk → context →
+ * layout, through the engine interior cache), then one [`UrbixRoom`] per
+ * 4-connected room component per floor, with apartment and area attached.
+ * Release the result with [`urbix_interior_rooms_free`].
+ *
+ * ## Safety
+ *
+ * `engine` must be a valid, non-null handle from [`urbix_engine_create`].
+ */
+struct UrbixRoomList urbix_generate_interior_rooms(struct UrbixEngine *engine,
+                                                   int32_t wx,
+                                                   int32_t wz);
+
+/**
+ * Release a room list returned by [`urbix_generate_interior_rooms`].
+ *
+ * ## Safety
+ *
+ * `list` must be an *unreleased* result from
+ * [`urbix_generate_interior_rooms`]. Calling this twice on the same list
+ * (or with an unrelated list) is double-free / undefined behaviour.
+ */
+void urbix_interior_rooms_free(struct UrbixRoomList list);
+
+/**
  * Query the continuous zone-affinity vector at world coordinates.
  *
  * ## Safety
@@ -652,6 +787,7 @@ void urbix_set_config(struct UrbixEngine *engine, const struct WorldConfig *conf
 /* ---- Compile-time layout checks (inside include guard) ---- */
 _Static_assert(sizeof(UrbixChunkHeader) == 32, "UrbixChunkHeader must be 32 bytes");
 _Static_assert(sizeof(UrbixCell) == 40,      "UrbixCell must be 40 bytes");
+_Static_assert(sizeof(UrbixRoom) == 10,      "UrbixRoom must be 10 bytes");
 _Static_assert(_Alignof(UrbixChunkHeader) == 8, "UrbixChunkHeader must be 8-byte aligned");
 _Static_assert(_Alignof(UrbixCell) == 8,       "UrbixCell must be 8-byte aligned");
 #endif  /* URBIX_H */

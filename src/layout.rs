@@ -438,12 +438,24 @@ pub struct Blueprint {
     /// Serde-defaulted so pre-M14 files parse.
     #[serde(default)]
     pub corridor: u8,
+    /// Second-furniture-piece probability in percent (`0–100`): every room
+    /// always stamps its primary piece when it fits; the secondary piece
+    /// rolls against this density. Serde-defaulted so pre-M15 files parse.
+    #[serde(default = "default_furn_density")]
+    pub furn_density: u8,
 }
 
 /// Serde default for [`Blueprint::ground_zone`]: no override.
 #[must_use]
 pub const fn default_ground_zone() -> u8 {
     255
+}
+
+/// Serde default for [`Blueprint::furn_density`]: most rooms gain a second
+/// piece.
+#[must_use]
+pub const fn default_furn_density() -> u8 {
+    70
 }
 
 impl Blueprint {
@@ -505,12 +517,12 @@ pub fn blueprint_defaults(zone: ZoneType) -> Blueprint {
     // Unit/shaft/corridor policy per zone: homes subdivide into apartments
     // with stacked plumbing and a retail-capable base; workplaces stay open
     // plan with one wet shaft; sheds stay simple.
-    let (unit_max, wet_shafts, ground_zone, corridor) = match zone {
-        ZoneType::Downtown => (0, 1, 255, 0),
-        ZoneType::Residential => (3, 2, ZoneType::Commercial as u8, 0),
-        ZoneType::Commercial => (0, 1, 255, 0),
-        ZoneType::Industrial => (0, 1, 255, 0),
-        ZoneType::Park => (0, 0, 255, 0),
+    let (unit_max, wet_shafts, ground_zone, corridor, furn_density) = match zone {
+        ZoneType::Downtown => (0, 1, 255, 0, 60),
+        ZoneType::Residential => (3, 2, ZoneType::Commercial as u8, 0, 75),
+        ZoneType::Commercial => (0, 1, 255, 0, 65),
+        ZoneType::Industrial => (0, 1, 255, 0, 50),
+        ZoneType::Park => (0, 0, 255, 0, 30),
     };
 
     // Copy the live rooms into the fixed array's prefix (the rest stay default).
@@ -528,6 +540,7 @@ pub fn blueprint_defaults(zone: ZoneType) -> Blueprint {
         wet_shafts,
         ground_zone,
         corridor,
+        furn_density,
     }
 }
 
@@ -554,7 +567,9 @@ pub fn default_blueprints() -> [Blueprint; crate::zones::ZONE_COUNT] {
 /// `tiles[floor]` has `width * depth` entries in row-major order (x-major then
 /// z-major, matching `ChunkBuffer`'s cell iteration). `room_kinds` carries the
 /// opaque [`BlueprintRoom::kind`] for each `Room` tile (one entry per tile,
-/// meaningful only where the tile is `Room`; else 0).
+/// meaningful only where the tile is `Room`; else 0). `furn` is a parallel
+/// furniture layer (`FURN_*` codes, 0 where bare) stamped strictly inside
+/// room rects, so tile semantics never change under renderers.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Floor {
     /// Grid width in tiles.
@@ -565,6 +580,9 @@ pub struct Floor {
     pub tiles: Vec<Tile>,
     /// Room-kind tag per tile (parallel to `tiles`, 0 where not a room).
     pub kinds: Vec<u8>,
+    /// Furniture code per tile (parallel to `tiles`, 0 where bare; only set
+    /// where the tile is `Room`).
+    pub furn: Vec<u8>,
 }
 
 impl Floor {
@@ -577,6 +595,7 @@ impl Floor {
             depth,
             tiles: vec![Tile::Void; n],
             kinds: vec![0; n],
+            furn: vec![0; n],
         }
     }
 
@@ -594,6 +613,103 @@ impl Floor {
         } else {
             self.tiles[self.index(x, z)]
         }
+    }
+
+    /// Read the furniture code at `(x, z)`, 0 when bare or out of bounds.
+    #[must_use]
+    pub fn furniture(&self, x: u8, z: u8) -> u8 {
+        if x >= self.width || z >= self.depth {
+            0
+        } else {
+            self.furn[self.index(x, z)]
+        }
+    }
+
+    /// Wall cells that can host windows: exterior ring tiles on the `side`
+    /// edge, excluding corners and doors.
+    ///
+    /// Renderers derive glazing from this instead of a wire tile: a window
+    /// is a wall with daylight on one side and a room on the other. Pure
+    /// geometry over the finished floor — deterministic, no hash.
+    ///
+    /// ## Example
+    ///
+    /// ```
+    /// use urbix::layout::{DoorSide, Floor, Tile};
+    /// let mut f = Floor::empty(6, 6);
+    /// for x in 0..6 {
+    ///     for z in 0..6 {
+    ///         if x == 0 || z == 0 || x == 5 || z == 5 {
+    ///             f.tiles[z * 6 + x] = Tile::Wall;
+    ///         }
+    ///     }
+    /// }
+    /// // Four west-edge candidates; a door removes one.
+    /// assert_eq!(Floor::window_cells(&f, DoorSide::West).len(), 4);
+    /// f.tiles[2 * 6] = Tile::Door;
+    /// assert_eq!(Floor::window_cells(&f, DoorSide::West).len(), 3);
+    /// ```
+    #[must_use]
+    pub fn window_cells(floor: &Floor, side: DoorSide) -> Vec<(u8, u8)> {
+        let (w, d) = (floor.width, floor.depth);
+        if w < 3 || d < 3 {
+            return Vec::new();
+        }
+        let edge: Vec<(u8, u8)> = match side {
+            DoorSide::West => (1..d - 1).map(|z| (0, z)).collect(),
+            DoorSide::East => (1..d - 1).map(|z| (w - 1, z)).collect(),
+            DoorSide::North => (1..w - 1).map(|x| (x, 0)).collect(),
+            DoorSide::South => (1..w - 1).map(|x| (x, d - 1)).collect(),
+        };
+        edge.into_iter()
+            .filter(|(x, z)| floor.tiles[floor.index(*x, *z)] == Tile::Wall)
+            .collect()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Furniture — per-room-kind fitting sets stamped inside room rects
+// ---------------------------------------------------------------------------
+
+/// No furniture (bare tile).
+pub const FURN_NONE: u8 = 0;
+/// Bed (bedrooms).
+pub const FURN_BED: u8 = 1;
+/// Table (living, meeting, work bays).
+pub const FURN_TABLE: u8 = 2;
+/// Counter run (kitchens, retail, washrooms).
+pub const FURN_COUNTER: u8 = 3;
+/// Desk (offices, lobbies, receptions).
+pub const FURN_DESK: u8 = 4;
+/// Shelf (stockrooms, living rooms, utility).
+pub const FURN_SHELF: u8 = 5;
+/// Bath fixture (bathrooms).
+pub const FURN_BATH: u8 = 6;
+
+/// Furniture set for a room kind: `(primary, secondary)` as
+/// `(code, width, depth)` pieces. The primary stamps whenever it fits the
+/// room rect (clamped); the secondary rolls against the blueprint's
+/// `furn_density`. Unknown kinds get a shelf. A `(0, 0, 0)` secondary means
+/// none.
+#[must_use]
+pub const fn furniture_set(kind: u8) -> [(u8, u8, u8); 2] {
+    match kind {
+        10 => [(FURN_DESK, 2, 1), (FURN_SHELF, 1, 1)], // lobby / lounge
+        11 => [(FURN_DESK, 2, 1), (FURN_SHELF, 1, 1)], // open office
+        12 => [(FURN_TABLE, 2, 2), (FURN_NONE, 0, 0)], // meeting
+        13 => [(FURN_SHELF, 1, 1), (FURN_NONE, 0, 0)], // utility
+        20 => [(FURN_TABLE, 2, 2), (FURN_SHELF, 1, 1)], // living
+        21 => [(FURN_COUNTER, 2, 1), (FURN_TABLE, 1, 1)], // kitchen
+        22 => [(FURN_BED, 2, 3), (FURN_SHELF, 1, 1)],  // bedroom
+        23 => [(FURN_BATH, 1, 2), (FURN_NONE, 0, 0)],  // bathroom
+        30 => [(FURN_COUNTER, 3, 1), (FURN_SHELF, 1, 1)], // retail floor
+        31 => [(FURN_DESK, 2, 1), (FURN_NONE, 0, 0)],  // office/flex
+        32 => [(FURN_SHELF, 2, 1), (FURN_NONE, 0, 0)], // stockroom
+        40 => [(FURN_TABLE, 3, 2), (FURN_SHELF, 1, 1)], // open work bay
+        41 => [(FURN_DESK, 2, 1), (FURN_NONE, 0, 0)],  // office/reception
+        42 => [(FURN_COUNTER, 1, 1), (FURN_NONE, 0, 0)], // washroom
+        50 => [(FURN_SHELF, 1, 1), (FURN_NONE, 0, 0)], // small shed
+        _ => [(FURN_SHELF, 1, 1), (FURN_NONE, 0, 0)],  // custom kinds
     }
 }
 

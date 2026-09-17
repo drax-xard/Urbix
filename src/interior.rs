@@ -275,13 +275,15 @@ pub fn generate_layout_with_ground(
     // Typical program generates once and clones: a tower's middle floors are
     // one repeated layout, like a real typical plan (and ~N× cheaper).
     // Plumbing shafts are building-level (main blueprint), constant on every
-    // floor including a mixed-use ground, so wet stacks never jog.
-    let shafts = wet_shaft_columns(x_id, y_id, seed, gw, blueprint.wet_shafts);
+    // floor including a mixed-use ground, so wet stacks never jog. Unit
+    // rects come from the shared helper so rooms land where records say.
+    let shafts = building_shafts(id, seed, gw, blueprint.wet_shafts);
     let has_typical = floor_count > 2;
     let typical = if has_typical && blueprint.vary_typical == 0 {
         let (csize, cx, cz) = stacked.unwrap_or_else(|| {
             core_rect_for_floor(x_id, y_id, seed, 1, gw, gd, blueprint.core_size)
         });
+        let units = unit_rects_for_floor(id, ctx, 1, blueprint, blueprint);
         Some(generate_floor(
             x_id,
             y_id,
@@ -292,6 +294,7 @@ pub fn generate_layout_with_ground(
             ctx,
             blueprint,
             &shafts,
+            &units,
         ))
     } else {
         None
@@ -321,6 +324,7 @@ pub fn generate_layout_with_ground(
         } else {
             csize
         };
+        let units = unit_rects_for_floor(id, ctx, f, bp, blueprint);
         floors.push(generate_floor(
             x_id,
             y_id,
@@ -331,6 +335,7 @@ pub fn generate_layout_with_ground(
             ctx,
             bp,
             &shafts,
+            &units,
         ));
     }
 
@@ -451,22 +456,24 @@ fn punch_core_door(g: &mut Floor, cx: u8, cz: u8, size: u8) {
 ///
 /// Rooms never cross region bounds: open-plan floors use the whole interior,
 /// single-loaded floors exclude the corridor band, and apartment units each
-/// get their own region.
+/// get their own region. Public so consumers (reports, gates, FFI room
+/// records) recompute exactly the regions generation used.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct PlaceRegion {
+pub struct PlaceRegion {
     /// Left edge in grid cells.
-    x0: u8,
+    pub x0: u8,
     /// Top edge in grid cells.
-    z0: u8,
+    pub z0: u8,
     /// Width in cells.
-    w: u8,
+    pub w: u8,
     /// Depth in cells.
-    d: u8,
+    pub d: u8,
 }
 
 impl PlaceRegion {
     /// The whole interior inside the wall ring of a `gw×gd` grid.
-    fn interior(gw: usize, gd: usize) -> Self {
+    #[must_use]
+    pub fn interior(gw: usize, gd: usize) -> Self {
         Self {
             x0: 1,
             z0: 1,
@@ -476,7 +483,8 @@ impl PlaceRegion {
     }
 
     /// Whether a `w×d` rect at `(x, z)` lies fully inside the region.
-    fn contains(&self, x: i64, z: i64, w: u8, d: u8) -> bool {
+    #[must_use]
+    pub fn contains(&self, x: i64, z: i64, w: u8, d: u8) -> bool {
         let (rx0, rz0) = (i64::from(self.x0), i64::from(self.z0));
         x >= rx0
             && z >= rz0
@@ -485,7 +493,7 @@ impl PlaceRegion {
     }
 }
 
-/// A placed room: rect plus the door count its template requires.
+/// A placed room: rect plus the template facts doors and furniture need.
 struct PlacedRoom {
     /// Top-left x in grid cells.
     x0: u8,
@@ -495,15 +503,17 @@ struct PlacedRoom {
     w: u8,
     /// Depth in cells.
     d: u8,
+    /// Opaque room-kind tag (furniture sets key off it).
+    kind: u8,
     /// Doors to punch for this room.
     doors: u8,
 }
 
-/// Plumbing shaft columns for a building: spread x positions inside a
-/// `gw`-wide grid, identical on every floor (no floor fold) so wet rooms
-/// stack vertically. Capped at 4 shafts; empty when `count` is 0 or the
-/// grid is degenerate.
-pub(crate) fn wet_shaft_columns(x_id: i64, y_id: i64, seed: u64, gw: usize, count: u8) -> Vec<u8> {
+/// Plumbing shaft columns for a grid: spread x positions, identical for a
+/// given `(x_id, y_id, seed, gw, count)` — callers pass one building's
+/// inputs so wet rooms stack vertically across floors. Capped at 4 shafts;
+/// empty when `count` is 0 or the grid is degenerate.
+fn wet_shaft_columns(x_id: i64, y_id: i64, seed: u64, gw: usize, count: u8) -> Vec<u8> {
     let n = usize::from(count.min(4));
     if n == 0 || gw < 3 {
         return Vec::new();
@@ -532,7 +542,15 @@ pub(crate) fn wet_shaft_columns(x_id: i64, y_id: i64, seed: u64, gw: usize, coun
 /// halves to contain a shaft column, so no unit is ever orphaned from the
 /// plumbing stacks; horizontal cuts preserve the x-span and are always
 /// valid. If no valid cut exists the loop stops early.
-fn split_units(region: PlaceRegion, max_units: u8, shafts: &[u8], base: u64) -> Vec<PlaceRegion> {
+///
+/// Public so reports, gates, and room-record export recompute exactly the
+/// units generation used.
+pub fn split_units(
+    region: PlaceRegion,
+    max_units: u8,
+    shafts: &[u8],
+    base: u64,
+) -> Vec<PlaceRegion> {
     if max_units <= 1 {
         return vec![region];
     }
@@ -609,6 +627,166 @@ fn split_units(region: PlaceRegion, max_units: u8, shafts: &[u8], base: u64) -> 
     rects
 }
 
+/// Building plumbing shafts from an interior id: one column set per
+/// building, shared by every storey (no floor fold) so wet rooms stack
+/// vertically. Public so reports and gates reuse generation's exact shafts.
+#[must_use]
+pub fn building_shafts(id: InteriorId, seed: u64, gw: usize, count: u8) -> Vec<u8> {
+    let (x_id, y_id) = split_id(id);
+    wet_shaft_columns(x_id, y_id, seed, gw, count)
+}
+
+/// Unit rects for one storey, recomputed exactly as generation does.
+///
+/// Takes the floor's own blueprint (ground override on floor 0) for the
+/// placeable region and unit policy, but the main blueprint's shafts —
+/// matching `generate_layout_with_ground`, where shafts are building-level.
+/// Public so room-record export and gates agree with generation bit for bit.
+///
+/// ## Example
+///
+/// ```
+/// use urbix::interior::unit_rects_for_floor;
+/// use urbix::layout::{blueprint_defaults, DoorSide, InteriorContext};
+/// use urbix::zones::ZoneType;
+///
+/// let ctx = InteriorContext::new(
+///     9, ZoneType::Residential, [0.0; 5], 12.0, 4.0, 64, 14, 12, 1,
+///     DoorSide::South, 3, false, urbix::layout::BuildingRole::Ordinary,
+///     ZoneType::Commercial,
+/// );
+/// let main = blueprint_defaults(ZoneType::Residential);
+/// let units = unit_rects_for_floor(9, &ctx, 1, &main, &main);
+/// assert!(!units.is_empty());
+/// ```
+#[must_use]
+pub fn unit_rects_for_floor(
+    id: InteriorId,
+    ctx: &InteriorContext,
+    floor: u8,
+    floor_bp: &Blueprint,
+    main_bp: &Blueprint,
+) -> Vec<PlaceRegion> {
+    let gw = usize::from(ctx.footprint_w.max(1));
+    let gd = usize::from(ctx.footprint_d.max(1));
+    if gw < 3 || gd < 3 {
+        return Vec::new();
+    }
+    // Same region rule as generation (single-loaded band excluded).
+    let region = if floor_bp.corridor == 1 && gd >= 6 {
+        PlaceRegion {
+            x0: 1,
+            z0: 1,
+            w: (gw - 2) as u8,
+            d: (gd - 4) as u8,
+        }
+    } else {
+        PlaceRegion::interior(gw, gd)
+    };
+    let (x_id, y_id) = split_id(id);
+    let base = floor_hash(x_id, y_id, ctx.seed, floor, domain::LAYOUT_ROOM);
+    let shafts = building_shafts(id, ctx.seed, gw, main_bp.wet_shafts);
+    split_units(region, floor_bp.unit_max, &shafts, base)
+}
+
+/// One enumerated room: rect plus kind, apartment, and area.
+///
+/// Produced by [`rooms_of_floor`] for FFI export and gates. `unit` is the
+/// index into the floor's [`unit_rects_for_floor`] list (`255` when outside
+/// every unit, which clipping normally prevents).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RoomRecord {
+    /// Storey index within the layout.
+    pub floor: u8,
+    /// Left edge in grid cells.
+    pub x: u8,
+    /// Top edge in grid cells.
+    pub z: u8,
+    /// Width in cells.
+    pub w: u8,
+    /// Depth in cells.
+    pub d: u8,
+    /// Opaque room-kind tag (blueprint semantics).
+    pub kind: u8,
+    /// Apartment index on this floor (`255` = outside every unit).
+    pub unit: u8,
+    /// Floor area in tiles.
+    pub area: u16,
+}
+
+/// Enumerate a finished floor's rooms as records.
+///
+/// Rooms never touch orthogonally (the placement margin rule), so
+/// 4-connected components of `Room` tiles ARE rooms. Row-major scan order
+/// makes the output deterministic. Pure geometry over the finished floor —
+/// no hash — so gates and exporters always agree with each other (and, via
+/// shared inputs, with generation).
+#[must_use]
+pub fn rooms_of_floor(floor: &Floor, floor_idx: u8, units: &[PlaceRegion]) -> Vec<RoomRecord> {
+    let gw = usize::from(floor.width);
+    let gd = usize::from(floor.depth);
+    let n = gw * gd;
+    let mut seen = vec![false; n];
+    let mut out = Vec::new();
+    for z in 0..gd {
+        for x in 0..gw {
+            let start = z * gw + x;
+            if seen[start] || floor.tiles[start] != Tile::Room {
+                continue;
+            }
+            // Flood fill one 4-connected room.
+            let mut stack = vec![(x, z)];
+            let (mut x0, mut z0, mut x1, mut z1) = (x, z, x, z);
+            let mut kind = 0u8;
+            let mut area = 0u16;
+            while let Some((cx, cz)) = stack.pop() {
+                let i = cz * gw + cx;
+                if seen[i] || floor.tiles[i] != Tile::Room {
+                    continue;
+                }
+                seen[i] = true;
+                x0 = x0.min(cx);
+                z0 = z0.min(cz);
+                x1 = x1.max(cx);
+                z1 = z1.max(cz);
+                kind = floor.kinds[i];
+                area += 1;
+                if cx > 0 {
+                    stack.push((cx - 1, cz));
+                }
+                if cz > 0 {
+                    stack.push((cx, cz - 1));
+                }
+                if cx + 1 < gw {
+                    stack.push((cx + 1, cz));
+                }
+                if cz + 1 < gd {
+                    stack.push((cx, cz + 1));
+                }
+            }
+            let unit = units
+                .iter()
+                .position(|u| {
+                    u.contains(x0 as i64, z0 as i64, 1, 1)
+                        && u.contains((x1) as i64, (z1) as i64, 1, 1)
+                })
+                .map(|i| i as u8)
+                .unwrap_or(255);
+            out.push(RoomRecord {
+                floor: floor_idx,
+                x: x0 as u8,
+                z: z0 as u8,
+                w: (x1 - x0 + 1) as u8,
+                d: (z1 - z0 + 1) as u8,
+                kind,
+                unit,
+                area,
+            });
+        }
+    }
+    out
+}
+
 /// Punch a unit's front door: the first `Void` cell on the unit rect's edge
 /// whose outward neighbour is open (Void/Corridor/Door/Core — future
 /// circulation, never a wall to the outside), in a hashed rotation so doors
@@ -669,7 +847,9 @@ fn punch_unit_door(g: &mut Floor, unit: PlaceRegion, base: u64) -> bool {
 /// interior id's coordinate halves and `seed` the world seed; room and door
 /// draws mix in the floor number so storeys vary, while `core` (size,
 /// position) arrives precomputed — stacked once per building, or wandering
-/// per floor when the blueprint opts in.
+/// per floor when the blueprint opts in. `units` are this floor's apartment
+/// rects from [`unit_rects_for_floor`] (same inputs generation used, so rooms
+/// land where records say they are).
 #[must_use]
 #[allow(clippy::too_many_arguments)] // one bundle per pipeline stage; splitting hides the flow
 fn generate_floor(
@@ -682,6 +862,7 @@ fn generate_floor(
     ctx: &InteriorContext,
     blueprint: &Blueprint,
     shafts: &[u8],
+    units: &[PlaceRegion],
 ) -> Floor {
     use crate::layout::FloorRole;
     let mut g = Floor::empty(ctx.footprint_w, ctx.footprint_d);
@@ -719,40 +900,25 @@ fn generate_floor(
 
     // Placeable region: the whole interior, or north of a single-loaded
     // corridor band painted along the south interior edge (rooms line one
-    // side, circulation the other).
-    let region = if blueprint.corridor == 1 && gd >= 6 {
+    // side, circulation the other). Mirrors `unit_rects_for_floor`, which
+    // computed the `units` below from the same rule.
+    if blueprint.corridor == 1 && gd >= 6 {
         for x in 1..gw - 1 {
             let idx = (gd - 2) * gw + x;
             if g.tiles[idx] == Tile::Void {
                 g.tiles[idx] = Tile::Corridor;
             }
         }
-        PlaceRegion {
-            x0: 1,
-            z0: 1,
-            w: (gw - 2) as u8,
-            d: (gd - 4) as u8,
-        }
-    } else {
-        PlaceRegion::interior(gw, gd)
-    };
+    }
 
     // Weighted room placement against the free area, per unit region.
+    // `units` arrive precomputed from `unit_rects_for_floor` (same inputs
+    // generation used, so rooms land where records say they are).
     let rooms = blueprint.room_slice();
     let mut placed: Vec<PlacedRoom> = Vec::new();
-    if !rooms.is_empty() && region.w > 0 && region.d > 0 {
+    if !rooms.is_empty() && !units.is_empty() {
         let room_base = floor_hash(x_id, y_id, seed, floor, domain::LAYOUT_ROOM);
         let smallest = smallest_template(rooms);
-
-        // Unit subdivision (open plan when unit_max is 0): each unit gets its
-        // own anchor order, rooms, guarantee, and front door. Cuts keep every
-        // unit on a shaft column so wet rooms can always stack.
-        let units = split_units(
-            region,
-            blueprint.unit_max,
-            shafts,
-            floor_hash(x_id, y_id, seed, floor, domain::LAYOUT_ROOM),
-        );
 
         // Pass A — minimums: each template with min_count>0 is placed up to
         // its minimum across the units (round-robin), wet rooms through the
@@ -764,7 +930,7 @@ fn generate_floor(
             .filter(|(_, n)| *n > 0)
             .collect();
         let mut draw_k = 10_000usize;
-        for unit in &units {
+        for unit in units {
             let anchors = shuffled_anchors(&g, *unit, room_base, 0);
             for (room, need) in needs.iter_mut().map(|(r, n)| (*r, n)) {
                 while *need > 0 {
@@ -785,6 +951,7 @@ fn generate_floor(
                                 z0,
                                 w,
                                 d,
+                                kind: room.kind,
                                 doors: room.door_count(),
                             });
                             done = true;
@@ -824,6 +991,7 @@ fn generate_floor(
                         z0,
                         w,
                         d,
+                        kind: room.kind,
                         doors: room.door_count(),
                     });
                 }
@@ -862,6 +1030,7 @@ fn generate_floor(
                                     z0,
                                     w,
                                     d,
+                                    kind: forced.kind,
                                     doors: forced.door_count(),
                                 });
                                 break 'force;
@@ -876,12 +1045,19 @@ fn generate_floor(
         }
 
         // A door from each room onto circulation (door 0 draws at k = 1,
-        // independently of the entrance pick at k = 0 on the same stream).
+        // independently of the entrance pick at k = 0 on the same door stream).
         let door_base = floor_hash(x_id, y_id, seed, floor, domain::LAYOUT_DOOR);
         for p in &placed {
             for di in 0..p.doors {
                 room_door(&mut g, (p.x0, p.z0, p.w, p.d), door_base, di as usize);
             }
+        }
+
+        // Furniture: each placed room stamps its kind's fitting set into the
+        // parallel furn layer (Room tiles only — tile semantics never change).
+        let furn_base = floor_hash(x_id, y_id, seed, floor, domain::LAYOUT_FURNITURE);
+        for (ri, p) in placed.iter().enumerate() {
+            stamp_furniture(&mut g, p, furn_base, ri, blueprint.furn_density);
         }
     }
 
@@ -1194,6 +1370,60 @@ fn paint_room(g: &mut Floor, x0: u8, z0: u8, w: u8, d: u8, kind: u8) {
             let i = z * gw + x;
             g.tiles[i] = Tile::Room;
             g.kinds[i] = kind;
+        }
+    }
+}
+
+/// Stamp a room's furniture set into the parallel furn layer.
+///
+/// The primary piece always stamps (clamped to the room rect); the secondary
+/// rolls against `density` percent. Pieces sit at hashed room corners so
+/// identical rooms vary, and only convert `Room` tiles that are still bare —
+/// tile semantics never change under renderers, and pieces never overlap.
+fn stamp_furniture(g: &mut Floor, room: &PlacedRoom, base: u64, ri: usize, density: u8) {
+    use crate::layout::{furniture_set, FURN_NONE};
+    let gw = usize::from(g.width);
+    let gd = usize::from(g.depth);
+    let set = furniture_set(room.kind);
+    let mut pieces = vec![set[0]];
+    if set[1].0 != FURN_NONE && unit_draw(base, ri) * 100.0 < f32::from(density) {
+        pieces.push(set[1]);
+    }
+    for (pi, (code, pw, pd)) in pieces.into_iter().enumerate() {
+        if code == FURN_NONE {
+            continue;
+        }
+        // Clamp the piece to the room rect, then try its four corners in a
+        // hashed rotation for the first all-Room-and-bare fit.
+        let pw = pw.min(room.w).max(1);
+        let pd = pd.min(room.d).max(1);
+        let corners = [
+            (room.x0, room.z0),
+            (room.x0 + room.w - pw, room.z0),
+            (room.x0, room.z0 + room.d - pd),
+            (room.x0 + room.w - pw, room.z0 + room.d - pd),
+        ];
+        let rot = pick(base, ri * 2 + pi, corners.len());
+        for t in 0..corners.len() {
+            let (px, pz) = corners[(rot + t) % corners.len()];
+            let fits = (0..pd).all(|dz| {
+                (0..pw).all(|dw| {
+                    let (x, z) = (px as usize + dw as usize, pz as usize + dz as usize);
+                    x < gw
+                        && z < gd
+                        && g.tiles[z * gw + x] == Tile::Room
+                        && g.furn[z * gw + x] == FURN_NONE
+                })
+            });
+            if fits {
+                for dz in 0..pd {
+                    for dw in 0..pw {
+                        let idx = (pz as usize + dz as usize) * gw + (px as usize + dw as usize);
+                        g.furn[idx] = code;
+                    }
+                }
+                break;
+            }
         }
     }
 }
@@ -1936,6 +2166,27 @@ mod tests {
     }
 
     #[test]
+    fn street_edges_carry_windows() {
+        // Finished ground floors keep walled edges with window candidates
+        // outside corners and the entrance.
+        let ctx = apartments_ctx(34, 13);
+        let bp = crate::layout::blueprint_defaults(ctx.zone);
+        let layout = generate_layout(34, &ctx, &bp);
+        let wins = crate::layout::Floor::window_cells(&layout.floors[0], ctx.door_side);
+        assert!(!wins.is_empty(), "no window candidates on entry edge");
+        // Never a corner, never a door.
+        let (w, d) = (layout.floors[0].width, layout.floors[0].depth);
+        for (x, z) in wins {
+            let corner = (x == 0 || x + 1 == w) && (z == 0 || z + 1 == d);
+            assert!(!corner, "window candidate on a corner");
+            assert_ne!(
+                layout.floors[0].tiles[layout.floors[0].index(x, z)],
+                Tile::Door
+            );
+        }
+    }
+
+    #[test]
     fn unplaceable_minimums_skip_without_panic() {
         // A minimum template larger than the grid can never fit: the floor
         // still completes (the minimum is best-effort, never a hang).
@@ -1946,6 +2197,53 @@ mod tests {
         let ctx = lot_ctx(27, DoorSide::West, 3);
         let layout = generate_layout(27, &ctx, &bp);
         assert!(!layout.floors.is_empty());
+    }
+
+    #[test]
+    fn furniture_lives_only_on_room_tiles() {
+        // The furn layer parallels tiles 1:1; codes are set strictly inside
+        // painted room rects, never on circulation, walls, or doors.
+        for (id, seed) in [(31, 5), (32, 6)] {
+            let ctx = apartments_ctx(id, seed);
+            let bp = crate::layout::blueprint_defaults(ctx.zone);
+            let layout = generate_layout(id, &ctx, &bp);
+            let mut furnished = 0;
+            for f in &layout.floors {
+                assert_eq!(f.furn.len(), f.tiles.len());
+                for (i, code) in f.furn.iter().enumerate() {
+                    assert!(
+                        *code <= crate::layout::FURN_BATH,
+                        "code {code} out of range"
+                    );
+                    if *code != 0 {
+                        furnished += 1;
+                        assert_eq!(f.tiles[i], Tile::Room, "furniture on a non-room tile");
+                    }
+                }
+            }
+            assert!(furnished > 0, "home has no furniture at all");
+        }
+    }
+
+    #[test]
+    fn furniture_density_gates_second_pieces() {
+        // Density 0 leaves primaries only; 100 adds secondaries. Same rooms,
+        // monotonically more furniture — deterministic per seed.
+        let ctx = apartments_ctx(33, 12);
+        let mut bare = crate::layout::blueprint_defaults(ctx.zone);
+        bare.furn_density = 0;
+        let mut full = crate::layout::blueprint_defaults(ctx.zone);
+        full.furn_density = 100;
+        let count = |bp: &crate::layout::Blueprint| {
+            generate_layout(33, &ctx, bp)
+                .floors
+                .iter()
+                .map(|f| f.furn.iter().filter(|c| **c != 0).count())
+                .sum::<usize>()
+        };
+        let (lo, hi) = (count(&bare), count(&full));
+        assert!(lo > 0, "primaries never stamped");
+        assert!(hi >= lo, "density 100 furnishes less than density 0");
     }
 
     #[test]

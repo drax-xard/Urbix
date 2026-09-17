@@ -266,6 +266,9 @@ impl WorldConfig {
             if bp.wet_shafts > 4 || bp.corridor > 1 {
                 return false;
             }
+            if bp.furn_density > 100 {
+                return false;
+            }
             if bp.ground_zone != 255 && bp.ground_zone >= crate::zones::ZONE_COUNT as u8 {
                 return false;
             }

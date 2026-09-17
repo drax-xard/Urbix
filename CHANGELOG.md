@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-09-16
+
+### Added
+
+- **Interior finish** (Milestone 15 — lived-in rooms a consumer can render
+  and query):
+  - Furniture (`src/layout.rs`, `src/interior.rs`): per-kind fitting sets
+    (`FURN_BED/TABLE/COUNTER/DESK/SHELF/BATH`) stamped into a parallel
+    `Floor.furn` layer — primary always (clamped, hashed corner),
+    secondary rolls the new `furn_density` percent knob (validated ≤ 100).
+    Tile semantics frozen; payload grows to 3 grids per floor
+    (prefix-compatible: old readers slicing two thirds keep working).
+  - `Floor::window_cells` derivation helper + renderer recipe (no wire
+    tile).
+  - Room records: `rooms_of_floor` (4-connected components) +
+    `unit_rects_for_floor` / `building_shafts` / `split_units` /
+    `PlaceRegion` published so gates and exporters agree with generation;
+    additive `urbix_generate_interior_rooms` / `urbix_interior_rooms_free`
+    (`UrbixRoom` 10 B, header-asserted; `UrbixInterior` untouched).
+  - Engine-side `InteriorCache` on the FFI path
+    (`WorldEngine::interior_layout`, `interior_cache_len`); both FFI
+    interior entry points route through it.
+  - `examples/interiors_gate.rs`: synthetic fixture + 18 sampled lots
+    (stacking, entrances, minimums, wet alignment, furniture, records).
+  - ASCII maps mark furnished rooms uppercase; reports show
+    units/shafts/furniture stats.
+  - Tests: furniture hygiene + density gating, windows, room/FFI
+    round-trips, cache hits, old-blueprint compat already covered.
+
+### Changed
+
+- Docs: `docs/interiors.md` (furniture, windows, rooms FFI, cache, gate;
+  Roadmap ✅), `examples/examples.md`, `Urbix_Project.md` M15 ✅;
+  `README.md` updated.
+
 ## [0.14.0] — 2026-09-16
 
 ### Added

@@ -26,14 +26,21 @@ use crate::cache::ChunkCache;
 use crate::chunk::generate_chunk;
 use crate::config::WorldConfig;
 use crate::data::{ChunkBuffer, ChunkId};
+use crate::interior::InteriorCache;
+use crate::layout::InteriorLayout;
 use crate::region::VoronoiDiagram;
 use crate::zones::ZONE_COUNT;
+
+/// Default capacity of the interior layout cache (number of interiors).
+const INTERIOR_CACHE_CAPACITY: usize = 64;
 
 /// Stateful engine tying together config, Voronoi region, and chunk cache.
 ///
 /// Construct with a seed; the Voronoi district map is generated once at
 /// construction and kept for the entire run. Chunks are generated on demand
 /// and cached with distance-based eviction so memory stays bounded.
+/// Interiors are cached separately by [`InteriorId`](crate::data::InteriorId)
+/// with pure capacity eviction (they regenerate deterministically).
 ///
 /// ## Example
 ///
@@ -57,6 +64,8 @@ pub struct WorldEngine {
     /// (cache misses). Cache hits are not counted here so this metric
     /// directly reflects generation work.
     generated_count: u64,
+    /// Bounded LRU of generated interiors keyed by interior id.
+    interiors: InteriorCache<InteriorLayout>,
 }
 
 impl WorldEngine {
@@ -104,6 +113,7 @@ impl WorldEngine {
             voronoi,
             cache,
             generated_count: 0,
+            interiors: InteriorCache::new(INTERIOR_CACHE_CAPACITY),
         }
     }
 
@@ -224,6 +234,61 @@ impl WorldEngine {
         &self.voronoi
     }
 
+    /// Generate (or fetch from cache) the interior layout for the built
+    /// cell at absolute world coordinates `(wx, wz)`.
+    ///
+    /// Returns `None` for unbuilt cells (`height <= 0`). Hits consult the
+    /// bounded interior LRU (capacity [`INTERIOR_CACHE_CAPACITY`]); misses
+    /// run the same chunk → context → mixed-use layout path the standalone
+    /// functions use, then insert. Layouts regenerate deterministically, so
+    /// eviction is always safe.
+    ///
+    /// ## Example
+    ///
+    /// ```no_run
+    /// use urbix::engine::WorldEngine;
+    ///
+    /// let mut engine = WorldEngine::new(445566);
+    /// // Whatever is built at the origin gets a cached layout on demand.
+    /// let _ = engine.interior_layout(12, 17);
+    /// ```
+    pub fn interior_layout(&mut self, wx: i64, wz: i64) -> Option<InteriorLayout> {
+        let n = i64::from(self.config.chunk_size);
+        let cx = wx.div_euclid(n) as i32;
+        let cy = wz.div_euclid(n) as i32;
+        let chunk = self.generate_chunk(cx, cy);
+        let lx = wx.rem_euclid(n) as usize;
+        let ly = wz.rem_euclid(n) as usize;
+        let cell = chunk.get_cell(ly * n as usize + lx);
+        if cell.height <= 0.0 || cell.interior_id == 0 {
+            return None;
+        }
+        if let Some(cached) = self.interiors.get(&cell.interior_id) {
+            return Some(cached.clone());
+        }
+        let ctx = crate::chunk::interior_context_for(&self.config, &self.voronoi, wx, wz, &cell);
+        let blueprint = self.config.blueprint_for(ctx.zone);
+        let ground = crate::interior::resolve_ground_override(
+            &ctx,
+            &blueprint,
+            &self.config.interior_blueprints,
+        );
+        let layout = crate::interior::generate_layout_with_ground(
+            cell.interior_id,
+            &ctx,
+            &blueprint,
+            ground,
+        );
+        self.interiors.insert(cell.interior_id, layout.clone());
+        Some(layout)
+    }
+
+    /// Number of interiors currently held in the interior cache.
+    #[must_use]
+    pub fn interior_cache_len(&self) -> usize {
+        self.interiors.len()
+    }
+
     /// Number of chunks that were actually generated (cache misses).
     #[must_use]
     pub fn generated_count(&self) -> u64 {
@@ -265,6 +330,42 @@ mod tests {
         assert_eq!(a.as_bytes(), b.as_bytes());
         assert_eq!(engine.generated_count(), 1); // second call is a hit
         assert_eq!(engine.cache_len(), 1);
+    }
+
+    #[test]
+    fn interior_layout_caches_and_repeats() {
+        // First call misses and inserts; the second hits with identical
+        // bytes. Unbuilt cells return None without touching the cache.
+        let mut engine = WorldEngine::new(445566);
+        assert_eq!(engine.interior_cache_len(), 0);
+        // Find a built cell near the origin by scanning chunk (0,0).
+        let chunk = engine.generate_chunk(0, 0);
+        let n = i64::from(engine.config().chunk_size);
+        let mut built = None;
+        for (i, cell) in chunk.cells().enumerate() {
+            if cell.height > 0.0 {
+                built = Some((i as i64 % n, i as i64 / n));
+                break;
+            }
+        }
+        let (lx, ly) = built.expect("a built cell exists near (0,0)");
+        let a = engine
+            .interior_layout(lx, ly)
+            .expect("built cell has a layout");
+        assert_eq!(engine.interior_cache_len(), 1);
+        let b = engine.interior_layout(lx, ly).expect("cache hit");
+        assert_eq!(engine.interior_cache_len(), 1); // no second insert
+        assert_eq!(a, b);
+        // A street cell (height 0) yields None.
+        let mut street = None;
+        for (i, cell) in chunk.cells().enumerate() {
+            if cell.height <= 0.0 {
+                street = Some((i as i64 % n, i as i64 / n));
+                break;
+            }
+        }
+        let (sx, sy) = street.expect("a street cell exists near (0,0)");
+        assert!(engine.interior_layout(sx, sy).is_none());
     }
 
     #[test]

@@ -80,6 +80,20 @@ cargo run --release --example walkability -- --seed 445566 --extent 8
 Flags: `--seed`, `--center-cx` / `--center-cy`, `--extent` (1..=64),
 `--chunk-size` (same parser as `viz`).
 
+## `interiors_gate` — interior acceptance (headless)
+
+Checks a roomy synthetic apartment plus sampled real lots through the
+public engine path (cached layouts, room records): stacked shafts, one
+ground entrance, kitchen+bath minimums, wet-stack alignment, furniture
+hygiene, record/grid agreement. Exits 1 on the first violation, so CI can
+gate on it.
+
+```sh
+cargo run --release --example interiors_gate
+```
+
+No flags: seeds and windows are fixed so the gate is deterministic.
+
 ## `interactive` — streaming explorer (egui window)
 
 An egui/eframe window that pans/zooms over the infinite world, proving bounded

@@ -73,14 +73,19 @@ pub struct UrbixZoneAffinity {
 /// floor i (i in 0..floor_count):
 ///   tiles[footprint_w * footprint_d]   // one Tile byte each, row-major
 ///   kinds[footprint_w * footprint_d]   // room-kind tag byte each, 0 = not room
+///   furn[footprint_w * footprint_d]    // furniture code byte each, 0 = bare (M15)
 /// ```
 ///
 /// Every floor shares the same `footprint_w × footprint_d` grid, so `len` is
-/// exactly `floor_count * 2 * footprint_w * footprint_d`. `Tile` bytes are the
+/// exactly `floor_count * 3 * footprint_w * footprint_d`. The furniture layer
+/// is appended (never interleaved): readers slicing the first two thirds
+/// keep working unchanged. `Tile` bytes are the
 /// [`crate::layout::Tile`] enum values (0 = void, 1 = wall, 2 = door, 3 = core,
-/// 4 = corridor, 5 = room). The caller owns this payload and must release it
-/// with [`urbix_interior_free`]. An unbuilt cell (height ≤ 0) or null engine
-/// yields a zeroed header with `data == null` and `len == 0`.
+/// 4 = corridor, 5 = room); furniture bytes are the `FURN_*` codes
+/// (`crate::layout`, 0 = bare, set only where the tile is `Room`). The caller
+/// owns this payload and must release it with [`urbix_interior_free`]. An
+/// unbuilt cell (height ≤ 0) or null engine yields a zeroed header with
+/// `data == null` and `len == 0`.
 #[repr(C)]
 pub struct UrbixInterior {
     /// Stable interior key (the built cell's deterministic key).
@@ -95,7 +100,7 @@ pub struct UrbixInterior {
     pub footprint_w: u8,
     /// Shared floor-grid depth in tiles.
     pub footprint_d: u8,
-    /// Number of storeys (`len` = `floor_count * 2 * footprint_w * footprint_d`).
+    /// Number of storeys (`len` = `floor_count * 3 * footprint_w * footprint_d`).
     pub floor_count: u16,
     /// Total payload byte length; 0 when unbuilt.
     pub len: u64,
@@ -201,31 +206,10 @@ pub unsafe extern "C" fn urbix_generate_interior(
     // SAFETY: caller guarantees a valid non-concurrently-used engine handle.
     let engine = unsafe { &mut *(engine as *mut WorldEngine) };
 
-    let n = i64::from(engine.config().chunk_size);
-    let cx = i64::from(wx).div_euclid(n) as i32;
-    let cy = i64::from(wz).div_euclid(n) as i32;
-    let chunk = engine.generate_chunk(cx, cy);
-
-    let lx = i64::from(wx).rem_euclid(n) as usize;
-    let ly = i64::from(wz).rem_euclid(n) as usize;
-    let cell = chunk.get_cell(ly * n as usize + lx);
-    if cell.height <= 0.0 {
-        return empty;
-    }
-
-    let config = engine.config();
-    let ctx = crate::chunk::interior_context_for(
-        config,
-        engine.voronoi(),
-        i64::from(wx),
-        i64::from(wz),
-        &cell,
-    );
-    let blueprint = config.blueprint_for(ctx.zone);
-    let ground =
-        crate::interior::resolve_ground_override(&ctx, &blueprint, &config.interior_blueprints);
-    let layout =
-        crate::interior::generate_layout_with_ground(cell.interior_id, &ctx, &blueprint, ground);
+    let layout = match engine.interior_layout(i64::from(wx), i64::from(wz)) {
+        Some(layout) => layout,
+        None => return empty,
+    };
 
     let first = &layout.floors[0];
     let payload = interior_payload(&layout);
@@ -234,8 +218,8 @@ pub unsafe extern "C" fn urbix_generate_interior(
     UrbixInterior {
         interior_id: layout.id,
         seed: layout.seed,
-        zone: ctx.zone as u8,
-        door_side: ctx.door_side as u8,
+        zone: layout.context.zone as u8,
+        door_side: layout.context.door_side as u8,
         footprint_w: first.width,
         footprint_d: first.depth,
         floor_count: layout.floors.len() as u16,
@@ -266,6 +250,140 @@ pub unsafe extern "C" fn urbix_interior_free(interior: UrbixInterior) {
     });
 }
 
+/// One enumerated room: rect plus kind, apartment, and area.
+///
+/// Produced by [`urbix_generate_interior_rooms`] from the same finished
+/// floors [`urbix_generate_interior`] ships, so grids and records always
+/// agree. `unit` indexes the floor's apartment list (`255` = outside every
+/// unit); `kind` is the opaque blueprint room tag; `area` counts tiles.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UrbixRoom {
+    /// Storey index within the interior.
+    pub floor: u8,
+    /// Left edge in grid cells.
+    pub x: u8,
+    /// Top edge in grid cells.
+    pub z: u8,
+    /// Width in cells.
+    pub w: u8,
+    /// Depth in cells.
+    pub d: u8,
+    /// Opaque room-kind tag (blueprint semantics).
+    pub kind: u8,
+    /// Apartment index on this floor (`255` = outside every unit).
+    pub unit: u8,
+    /// Floor area in tiles.
+    pub area: u16,
+}
+
+/// An owned room list handed to foreign code.
+///
+/// `data` points at `count` packed [`UrbixRoom`] records in deterministic
+/// (row-major scan) order. The caller owns the buffer and must release it
+/// with [`urbix_interior_rooms_free`]. Unbuilt cells and null engines yield
+/// `{null, 0}`.
+#[repr(C)]
+pub struct UrbixRoomList {
+    /// Start of the record array; null when empty.
+    pub data: *mut UrbixRoom,
+    /// Number of records.
+    pub count: u64,
+}
+
+/// Enumerate every room of the built cell at world space `(wx, wz)`.
+///
+/// Same lookup path as [`urbix_generate_interior`] (chunk → context →
+/// layout, through the engine interior cache), then one [`UrbixRoom`] per
+/// 4-connected room component per floor, with apartment and area attached.
+/// Release the result with [`urbix_interior_rooms_free`].
+///
+/// ## Safety
+///
+/// `engine` must be a valid, non-null handle from [`urbix_engine_create`].
+#[no_mangle]
+pub unsafe extern "C" fn urbix_generate_interior_rooms(
+    engine: *mut UrbixEngine,
+    wx: i32,
+    wz: i32,
+) -> UrbixRoomList {
+    let empty = UrbixRoomList {
+        data: ptr::null_mut(),
+        count: 0,
+    };
+    if engine.is_null() {
+        return empty;
+    }
+    // SAFETY: caller guarantees a valid non-concurrently-used engine handle.
+    let engine = unsafe { &mut *(engine as *mut WorldEngine) };
+
+    let layout = match engine.interior_layout(i64::from(wx), i64::from(wz)) {
+        Some(layout) => layout,
+        None => return empty,
+    };
+    let config = engine.config();
+    let main_bp = config.blueprint_for(layout.context.zone);
+    let ground = crate::interior::resolve_ground_override(
+        &layout.context,
+        &main_bp,
+        &config.interior_blueprints,
+    );
+    let mut rooms = Vec::new();
+    for (f, floor) in layout.floors.iter().enumerate() {
+        let bp = if f == 0 { ground } else { &main_bp };
+        let units = crate::interior::unit_rects_for_floor(
+            layout.id,
+            &layout.context,
+            f as u8,
+            bp,
+            &main_bp,
+        );
+        rooms.extend(
+            crate::interior::rooms_of_floor(floor, f as u8, &units)
+                .into_iter()
+                .map(|r| UrbixRoom {
+                    floor: r.floor,
+                    x: r.x,
+                    z: r.z,
+                    w: r.w,
+                    d: r.d,
+                    kind: r.kind,
+                    unit: r.unit,
+                    area: r.area,
+                }),
+        );
+    }
+    let count = rooms.len() as u64;
+    if rooms.is_empty() {
+        return empty;
+    }
+    let data = Box::into_raw(rooms.into_boxed_slice()) as *mut UrbixRoom;
+    UrbixRoomList { data, count }
+}
+
+/// Release a room list returned by [`urbix_generate_interior_rooms`].
+///
+/// ## Safety
+///
+/// `list` must be an *unreleased* result from
+/// [`urbix_generate_interior_rooms`]. Calling this twice on the same list
+/// (or with an unrelated list) is double-free / undefined behaviour.
+#[no_mangle]
+pub unsafe extern "C" fn urbix_interior_rooms_free(list: UrbixRoomList) {
+    if list.data.is_null() {
+        return;
+    }
+    // SAFETY: caller guarantees the list came from
+    // urbix_generate_interior_rooms, so data is a Rust-allocated boxed slice
+    // of exactly `count` records.
+    drop(unsafe {
+        Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+            list.data,
+            list.count as usize,
+        ))
+    });
+}
+
 /// An unbuilt ("empty") interior: zeroed header, no payload.
 fn empty_interior() -> UrbixInterior {
     UrbixInterior {
@@ -283,18 +401,21 @@ fn empty_interior() -> UrbixInterior {
 
 /// Pack a layout's floors into the FFI payload layout.
 ///
-/// Per floor, row-major tiles then room-kind bytes:
-/// `floor_count * 2 * footprint_w * footprint_d` bytes total.
+/// Per floor, row-major tiles, then room-kind bytes, then furniture bytes:
+/// `floor_count * 3 * footprint_w * footprint_d` bytes total. The furniture
+/// layer is appended so readers slicing the first two thirds (tiles, kinds)
+/// keep working unchanged.
 fn interior_payload(layout: &crate::layout::InteriorLayout) -> Vec<u8> {
     let cell_bytes = layout
         .floors
         .iter()
         .map(|f| usize::from(f.width) * usize::from(f.depth))
         .sum::<usize>();
-    let mut out = Vec::with_capacity(cell_bytes * 2);
+    let mut out = Vec::with_capacity(cell_bytes * 3);
     for floor in &layout.floors {
         out.extend(floor.tiles.iter().map(|t| *t as u8));
         out.extend(floor.kinds.iter().copied());
+        out.extend(floor.furn.iter().copied());
     }
     out
 }
@@ -535,7 +656,7 @@ mod tests {
             "footprint is the truthful lot rect (clamped at 3)"
         );
         let expected =
-            u64::from(i1.floor_count) * 2 * u64::from(i1.footprint_w) * u64::from(i1.footprint_d);
+            u64::from(i1.floor_count) * 3 * u64::from(i1.footprint_w) * u64::from(i1.footprint_d);
         assert_eq!(i1.len, expected);
 
         // SAFETY: payload is exactly i1.len bytes.
@@ -548,6 +669,12 @@ mod tests {
         );
         assert!(tiles.contains(&1), "has exterior walls");
         assert!(tiles.contains(&3), "has circulation core");
+        // Furniture layer: third grid, codes within range, only on rooms.
+        let furn = &payload1[2 * grid..3 * grid];
+        assert!(furn.iter().all(|&b| b <= 6), "furn codes within range");
+        for (i, f) in furn.iter().enumerate() {
+            assert!(*f == 0 || tiles[i] == 5, "furniture on a non-room tile");
+        }
 
         // Determinism: a second call yields the identical payload.
         // SAFETY: live engine.
@@ -566,6 +693,124 @@ mod tests {
             urbix_interior_free(i1);
             urbix_interior_free(i2);
         }
+        urbix_engine_destroy(engine);
+    }
+
+    #[test]
+    fn interior_rooms_agree_with_grids_and_repeat() {
+        // Same built cell as above: room records must tile exactly the Room
+        // cells of the grid payload, with matching kinds and areas, and
+        // repeat deterministically.
+        let engine = urbix_engine_create(445566);
+        assert!(!engine.is_null());
+        // SAFETY: live engine; scan chunk (0,0) for the first built cell.
+        let found = unsafe {
+            let buf = urbix_generate_chunk(engine, 0, 0);
+            let mut out = None;
+            for i in 0..(32 * 32) {
+                let cell =
+                    std::ptr::read_unaligned(buf.data.add(32 + i * 40).cast::<crate::data::Cell>());
+                if cell.height > 0.0 {
+                    out = Some(((i % 32) as i32, (i / 32) as i32));
+                    break;
+                }
+            }
+            urbix_chunk_free(buf);
+            out.expect("seed 445566 has a built cell near (0,0)")
+        };
+        let (wx, wz) = found;
+        // SAFETY: live engine.
+        let rooms = unsafe { urbix_generate_interior_rooms(engine, wx, wz) };
+        assert!(!rooms.data.is_null());
+        assert!(rooms.count > 0, "built lot has no rooms");
+        // SAFETY: valid room list.
+        let recs = unsafe { slice::from_raw_parts(rooms.data, rooms.count as usize) };
+        // Cross-check against the grid payload of the same lot.
+        // SAFETY: live engine.
+        let interior = unsafe { urbix_generate_interior(engine, wx, wz) };
+        // SAFETY: valid payload.
+        let payload = unsafe { slice::from_raw_parts(interior.data, interior.len as usize) };
+        let (gw, gd) = (
+            usize::from(interior.footprint_w),
+            usize::from(interior.footprint_d),
+        );
+        let grid = gw * gd;
+        let mut room_cells = 0usize;
+        for r in recs {
+            assert!((r.w > 0) && (r.d > 0), "degenerate room record");
+            assert!(r.unit <= 8 || r.unit == 255, "unit index out of range");
+            let fbase = usize::from(r.floor) * 3 * grid;
+            let mut area = 0u16;
+            for dz in 0..r.d {
+                for dx in 0..r.w {
+                    let i = fbase
+                        + (usize::from(r.z) + usize::from(dz)) * gw
+                        + (usize::from(r.x) + usize::from(dx));
+                    assert_eq!(payload[i], 5, "record covers a non-room tile");
+                    assert_eq!(payload[i + grid], r.kind, "record kind disagrees with grid");
+                    area += 1;
+                }
+            }
+            assert_eq!(r.area, area, "record area disagrees with rect");
+            room_cells += area as usize;
+        }
+        // Records tile exactly the Room cells (no gaps, no overlaps).
+        let grid_rooms: usize = (0..interior.floor_count as usize)
+            .map(|f| {
+                payload[f * 3 * grid..f * 3 * grid + grid]
+                    .iter()
+                    .filter(|b| **b == 5)
+                    .count()
+            })
+            .sum();
+        assert_eq!(room_cells, grid_rooms);
+        // Determinism across calls, then release everything once.
+        // SAFETY: live engine.
+        let rooms2 = unsafe { urbix_generate_interior_rooms(engine, wx, wz) };
+        assert_eq!(rooms2.count, rooms.count);
+        // SAFETY: both lists valid.
+        assert_eq!(
+            unsafe { slice::from_raw_parts(rooms2.data, rooms2.count as usize) },
+            recs
+        );
+        unsafe {
+            urbix_interior_rooms_free(rooms);
+            urbix_interior_rooms_free(rooms2);
+            urbix_interior_free(interior);
+        }
+        urbix_engine_destroy(engine);
+    }
+
+    #[test]
+    fn interior_rooms_empty_on_unbuilt_and_null() {
+        let engine = urbix_engine_create(445566);
+        assert!(!engine.is_null());
+        // SAFETY: live engine; (-3,-7) may or may not build — either way the
+        // call is safe; unbuilt yields an empty list. Probe a street cell by
+        // scanning chunk (0,0) for height 0.
+        let street = unsafe {
+            let buf = urbix_generate_chunk(engine, 0, 0);
+            let mut out = None;
+            for i in 0..(32 * 32) {
+                let cell =
+                    std::ptr::read_unaligned(buf.data.add(32 + i * 40).cast::<crate::data::Cell>());
+                if cell.height <= 0.0 {
+                    out = Some(((i % 32) as i32, (i / 32) as i32));
+                    break;
+                }
+            }
+            urbix_chunk_free(buf);
+            out.expect("a street/open cell exists near (0,0)")
+        };
+        // SAFETY: live engine.
+        let empty = unsafe { urbix_generate_interior_rooms(engine, street.0, street.1) };
+        assert!(empty.data.is_null() && empty.count == 0);
+        // SAFETY: freeing an empty list is a no-op.
+        unsafe { urbix_interior_rooms_free(empty) };
+        // SAFETY: null engine yields an empty list.
+        let null = unsafe { urbix_generate_interior_rooms(ptr::null_mut(), 1, 2) };
+        assert!(null.data.is_null() && null.count == 0);
+        unsafe { urbix_interior_rooms_free(null) };
         urbix_engine_destroy(engine);
     }
 
