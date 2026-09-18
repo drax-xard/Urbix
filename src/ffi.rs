@@ -612,8 +612,8 @@ mod tests {
         let mut cfg = urbix_default_config();
         assert!(cfg.is_valid());
         assert_eq!(cfg.chunk_size, 32);
-        assert_eq!(cfg.zones[0].height_max, 200.0);
-        cfg.zones[0].height_max = 110.0;
+        assert_eq!(cfg.zones[0].height_max, 110.0);
+        cfg.zones[0].height_max = 90.0;
         assert!(cfg.is_valid());
         // SAFETY: cfg is a valid local.
         let engine = unsafe { urbix_engine_create_with_config(&cfg) };

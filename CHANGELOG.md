@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0] — 2026-09-18
+
+### Changed
+
+- **Chunkier default proportions** (towers read as broad masses, not spikes):
+  default height bands retuned to ~4–6× typical lot widths at the 1 cell =
+  4 m canon — Downtown 40–200 m → 24–110 m, Commercial 12–60 m → 10–45 m,
+  Industrial 25 m → 20 m max, Residential 18 m → 14 m max
+  (`src/config.rs`, `src/zones.rs`, `urbix.toml/json.example`). Default seeds
+  regenerate with the new skyline (no legacy fallback); old config files are
+  unaffected (values, not schema). Prototype-tested via the demo
+  `--config server/chunky.overrides` A/B before promotion.
+
 ## [0.16.0] — 2026-09-18
 
 ### Added

@@ -132,8 +132,8 @@ impl Default for WorldConfig {
             zone_weights: [0.25, 0.30, 0.20, 0.15, 0.10],
             zones: [
                 ZoneParams {
-                    height_min: 40.0,
-                    height_max: 200.0,
+                    height_min: 24.0,
+                    height_max: 110.0,
                     density: 0.95,
                     block_size: 11,
                     palette_count: 6,
@@ -141,15 +141,15 @@ impl Default for WorldConfig {
                 },
                 ZoneParams {
                     height_min: 4.0,
-                    height_max: 18.0,
+                    height_max: 14.0,
                     density: 0.80,
                     block_size: 10,
                     palette_count: 5,
                     arterial_every: 5,
                 },
                 ZoneParams {
-                    height_min: 12.0,
-                    height_max: 60.0,
+                    height_min: 10.0,
+                    height_max: 45.0,
                     density: 0.90,
                     block_size: 9,
                     palette_count: 7,
@@ -157,7 +157,7 @@ impl Default for WorldConfig {
                 },
                 ZoneParams {
                     height_min: 6.0,
-                    height_max: 25.0,
+                    height_max: 20.0,
                     density: 0.70,
                     block_size: 14,
                     palette_count: 4,

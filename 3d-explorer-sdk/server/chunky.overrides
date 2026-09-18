@@ -1,26 +1,26 @@
-# server/chunky.overrides — chunky mid-rise proportion experiment.
+# server/chunky.overrides — chunky mid-rise proportion template.
 #
 # Demo override file for `serve --config` (KEY = VALUE lines, `#` comments).
-# Starts from urbix_default_config() and patches only these fields, so the
-# default city is untouched — A/B with:
-#   ./server/serve --seed 445566 --web server/www                          # tall default
-#   ./server/serve --seed 445566 --web server/www --config server/chunky.overrides  # chunky
+# These values were A/B-tested here and promoted to the engine defaults in
+# 0.17.0, so applying this file now reproduces the default city — edit it as
+# a starting template for further experiments:
+#   ./server/serve --seed 445566 --web server/www --config server/chunky.overrides
 # CLI flags (--seed, --chunk-size, --draw-distance) override file values.
 #
 # Aim: heights near 4-6x the typical lot width (lots run ~3-5 cells = 12-20 m
 # at the 1 cell = 4 m canon), so towers read as broad masses, not spikes.
 # Bands stay overlapping so fuzzy district borders still blend gradually.
 
-# Downtown: was 40-200 (up to ~50 storeys). 24-110 caps the crown at ~27.
+# Downtown: 24-110 caps the crown at ~27 storeys.
 downtown.height_min = 24.0
 downtown.height_max = 110.0
 
-# Commercial: was 12-60. 10-45 keeps mid-rise boulevards.
+# Commercial: 10-45 keeps mid-rise boulevards.
 commercial.height_min = 10.0
 commercial.height_max = 45.0
 
-# Industrial sheds: was 6-25. Slightly lower lid, same yards.
+# Industrial sheds: lower lid, same yards.
 industrial.height_max = 20.0
 
-# Residential: was 4-18. Houses read better a touch lower.
+# Residential: houses read better a touch lower.
 residential.height_max = 14.0

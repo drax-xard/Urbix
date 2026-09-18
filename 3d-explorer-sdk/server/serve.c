@@ -81,8 +81,8 @@ static const uint8_t ZONE_BLOCK_SIZE[ZONE_COUNT] = { 11, 10, 9, 14, 18 };
 static const uint8_t ZONE_ARTERIAL_EVERY[ZONE_COUNT] = { 4, 5, 4, 6, 0 };
 /* Effective per-zone height bands, snapshotted at startup from the engine
  * config (defaults or --config overrides) for /api/config. */
-static float G_HEIGHT_MIN[ZONE_COUNT] = { 40.0f, 4.0f, 12.0f, 6.0f, 0.0f };
-static float G_HEIGHT_MAX[ZONE_COUNT] = { 200.0f, 18.0f, 60.0f, 25.0f, 2.0f };
+static float G_HEIGHT_MIN[ZONE_COUNT] = { 24.0f, 4.0f, 10.0f, 6.0f, 0.0f };
+static float G_HEIGHT_MAX[ZONE_COUNT] = { 110.0f, 14.0f, 45.0f, 20.0f, 2.0f };
 
 /* ---- Growable JSON buffer (dependency-free, fprintf-style appends) ---- */
 typedef struct {
@@ -276,7 +276,7 @@ static void serve_file(int fd, const char *web_dir, const char *path) {
 /* ---- JSON endpoints ---- */
 static void json_config(Jbuf *b, uint64_t seed, uint16_t chunk_size,
                         uint32_t draw_distance) {
-    jprintf(b, "{\"version\":1,\"sdk\":\"0.16.0\",\"seed\":%llu",
+    jprintf(b, "{\"version\":1,\"sdk\":\"0.17.0\",\"seed\":%llu",
             (unsigned long long)seed);
     jprintf(b, ",\"chunk_size\":%u,\"draw_distance\":%u,\"floor_height\":%.1f,\"cell_meters\":4",
             chunk_size, draw_distance, DEFAULT_FLOOR_H);

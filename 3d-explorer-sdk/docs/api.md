@@ -1,4 +1,4 @@
-# Urbix Engine — C API Reference (v0.16.0)
+# Urbix Engine — C API Reference (v0.17.0)
 
 This is the authoritative reference for calling the Urbix procedural city
 engine from C (or any language with C interop: C++, Rust, C#, Unity, Godot,
@@ -514,10 +514,10 @@ cfg.zone_weights[0] = 0.25f; cfg.zone_weights[1] = 0.30f;
 cfg.zone_weights[2] = 0.20f; cfg.zone_weights[3] = 0.15f;
 cfg.zone_weights[4] = 0.10f;
 /* zones: height_min, height_max, density, block_size, palette_count, arterial_every */
-cfg.zones[0] = (ZoneParams){ 40.0f, 200.0f, 0.95f, 11, 6, 4 }; /* Downtown */
-cfg.zones[1] = (ZoneParams){  4.0f,  18.0f, 0.80f, 10, 5, 5 }; /* Residential */
-cfg.zones[2] = (ZoneParams){ 12.0f,  60.0f, 0.90f,  9, 7, 4 }; /* Commercial */
-cfg.zones[3] = (ZoneParams){  6.0f,  25.0f, 0.70f, 14, 4, 6 }; /* Industrial */
+cfg.zones[0] = (ZoneParams){ 24.0f, 110.0f, 0.95f, 11, 6, 4 }; /* Downtown */
+cfg.zones[1] = (ZoneParams){  4.0f,  14.0f, 0.80f, 10, 5, 5 }; /* Residential */
+cfg.zones[2] = (ZoneParams){ 10.0f,  45.0f, 0.90f,  9, 7, 4 }; /* Commercial */
+cfg.zones[3] = (ZoneParams){  6.0f,  20.0f, 0.70f, 14, 4, 6 }; /* Industrial */
 cfg.zones[4] = (ZoneParams){  0.0f,   2.0f, 0.10f, 18, 3, 0 }; /* Park (no arterials) */
 /* zone_hues from DEFAULT_ZONE_HUES */
 cfg.interior_width_range[0]  = 6;  cfg.interior_width_range[1]  = 14;
