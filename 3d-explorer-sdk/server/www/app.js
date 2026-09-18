@@ -3,14 +3,17 @@
  * Three.js viewer for the Urbix 3D-Explorer SDK.
  *
  * Feeds off the sibling micro-server (serve.c): /api/config for the engine's
- * deterministic settings, /api/chunk for streamed exterior cells, and
- * /api/interior for a selected building's storey grids (tiles + room kinds).
+ * deterministic settings, /api/chunks (batch) for streamed exterior cells,
+ * /api/interior for a selected building's storey grids (tiles + kinds +
+ * furniture), and /api/rooms for its per-room records.
  *
  * Controls:
  *   orbit  — drag / scroll (damped); click a building (or G/Enter toward it) to
  *            fade into its interior; G or Esc fades back out
  *   inside — WASD/arrows move (walls block), Q/E turn, R/F storey up/down,
  *            mouse-look on click; the view stays level at pedestrian eye height
+ *   V      — toggle walkability overlay (dark masses + high-contrast paving)
+ *   T      — teleport the orbit target to a world cell (prompt for wx,wz)
  *   stop   — Shift+Esc (after a confirm) asks the server to shut down and
  *            closes the explorer
  */
@@ -18,10 +21,32 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 const TILE = { VOID: 0, WALL: 1, DOOR: 2, CORE: 3, CORRIDOR: 4, ROOM: 5 };
+const FLAG = {
+  STREET: 1 << 0, PARK: 1 << 1, ARTERIAL: 1 << 2,
+  PLAZA: 1 << 3, SIDEWALK: 1 << 4, GREENWAY: 1 << 5,
+};
 const ROOM_KIND_COLORS = [
   0x7fb3d5, 0xf5b041, 0x82e0aa, 0xaf7ac5, 0xf1948a, 0x85c1e9,
   0xabebc6, 0xf9e79f, 0xd7bde2, 0xfadbd8,
 ];
+/* Furniture codes (FURN_* in urbix.h): colour per fitting family. */
+const FURN_COLORS = {
+  1: 0x8e5a9e,  /* bed — violet */
+  2: 0xb07a3f,  /* table — oak */
+  3: 0x9aa3ab,  /* counter — steel */
+  4: 0x4f7fa8,  /* desk — blue */
+  5: 0x6e5a3a,  /* shelf — dark wood */
+  6: 0xdde6ec,  /* bath — porcelain */
+};
+/* Paved-hierarchy overlay colours (M11/M12 street hierarchy). */
+const PAVE_COLORS = {
+  arterial: 0x46536a, street: 0x272f3a, sidewalk: 0x707a88,
+  plaza: 0xc9a06a, greenway: 0x3f7d4e, park: 0x4a8f5d,
+};
+const PAVE_WALK_COLORS = {
+  arterial: 0x7fb3ff, street: 0x3d6ea8, sidewalk: 0xb9c6d4,
+  plaza: 0xffc46b, greenway: 0x4ce07a, park: 0x35d06a,
+};
 const MAX_FLOORS = 48;      /* cap interior storeys shown (perf guard) */
 const TILE_COLORS = {
   [TILE.WALL]: 0x9a9a9a,
@@ -125,7 +150,21 @@ ground.position.y = -0.02;
 scene.add(ground);
 
 /* ---- engine config (from the server, deterministic) ---- */
-const CFG = { chunkSize: 32, zoneHues: [], zoneNames: [], floorHeight: 4.0, seed: 0 };
+const CFG = {
+  chunkSize: 32, zoneHues: [], zoneNames: [], floorHeight: 4.0, seed: 0,
+  sdk: "", cellMeters: 4, blockSize: [], arterialEvery: [], drawDistance: 8,
+};
+let walkMode = false;   /* V toggles the walkability overlay */
+
+function groundKind(flags, h) {
+  if (flags & FLAG.ARTERIAL) return "arterial";
+  if (flags & FLAG.PLAZA) return "plaza";
+  if (flags & FLAG.SIDEWALK) return "sidewalk";
+  if (flags & FLAG.GREENWAY) return "greenway";
+  if (flags & FLAG.STREET) return "street";
+  if ((flags & FLAG.PARK) && h <= 0) return "park";
+  return null;   /* built lot or empty lot: no paving overlay */
+}
 const statusEl = document.getElementById("status");
 const seedEl = document.getElementById("seed");
 const modeHint = document.getElementById("mode-hint");
@@ -141,8 +180,13 @@ async function loadConfig() {
     zoneHues: cfg.zone_hues,
     zoneNames: cfg.zone_names,
     floorHeight: cfg.floor_height || 4.0,
+    sdk: cfg.sdk || "",
+    cellMeters: cfg.cell_meters || 4,
+    blockSize: cfg.block_size || [],
+    arterialEvery: cfg.arterial_every || [],
+    drawDistance: cfg.draw_distance || 8,
   });
-  seedEl.textContent = `seed ${CFG.seed}`;
+  seedEl.textContent = `seed ${CFG.seed}${CFG.sdk ? " · sdk " + CFG.sdk : ""}`;
   statusEl.textContent = "streaming chunks…";
 }
 loadConfig().catch((e) => {
@@ -162,9 +206,19 @@ let lastCenter = null;
 let pickMeshes = [];
 
 function cellColor(zone, pal, h) {
+  if (walkMode) {
+    /* Walkability overlay: dark masses so the paved ground reads first. */
+    const v = 0.10 + Math.min(h / 900, 0.08);
+    return new THREE.Color(v, v * 1.05, v * 1.2);
+  }
   const [r, g, b] = CFG.zoneHues[zone] || [150, 150, 150];
   const v = 0.64 + 0.12 * ((pal % 5) / 4) + Math.min(h / 460, 0.13);
   return new THREE.Color(r * v / 255, g * v / 255, b * v / 255);
+}
+
+function paveColor(kind) {
+  const table = walkMode ? PAVE_WALK_COLORS : PAVE_COLORS;
+  return new THREE.Color(table[kind] ?? 0x272f3a);
 }
 
 function loadChunk(cx, cy) {
@@ -180,15 +234,47 @@ function loadChunk(cx, cy) {
     .catch(() => inFlight.delete(key));
 }
 
+/* Batch path: one round-trip for the whole (2r+1)^2 square. Falls back to
+ * per-chunk loads when the server predates /api/chunks. */
+let batchOk = true;
+let fetches = 0;
+let lastBatchMs = 0;
+function loadSquare(cx, cy, r) {
+  if (!batchOk) {
+    for (let dy = -r; dy <= r; dy++)
+      for (let dx = -r; dx <= r; dx++) loadChunk(cx + dx, cy + dy);
+    return;
+  }
+  const t0 = performance.now();
+  fetches++;
+  fetch(`/api/chunks?cx=${cx}&cy=${cy}&r=${r}`)
+    .then((resp) => {
+      if (!resp.ok) throw new Error("no batch endpoint");
+      return resp.json();
+    })
+    .then((d) => {
+      lastBatchMs = performance.now() - t0;
+      for (const c of d.chunks) spawnChunk(c);
+    })
+    .catch(() => {
+      batchOk = false;   /* old server: fan out once, stay fanned out */
+      for (let dy = -r; dy <= r; dy++)
+        for (let dx = -r; dx <= r; dx++) loadChunk(cx + dx, cy + dy);
+    });
+}
+
 function spawnChunk(c) {
   const key = c.cx + ":" + c.cy;
   if (chunks.has(key)) return;
 
   const built = c.cells.filter((cell) => cell.h > 0);
+  const paved = c.cells.filter((cell) => groundKind(cell.flags, cell.h) !== null);
   const group = new THREE.Group();
   const data = [];
+  const paveKinds = [];
   let mesh = null;
   let roof = null;
+  let pave = null;
 
   if (built.length > 0) {
     mesh = new THREE.InstancedMesh(
@@ -219,7 +305,7 @@ function spawnChunk(c) {
       s.set(0.92, 0.18, 0.92);
       roof.setMatrixAt(i, m.compose(p, q, s));
       roof.setColorAt(i, tint.clone().lerp(WHITE, 0.55));
-      data.push({ wx: cell.x, wz: cell.z, height: h, zone: cell.zone, i });
+      data.push({ wx: cell.x, wz: cell.z, height: h, zone: cell.zone, pal: cell.pal, i });
     });
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
@@ -229,9 +315,57 @@ function spawnChunk(c) {
     pickMeshes.push(mesh, roof);
   }
 
+  if (paved.length > 0) {
+    /* Paved-hierarchy overlay: flat quads so arterials read wider/brighter,
+     * sidewalks pale, plazas warm, greenways/parks green. Arterials are
+     * 2-cell avenues by construction, so two adjacent quads form the width. */
+    pave = new THREE.InstancedMesh(
+      UNIT_BOX,
+      new THREE.MeshLambertMaterial({ color: 0xffffff }),
+      paved.length
+    );
+    const m = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const p = new THREE.Vector3();
+    const s = new THREE.Vector3();
+    paved.forEach((cell, i) => {
+      const kind = groundKind(cell.flags, cell.h);
+      paveKinds.push(kind);
+      p.set(cell.x, 0.03, cell.z);
+      s.set(1, 0.06, 1);
+      pave.setMatrixAt(i, m.compose(p, q, s));
+      pave.setColorAt(i, paveColor(kind));
+    });
+    pave.instanceMatrix.needsUpdate = true;
+    if (pave.instanceColor) pave.instanceColor.needsUpdate = true;
+    group.add(pave);
+  }
+
   group.userData = { cx: c.cx, cy: c.cy };
-  chunks.set(key, { group, data, mesh, roof, cx: c.cx, cy: c.cy });
+  chunks.set(key, { group, data, mesh, roof, pave, paveKinds, cx: c.cx, cy: c.cy });
   scene.add(group);
+}
+
+/* Re-tint every loaded chunk in place for the walkability overlay (V). */
+function restyleChunks() {
+  const WHITE = new THREE.Color(0xffffff);
+  for (const entry of chunks.values()) {
+    if (entry.mesh) {
+      for (let i = 0; i < entry.data.length; i++) {
+        const cell = entry.data[i];
+        const tint = cellColor(cell.zone, cell.pal, cell.height);
+        entry.mesh.setColorAt(i, tint);
+        entry.roof.setColorAt(i, tint.clone().lerp(WHITE, 0.55));
+      }
+      if (entry.mesh.instanceColor) entry.mesh.instanceColor.needsUpdate = true;
+      if (entry.roof.instanceColor) entry.roof.instanceColor.needsUpdate = true;
+    }
+    if (entry.pave) {
+      for (let i = 0; i < entry.paveKinds.length; i++)
+        entry.pave.setColorAt(i, paveColor(entry.paveKinds[i]));
+      if (entry.pave.instanceColor) entry.pave.instanceColor.needsUpdate = true;
+    }
+  }
 }
 
 function centerChunk() {
@@ -247,21 +381,25 @@ function updateStream() {
   if (!moved) return;
   lastCenter = c;
 
-  for (let dy = -STREAM_RADIUS; dy <= STREAM_RADIUS; dy++)
-    for (let dx = -STREAM_RADIUS; dx <= STREAM_RADIUS; dx++)
-      loadChunk(c.cx + dx, c.cy + dy);
+  loadSquare(c.cx, c.cy, STREAM_RADIUS);
 
   for (const [key, entry] of chunks) {
     const d = Math.max(Math.abs(entry.cx - c.cx), Math.abs(entry.cy - c.cy));
     if (d > STREAM_RADIUS) {
       scene.remove(entry.group);
       pickMeshes = pickMeshes.filter((m) => m !== entry.mesh && m !== entry.roof);
-      for (const em of [entry.mesh, entry.roof])
+      for (const em of [entry.mesh, entry.roof, entry.pave])
         if (em && em.material) em.material.dispose();   /* UNIT_BOX geometry is shared, keep it */
       chunks.delete(key);
     }
   }
-  statusEl.textContent = `${chunks.size} chunk(s) · ${countBoxes()} boxes`;
+  refreshStatus();
+}
+
+function refreshStatus() {
+  const batch = batchOk ? `batch ${lastBatchMs.toFixed(0)}ms` : "single";
+  statusEl.textContent =
+    `${chunks.size} chunk(s) · ${countBoxes()} boxes · ${frameMs.toFixed(1)}ms/frame · ${batch} · ${fetches} fetches`;
 }
 
 function countBoxes() {
@@ -310,20 +448,38 @@ function setExteriorVisible(show) {
 }
 
 async function inspectCell(wx, wz) {
-  const r = await fetch(`/api/interior?wx=${wx}&wz=${wz}`);
-  const d = await r.json();
+  const [ir, rr] = await Promise.all([
+    fetch(`/api/interior?wx=${wx}&wz=${wz}`),
+    fetch(`/api/rooms?wx=${wx}&wz=${wz}`).catch(() => null),
+  ]);
+  const d = await ir.json();
   if (!d.floor_count || !d.floors.length) {
     popup.textContent = `(${wx}, ${wz}) — no interior here`;
     popup.classList.remove("hidden");
     setTimeout(() => popup.classList.add("hidden"), 2000);
     return;
   }
-  await enterBuilding(wx, wz, d);
+  let rooms = null;
+  try { rooms = rr ? await rr.json() : null; } catch (_) { rooms = null; }
+  await enterBuilding(wx, wz, d, rooms);
+}
+
+/* Window derivation (mirrors Floor::window_cells in src/layout.rs, applied
+ * to all four facades): exterior ring walls minus corners and doors. Pure
+ * geometry over the finished floor — no hash, no wire tile. */
+function windowCells(tiles, w, dep) {
+  const out = [];
+  const edge = (x, z) => {
+    if (tiles[z * w + x] === TILE.WALL) out.push({ x, z });
+  };
+  for (let z = 1; z < dep - 1; z++) { edge(0, z); edge(w - 1, z); }
+  for (let x = 1; x < w - 1; x++) { edge(x, 0); edge(x, dep - 1); }
+  return out;
 }
 
 /* Cross-fade into the building: exterior fades out, camera walks to the
    doorway and the interior fades in, so you're never seeing both at once. */
-async function enterBuilding(wx, wz, d) {
+async function enterBuilding(wx, wz, d, rooms) {
   if (transitionBusy || inspecting) return;
   const floors = d.floors.slice(0, MAX_FLOORS);
   const w = d.footprint_w;
@@ -342,7 +498,7 @@ async function enterBuilding(wx, wz, d) {
   transitionBusy = true;
   controls.enabled = false;
   clearInspect();
-  inspecting = { wx, wz, zone: d.zone, floors, w, dep, ox, oz, active: 0 };
+  inspecting = { wx, wz, zone: d.zone, floors, w, dep, ox, oz, active: 0, rooms };
   buildInteriorMesh(d, floors);
 
   exitState = { pos: camera.position.clone(), quat: camera.quaternion.clone(), target: controls.target.clone() };
@@ -364,9 +520,16 @@ async function enterBuilding(wx, wz, d) {
 
   transitionBusy = false;
   modeHint.textContent = "WASD move · Q/E turn · R/F floor · G/Esc exit · Shift+Esc stop";
+  let stats = "";
+  if (rooms && rooms.rooms) {
+    const units = new Set(rooms.rooms.map((r) => r.unit)).size;
+    stats = ` · ${rooms.rooms.length} rooms · ${units} units`;
+  }
+  const furnCount = floors.reduce((n, f) =>
+    n + (f.furn ? f.furn.filter((v) => v !== 0).length : 0), 0);
   popup.textContent =
     `inside (${wx}, ${wz}) · ${CFG.zoneNames[d.zone] || "?"} · ` +
-    `${d.floors.length} storeys · ${w}×${dep}`;
+    `${d.floors.length} storeys · ${w}×${dep}${stats} · ${furnCount} furnishings`;
   popup.classList.remove("hidden");
   storeyBox.classList.remove("hidden");
 }
@@ -394,10 +557,10 @@ function inward(door, dep) {
 }
 
 function clearInspect() {
-  interiorGroup.clear();
-  for (const child of interiorGroup.children) {
+  for (const child of [...interiorGroup.children]) {
     if (child.geometry && child.geometry !== UNIT_BOX) child.geometry.dispose();
     if (child.material) child.material.dispose();
+    interiorGroup.remove(child);
   }
   inspecting = null;
 }
@@ -454,6 +617,74 @@ function buildInteriorMesh(d, floors) {
     if (boxMesh.instanceColor) boxMesh.instanceColor.needsUpdate = true;
   }
 
+  /* Furniture (M15 parallel furn layer): one fitting per furnished room tile,
+     tinted by family. Secondary pieces were density-gated engine-side. */
+  const furnList = [];
+  for (let f = 0; f < floors.length; f++) {
+    const y0 = f * fh;
+    const furn = floors[f].furn || [];
+    for (let tz = 0; tz < dep; tz++) {
+      for (let tx = 0; tx < w; tx++) {
+        const code = furn[tz * w + tx] || 0;
+        if (code !== 0)
+          furnList.push({ x: ox + tx, z: oz + tz, y: y0, c: FURN_COLORS[code] || 0xffffff });
+      }
+    }
+  }
+  let furnMesh = null;
+  if (furnList.length) {
+    furnMesh = new THREE.InstancedMesh(
+      UNIT_BOX,
+      new THREE.MeshLambertMaterial({ color: 0xffffff }),
+      furnList.length
+    );
+    const m = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const p = new THREE.Vector3();
+    const s = new THREE.Vector3();
+    furnList.forEach((it, i) => {
+      p.set(it.x + 0.5, it.y + 0.3, it.z + 0.5);   /* low fittings, underfoot-readable */
+      s.set(0.55, 0.6, 0.55);
+      furnMesh.setMatrixAt(i, m.compose(p, q, s));
+      furnMesh.setColorAt(i, new THREE.Color(it.c));
+    });
+    furnMesh.instanceMatrix.needsUpdate = true;
+    if (furnMesh.instanceColor) furnMesh.instanceColor.needsUpdate = true;
+  }
+
+  /* Windows (derived, no wire tile): glazing panels on the outer face of
+     facade walls, one storey at a time. */
+  const winList = [];
+  for (let f = 0; f < floors.length; f++) {
+    const y0 = f * fh;
+    for (const cell of windowCells(floors[f].tiles, w, dep)) {
+      let nx = 0, nz = 0, ry = 0;
+      if (cell.x === 0) { nx = -0.46; ry = Math.PI / 2; }
+      else if (cell.x === w - 1) { nx = 0.46; ry = Math.PI / 2; }
+      else if (cell.z === 0) { nz = -0.46; ry = 0; }
+      else { nz = 0.46; ry = 0; }
+      winList.push({ x: ox + cell.x + 0.5 + nx, z: oz + cell.z + 0.5 + nz, y: y0, ry });
+    }
+  }
+  let winMesh = null;
+  if (winList.length) {
+    winMesh = new THREE.InstancedMesh(
+      UNIT_BOX,
+      new THREE.MeshBasicMaterial({ color: 0xffe9b8 }),
+      winList.length
+    );
+    const m = new THREE.Matrix4();
+    const p = new THREE.Vector3();
+    const s = new THREE.Vector3(0.8, 1.1, 0.06);
+    const e = new THREE.Euler();
+    winList.forEach((it, i) => {
+      p.set(it.x, it.y + fh * 0.55, it.z);
+      e.set(0, it.ry, 0);
+      winMesh.setMatrixAt(i, m.compose(p, new THREE.Quaternion().setFromEuler(e), s));
+    });
+    winMesh.instanceMatrix.needsUpdate = true;
+  }
+
   /* Floor + ceiling slabs for walkable tiles (corridor, rooms, doorways). */
   const positions = [];
   const colors = [];
@@ -495,7 +726,9 @@ function buildInteriorMesh(d, floors) {
   frame.position.set(d.wx, fh / 2, d.wz);
 
   interiorGroup.add(boxMesh, floorMesh, frame);
-  interiorGroup.userData = { boxMesh, floorMesh, frame, fh };
+  if (furnMesh) interiorGroup.add(furnMesh);
+  if (winMesh) interiorGroup.add(winMesh);
+  interiorGroup.userData = { boxMesh, floorMesh, frame, furnMesh, winMesh, fh };
 
   storeySlider.max = String(floors.length - 1);
   storeySlider.value = "0";
@@ -654,6 +887,26 @@ window.addEventListener("keydown", (e) => {
     fly.keys.add(e.code);
     return;
   }
+  if (e.code === "KeyV") {
+    walkMode = !walkMode;
+    restyleChunks();
+    modeHint.textContent = walkMode
+      ? "walk overlay · V toggles · drag orbit · scroll zoom · click/G enter · T teleport"
+      : "drag orbit · scroll zoom · click a building (or G) to enter · V walk overlay · T teleport";
+    return;
+  }
+  if (e.code === "KeyT") {
+    const ans = prompt("Teleport orbit target to world cell (wx,wz):", "0,0");
+    if (ans) {
+      const parts = ans.split(/[,\s]+/).map(Number);
+      if (parts.length >= 2 && parts.every(Number.isFinite)) {
+        controls.target.set(parts[0], 0, parts[1]);
+        camera.position.set(parts[0] + 48, 90, parts[1] + 80);
+        lastCenter = null;   /* force a stream refresh on the next frame */
+      }
+    }
+    return;
+  }
   if (e.code === "KeyG" || e.code === "Enter") enterCenterBuilding();
 });
 window.addEventListener("keyup", (e) => fly.keys.delete(e.code));
@@ -679,17 +932,24 @@ async function exitBuilding() {
     controls.update();
   });
   transitionBusy = false;
-  modeHint.textContent = "drag orbit · scroll zoom · click a building (or G) to enter · Shift+Esc stop";
+  modeHint.textContent = walkMode
+    ? "walk overlay · V toggles · drag orbit · scroll zoom · click/G enter · T teleport"
+    : "drag orbit · scroll zoom · click a building (or G) to enter · V walk overlay · T teleport";
 }
 
 /* ---- main loop ---- */
 const clock = new THREE.Clock();
+let frameMs = 0;
+let statusTick = 0;
 renderer.setAnimationLoop(() => {
+  const t0 = performance.now();
   const dt = Math.min(clock.getDelta(), 0.05);
   if (CFG.chunkSize && (inspecting || controls.enabled)) updateStream();
   if (inspecting) stepFly(dt);
   else controls.update();
   renderer.render(scene, camera);
+  frameMs = frameMs * 0.9 + (performance.now() - t0) * 0.1;
+  if (!inspecting && ++statusTick % 60 === 0) refreshStatus();
 });
 
 window.addEventListener("resize", () => {

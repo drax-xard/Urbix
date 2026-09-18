@@ -26,6 +26,13 @@
 _Static_assert(sizeof(UrbixChunkHeader) == 32, "UrbixChunkHeader must be 32 bytes");
 _Static_assert(sizeof(UrbixCell) == 40,        "UrbixCell must be 40 bytes");
 _Static_assert(_Alignof(UrbixCell) == 8,       "UrbixCell must be 8-byte aligned");
+/* Street-hierarchy wire bits (M11/M12): additive, Cell stays 40 B. */
+_Static_assert(CellFlags_IS_STREET == (1 << 0), "IS_STREET bit moved");
+_Static_assert(CellFlags_IS_PARK == (1 << 1), "IS_PARK bit moved");
+_Static_assert(CellFlags_IS_ARTERIAL == (1 << 2), "IS_ARTERIAL bit moved");
+_Static_assert(CellFlags_IS_PLAZA == (1 << 3), "IS_PLAZA bit moved");
+_Static_assert(CellFlags_IS_SIDEWALK == (1 << 4), "IS_SIDEWALK bit moved");
+_Static_assert(CellFlags_IS_GREENWAY == (1 << 5), "IS_GREENWAY bit moved");
 
 /* Dominant zone index = strongest affinity weight. */
 static int dominant_zone(const UrbixCell *c) {
@@ -33,6 +40,19 @@ static int dominant_zone(const UrbixCell *c) {
     for (int z = 1; z < ZONE_COUNT; ++z)
         if (c->zone_affinity[z] > c->zone_affinity[best]) best = z;
     return best;
+}
+
+/* Ground-kind label for the M11/M12 street hierarchy. Arterials, plazas,
+ * sidewalks, and greenways all carry IS_STREET too, so old renderers that
+ * only test IS_STREET keep drawing them as paved ground. */
+static const char *ground_kind(const UrbixCell *c) {
+    if (c->flags & CellFlags_IS_ARTERIAL) return "arterial";
+    if (c->flags & CellFlags_IS_PLAZA) return "plaza";
+    if (c->flags & CellFlags_IS_SIDEWALK) return "sidewalk";
+    if (c->flags & CellFlags_IS_GREENWAY) return "greenway";
+    if (c->flags & CellFlags_IS_STREET) return "street";
+    if (c->flags & CellFlags_IS_PARK) return "park";
+    return "lot";
 }
 
 /* Per-zone RGB hues, same values as WorldConfig::default().zone_hues. They are
@@ -90,8 +110,13 @@ int main(void) {
                 double wz = (double)cy * hdr->chunk_size + (double)(i / hdr->chunk_size);
 
                 if (c->flags & CellFlags_IS_STREET) {
-                    /* Flat road quad at height 0. */
-                    printf("  road   x=%6.0f z=%6.0f\n", wx, wz);
+                    /* Flat paved quad at height 0 (arterials wider/brighter,
+                     * sidewalks pale, plazas warm — see ground_kind). */
+                    printf("  road   x=%6.0f z=%6.0f kind=%s\n", wx, wz, ground_kind(c));
+                    ++road_quads;
+                } else if (c->flags & CellFlags_IS_GREENWAY) {
+                    /* Linear park reborn from a dropped street (M12). */
+                    printf("  green  x=%6.0f z=%6.0f\n", wx, wz);
                     ++road_quads;
                 } else if (c->height > 0.0f) {
                     /* Building box: base (wx, 0, wz), height c->height.

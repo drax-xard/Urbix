@@ -65,6 +65,66 @@
 #define DEFAULT_MAX_FLOORS 64
 
 /**
+ * Room adjacency/program tag bits for [`BlueprintRoom::tags`].
+ *
+ * Tags steer placement without the engine knowing room semantics: `WET`
+ * rooms snap to plumbing shafts, `QUIET` rooms avoid street edges and the
+ * core, `PUBLIC` rooms prefer the entrance half, `STREET` rooms prefer the
+ * wall ring facing outside.
+ */
+#define TAG_WET (1 << 0)
+
+/**
+ * Quiet room tag bit (see [`TAG_WET`]).
+ */
+#define TAG_QUIET (1 << 1)
+
+/**
+ * Public room tag bit (see [`TAG_WET`]).
+ */
+#define TAG_PUBLIC (1 << 2)
+
+/**
+ * Street-facing room tag bit (see [`TAG_WET`]).
+ */
+#define TAG_STREET (1 << 3)
+
+/**
+ * No furniture (bare tile).
+ */
+#define FURN_NONE 0
+
+/**
+ * Bed (bedrooms).
+ */
+#define FURN_BED 1
+
+/**
+ * Table (living, meeting, work bays).
+ */
+#define FURN_TABLE 2
+
+/**
+ * Counter run (kitchens, retail, washrooms).
+ */
+#define FURN_COUNTER 3
+
+/**
+ * Desk (offices, lobbies, receptions).
+ */
+#define FURN_DESK 4
+
+/**
+ * Shelf (stockrooms, living rooms, utility).
+ */
+#define FURN_SHELF 5
+
+/**
+ * Bath fixture (bathrooms).
+ */
+#define FURN_BATH 6
+
+/**
  * The number of distinct zone types.
  */
 #define ZONE_COUNT 5
@@ -106,14 +166,19 @@ typedef struct UrbixChunkBuffer {
  * floor i (i in 0..floor_count):
  *   tiles[footprint_w * footprint_d]   // one Tile byte each, row-major
  *   kinds[footprint_w * footprint_d]   // room-kind tag byte each, 0 = not room
+ *   furn[footprint_w * footprint_d]    // furniture code byte each, 0 = bare (M15)
  * ```
  *
  * Every floor shares the same `footprint_w × footprint_d` grid, so `len` is
- * exactly `floor_count * 2 * footprint_w * footprint_d`. `Tile` bytes are the
+ * exactly `floor_count * 3 * footprint_w * footprint_d`. The furniture layer
+ * is appended (never interleaved): readers slicing the first two thirds
+ * keep working unchanged. `Tile` bytes are the
  * [`crate::layout::Tile`] enum values (0 = void, 1 = wall, 2 = door, 3 = core,
- * 4 = corridor, 5 = room). The caller owns this payload and must release it
- * with [`urbix_interior_free`]. An unbuilt cell (height ≤ 0) or null engine
- * yields a zeroed header with `data == null` and `len == 0`.
+ * 4 = corridor, 5 = room); furniture bytes are the `FURN_*` codes
+ * (`crate::layout`, 0 = bare, set only where the tile is `Room`). The caller
+ * owns this payload and must release it with [`urbix_interior_free`]. An
+ * unbuilt cell (height ≤ 0) or null engine yields a zeroed header with
+ * `data == null` and `len == 0`.
  */
 typedef struct UrbixInterior {
     /**
@@ -141,7 +206,7 @@ typedef struct UrbixInterior {
      */
     uint8_t footprint_d;
     /**
-     * Number of storeys (`len` = `floor_count * 2 * footprint_w * footprint_d`).
+     * Number of storeys (`len` = `floor_count * 3 * footprint_w * footprint_d`).
      */
     uint16_t floor_count;
     /**
@@ -153,6 +218,68 @@ typedef struct UrbixInterior {
      */
     uint8_t *data;
 } UrbixInterior;
+
+/**
+ * One enumerated room: rect plus kind, apartment, and area.
+ *
+ * Produced by [`urbix_generate_interior_rooms`] from the same finished
+ * floors [`urbix_generate_interior`] ships, so grids and records always
+ * agree. `unit` indexes the floor's apartment list (`255` = outside every
+ * unit); `kind` is the opaque blueprint room tag; `area` counts tiles.
+ */
+typedef struct UrbixRoom {
+    /**
+     * Storey index within the interior.
+     */
+    uint8_t floor;
+    /**
+     * Left edge in grid cells.
+     */
+    uint8_t x;
+    /**
+     * Top edge in grid cells.
+     */
+    uint8_t z;
+    /**
+     * Width in cells.
+     */
+    uint8_t w;
+    /**
+     * Depth in cells.
+     */
+    uint8_t d;
+    /**
+     * Opaque room-kind tag (blueprint semantics).
+     */
+    uint8_t kind;
+    /**
+     * Apartment index on this floor (`255` = outside every unit).
+     */
+    uint8_t unit;
+    /**
+     * Floor area in tiles.
+     */
+    uint16_t area;
+} UrbixRoom;
+
+/**
+ * An owned room list handed to foreign code.
+ *
+ * `data` points at `count` packed [`UrbixRoom`] records in deterministic
+ * (row-major scan) order. The caller owns the buffer and must release it
+ * with [`urbix_interior_rooms_free`]. Unbuilt cells and null engines yield
+ * `{null, 0}`.
+ */
+typedef struct UrbixRoomList {
+    /**
+     * Start of the record array; null when empty.
+     */
+    struct UrbixRoom *data;
+    /**
+     * Number of records.
+     */
+    uint64_t count;
+} UrbixRoomList;
 
 /**
  * A blended zone-affinity vector, one weight per [`crate::zones::ZoneType`].
@@ -198,6 +325,20 @@ typedef struct BlueprintRoom {
      * Maximum room grid depth in tiles (inclusive).
      */
     uint8_t max_d;
+    /**
+     * Minimum placements per floor (enforced after fill rolls).
+     * Serde-defaulted so pre-M14 files parse.
+     */
+    uint8_t min_count;
+    /**
+     * Adjacency/program tag bits (`TAG_*`); 0 = no preference.
+     * Serde-defaulted so pre-M14 files parse.
+     */
+    uint8_t tags;
+    /**
+     * Doors punched per room (`0` means 1). Serde-defaulted.
+     */
+    uint8_t doors;
 } BlueprintRoom;
 
 /**
@@ -229,6 +370,46 @@ typedef struct Blueprint {
      * Room templates weighted for this zone; only `room_count` are live.
      */
     struct BlueprintRoom rooms[MAX_BLUEPRINT_ROOMS];
+    /**
+     * Typical floors generate once and clone (`0`) vs re-roll per storey
+     * (nonzero). Serde-defaulted so pre-M13 files parse.
+     */
+    uint8_t vary_typical;
+    /**
+     * Circulation core wanders per floor (nonzero) vs stacks vertically
+     * (`0`, the default). Serde-defaulted so pre-M13 files parse.
+     */
+    uint8_t wandering_core;
+    /**
+     * Max apartment/office units per floor (`0` = open plan, no subdivision).
+     * Serde-defaulted so pre-M14 files parse.
+     */
+    uint8_t unit_max;
+    /**
+     * Plumbing shaft columns per building (`0` = off; capped at 4).
+     * WET-tagged rooms snap to these columns on every floor.
+     * Serde-defaulted so pre-M14 files parse.
+     */
+    uint8_t wet_shafts;
+    /**
+     * Ground-floor blueprint override as a `ZoneType` index
+     * (`255` = none): when set, floor 0 uses that zone's blueprint
+     * (mixed-use base, e.g. retail under housing).
+     * Serde-defaulted so pre-M14 files parse.
+     */
+    uint8_t ground_zone;
+    /**
+     * Corridor policy: `0` = double-loaded fill (rooms both sides),
+     * `1` = single-loaded (rooms north of a south corridor band).
+     * Serde-defaulted so pre-M14 files parse.
+     */
+    uint8_t corridor;
+    /**
+     * Second-furniture-piece probability in percent (`0–100`): every room
+     * always stamps its primary piece when it fits; the secondary piece
+     * rolls against this density. Serde-defaulted so pre-M15 files parse.
+     */
+    uint8_t furn_density;
 } Blueprint;
 
 /**
@@ -260,6 +441,7 @@ typedef struct ZoneParams {
   float density;
   uint8_t block_size;
   uint8_t palette_count;
+  uint8_t arterial_every;
 } ZoneParams;
 typedef struct WorldConfig {
     /**
@@ -374,6 +556,27 @@ typedef uint8_t CellFlags;
  * The cell is park/green (foliage or open ground).
  */
 #define CellFlags_IS_PARK (1 << 1)
+/**
+ * The cell is an arterial avenue: a wide (2-cell) street on the
+ * per-zone `arterial_every` lattice. Always combined with `IS_STREET`
+ * so old consumers still render it as a road.
+ */
+#define CellFlags_IS_ARTERIAL (1 << 2)
+/**
+ * The cell is a pedestrian plaza: no-build, walkable, height 0.
+ * Combined with `IS_STREET` so old renderers draw it as paved ground.
+ */
+#define CellFlags_IS_PLAZA (1 << 3)
+/**
+ * The cell is a sidewalk apron: the 1-cell ring inside the street edge.
+ * No-build, height 0; renderers draw curb/pavement, not asphalt.
+ */
+#define CellFlags_IS_SIDEWALK (1 << 4)
+/**
+ * The cell is a greenway: a dropped street segment reborn as a linear
+ * park. No-build, height 0; renderers draw green, like `IS_PARK`.
+ */
+#define CellFlags_IS_GREENWAY (1 << 5)
 
 /**
  * Deterministic id of a built lot's future interior.
@@ -494,6 +697,33 @@ struct UrbixInterior urbix_generate_interior(struct UrbixEngine *engine, int32_t
 void urbix_interior_free(struct UrbixInterior interior);
 
 /**
+ * Enumerate every room of the built cell at world space `(wx, wz)`.
+ *
+ * Same lookup path as [`urbix_generate_interior`] (chunk → context →
+ * layout, through the engine interior cache), then one [`UrbixRoom`] per
+ * 4-connected room component per floor, with apartment and area attached.
+ * Release the result with [`urbix_interior_rooms_free`].
+ *
+ * ## Safety
+ *
+ * `engine` must be a valid, non-null handle from [`urbix_engine_create`].
+ */
+struct UrbixRoomList urbix_generate_interior_rooms(struct UrbixEngine *engine,
+                                                   int32_t wx,
+                                                   int32_t wz);
+
+/**
+ * Release a room list returned by [`urbix_generate_interior_rooms`].
+ *
+ * ## Safety
+ *
+ * `list` must be an *unreleased* result from
+ * [`urbix_generate_interior_rooms`]. Calling this twice on the same list
+ * (or with an unrelated list) is double-free / undefined behaviour.
+ */
+void urbix_interior_rooms_free(struct UrbixRoomList list);
+
+/**
  * Query the continuous zone-affinity vector at world coordinates.
  *
  * ## Safety
@@ -549,10 +779,15 @@ void urbix_set_config(struct UrbixEngine *engine, const struct WorldConfig *conf
 /* ---- Compatibility shims for old manual header ---- */
 #define URBIX_FLAG_STREET CellFlags_IS_STREET
 #define URBIX_FLAG_PARK CellFlags_IS_PARK
+#define URBIX_FLAG_ARTERIAL CellFlags_IS_ARTERIAL
+#define URBIX_FLAG_PLAZA CellFlags_IS_PLAZA
+#define URBIX_FLAG_SIDEWALK CellFlags_IS_SIDEWALK
+#define URBIX_FLAG_GREENWAY CellFlags_IS_GREENWAY
 
 /* ---- Compile-time layout checks (inside include guard) ---- */
 _Static_assert(sizeof(UrbixChunkHeader) == 32, "UrbixChunkHeader must be 32 bytes");
 _Static_assert(sizeof(UrbixCell) == 40,      "UrbixCell must be 40 bytes");
+_Static_assert(sizeof(UrbixRoom) == 10,      "UrbixRoom must be 10 bytes");
 _Static_assert(_Alignof(UrbixChunkHeader) == 8, "UrbixChunkHeader must be 8-byte aligned");
 _Static_assert(_Alignof(UrbixCell) == 8,       "UrbixCell must be 8-byte aligned");
 #endif  /* URBIX_H */

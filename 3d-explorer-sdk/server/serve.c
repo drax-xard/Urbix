@@ -14,16 +14,19 @@
  * emitted by us, in a fixed order, from the engine's deterministic output.
  *
  * Build (from 3d-explorer-sdk/):
- *   cc -O2 -I sdk/include server/serve.c sdk/lib/liburbix.a \
- *      -framework Security -framework CoreFoundation -lm -o server/serve
+ *   ./server/build.sh   (portable: macOS / Linux / MinGW; see the script)
  * Run (from 3d-explorer-sdk/):
  *   ./server/serve [--port 8311] [--seed 445566] [--web server/www]
+ *                  [--chunk-size 32] [--draw-distance 8]
  *
  * Endpoints:
  *   GET /api/config               { seed, chunk_size, draw_distance, floor_height,
- *                                    zone_hues[5][3], zone_names[5] }
+ *                                    zone_hues[5][3], zone_names[5],
+ *                                    block_size[5], arterial_every[5] }
  *   GET /api/chunk?cx=&cy=        { header + cells:[ {x,z,h,zone,pal,flags,interior_id} ] }
- *   GET /api/interior?wx=&wz=     { header + floors:[ {w,d,tiles[],kinds[]} ] }
+ *   GET /api/chunks?cx=&cy=&r=    { batch square of (2r+1)^2 chunks, r <= 4 }
+ *   GET /api/interior?wx=&wz=     { header + floors:[ {w,d,tiles[],kinds[],furn[]} ] }
+ *   GET /api/rooms?wx=&wz=        { rooms:[ {floor,x,z,w,d,kind,unit,area} ] }
  *   GET /api/zone?wx=&wz=         { weights:[5] }  (continuous zone affinity)
  *   GET /api/shutdown             { shutting_down:true } then the server exits
  */
@@ -46,6 +49,10 @@
 #define DEFAULT_PORT        8311
 #define DEFAULT_SEED        445566u
 #define DEFAULT_WEB_DIR     "www"
+#define DEFAULT_CHUNK_SIZE  32
+#define DEFAULT_DRAW_DIST   8
+#define DEFAULT_FLOOR_H     4.0         /* == DEFAULT_FLOOR_HEIGHT / interior_floor_height */
+#define MAX_BATCH_R         4           /* /api/chunks radius cap: (2r+1)^2 <= 81 chunks */
 #define REQ_BUF             8192        /* request line + headers only */
 #define MAX_RESPONSE        (128u * 1024u * 1024u) /* guard against runaway */
 
@@ -62,6 +69,11 @@ static const uint8_t ZONE_HUES[ZONE_COUNT][3] = {
 static const char *ZONE_NAMES[ZONE_COUNT] = {
     "downtown", "residential", "commercial", "industrial", "park",
 };
+/* Per-zone block size + arterial spacing, byte-identical to
+ * WorldConfig::default(). Update on the next engine bump (M11 scale canon:
+ * 1 cell = 4 m; arterial_every < 2 disables avenues). */
+static const uint8_t ZONE_BLOCK_SIZE[ZONE_COUNT] = { 11, 10, 9, 14, 18 };
+static const uint8_t ZONE_ARTERIAL_EVERY[ZONE_COUNT] = { 4, 5, 4, 6, 0 };
 
 /* ---- Growable JSON buffer (dependency-free, fprintf-style appends) ---- */
 typedef struct {
@@ -253,9 +265,12 @@ static void serve_file(int fd, const char *web_dir, const char *path) {
 }
 
 /* ---- JSON endpoints ---- */
-static void json_config(Jbuf *b, uint64_t seed) {
-    jprintf(b, "{\"version\":1,\"seed\":%llu", (unsigned long long)seed);
-    jprintf(b, ",\"chunk_size\":32,\"draw_distance\":8,\"floor_height\":4.0");
+static void json_config(Jbuf *b, uint64_t seed, uint16_t chunk_size,
+                        uint32_t draw_distance) {
+    jprintf(b, "{\"version\":1,\"sdk\":\"0.15.0\",\"seed\":%llu",
+            (unsigned long long)seed);
+    jprintf(b, ",\"chunk_size\":%u,\"draw_distance\":%u,\"floor_height\":%.1f,\"cell_meters\":4",
+            chunk_size, draw_distance, DEFAULT_FLOOR_H);
     jprintf(b, ",\"zone_hues\":[");
     for (int z = 0; z < ZONE_COUNT; ++z) {
         jprintf(b, "%s[%u,%u,%u]", z ? "," : "",
@@ -265,17 +280,27 @@ static void json_config(Jbuf *b, uint64_t seed) {
     for (int z = 0; z < ZONE_COUNT; ++z) {
         jprintf(b, "%s\"%s\"", z ? "," : "", ZONE_NAMES[z]);
     }
+    jprintf(b, "],\"block_size\":[");
+    for (int z = 0; z < ZONE_COUNT; ++z) {
+        jprintf(b, "%s%u", z ? "," : "", ZONE_BLOCK_SIZE[z]);
+    }
+    jprintf(b, "],\"arterial_every\":[");
+    for (int z = 0; z < ZONE_COUNT; ++z) {
+        jprintf(b, "%s%u", z ? "," : "", ZONE_ARTERIAL_EVERY[z]);
+    }
     jprintf(b, "]}");
 }
 
 /* Interior payload layout (UrbixInterior.data, per floor):
- *   tiles[W*D] then kinds[W*D], row-major. */
+ *   tiles[W*D] then kinds[W*D] then furn[W*D], row-major (M15 appends furn;
+ *   readers slicing the first two thirds keep working). */
 static void json_interior(Jbuf *b, int32_t wx, int32_t wz, UrbixEngine *e) {
     UrbixInterior in = urbix_generate_interior(e, wx, wz);
     if (in.data == NULL || in.len == 0) {
         jprintf(b, "{\"version\":1,\"wx\":%d,\"wz\":%d,\"floor_count\":0,"
                    "\"footprint_w\":0,\"footprint_d\":0,\"interior_id\":\"0\","
                    "\"floors\":[]}", wx, wz);
+        urbix_interior_free(in);
         return;
     }
     uint64_t grid = (uint64_t)in.footprint_w * in.footprint_d;
@@ -295,14 +320,38 @@ static void json_interior(Jbuf *b, int32_t wx, int32_t wz, UrbixEngine *e) {
         for (uint64_t i = 0; i < grid; ++i) {
             jprintf(b, "%s%u", i ? "," : "", p[grid + i]);
         }
+        jprintf(b, "],\"furn\":[");
+        for (uint64_t i = 0; i < grid; ++i) {
+            jprintf(b, "%s%u", i ? "," : "", p[2 * grid + i]);
+        }
         jprintf(b, "]}");
-        p += 2 * grid;
+        p += 3 * grid;
     }
     jprintf(b, "]}");
     urbix_interior_free(in);
 }
 
-static void json_chunk(Jbuf *b, int32_t cx, int32_t cy, UrbixEngine *e) {
+/* Room records (M15): one UrbixRoom per 4-connected room component per floor,
+ * in deterministic row-major scan order. Always agrees with json_interior. */
+static void json_rooms(Jbuf *b, int32_t wx, int32_t wz, UrbixEngine *e) {
+    UrbixRoomList list = urbix_generate_interior_rooms(e, wx, wz);
+    jprintf(b, "{\"version\":1,\"wx\":%d,\"wz\":%d,\"count\":%llu,\"rooms\":[",
+            wx, wz, (unsigned long long)list.count);
+    for (uint64_t i = 0; i < list.count; ++i) {
+        const UrbixRoom *r = &list.data[i];
+        jprintf(b, "%s{\"floor\":%u,\"x\":%u,\"z\":%u,\"w\":%u,\"d\":%u,"
+                   "\"kind\":%u,\"unit\":%u,\"area\":%u}",
+                i ? "," : "", r->floor, r->x, r->z, r->w, r->d,
+                r->kind, r->unit, r->area);
+    }
+    jprintf(b, "]}");
+    urbix_interior_rooms_free(list);
+}
+
+/* Single chunk object (shared by /api/chunk and /api/chunks). Flags carry
+ * the M11/M12 street hierarchy (arterial/plaza/sidewalk/greenway bits);
+ * the viewer decodes them — see docs/api.md §3. */
+static void json_chunk_obj(Jbuf *b, int32_t cx, int32_t cy, UrbixEngine *e) {
     UrbixChunkBuffer buf = urbix_generate_chunk(e, cx, cy);
     if (buf.data == NULL || buf.len == 0) {
         jprintf(b, "{\"version\":1,\"cx\":%d,\"cy\":%d,\"cell_count\":0,\"cells\":[]}",
@@ -332,6 +381,32 @@ static void json_chunk(Jbuf *b, int32_t cx, int32_t cy, UrbixEngine *e) {
     urbix_chunk_free(buf);
 }
 
+static void json_chunk(Jbuf *b, int32_t cx, int32_t cy, UrbixEngine *e) {
+    json_chunk_obj(b, cx, cy, e);
+}
+
+/* Batch square for streaming: (2r+1)^2 chunks around (cx,cy), r <= MAX_BATCH_R.
+ * One round-trip per frame instead of one per chunk; entries reuse the exact
+ * /api/chunk object shape so the viewer parses both with one code path. */
+static void json_chunks(Jbuf *b, int32_t cx, int32_t cy, int32_t r, UrbixEngine *e) {
+    if (r < 0) r = 0;
+    if (r > MAX_BATCH_R) r = MAX_BATCH_R;
+    jprintf(b, "{\"version\":1,\"cx\":%d,\"cy\":%d,\"r\":%d,\"chunks\":[", cx, cy, r);
+    int first = 1;
+    for (int32_t dy = -r; dy <= r; ++dy) {
+        for (int32_t dx = -r; dx <= r; ++dx) {
+            jprintf(b, "%s", first ? "" : ",");
+            first = 0;
+            json_chunk_obj(b, cx + dx, cy + dy, e);
+            if (b->n > MAX_RESPONSE) {
+                jprintf(b, "],\"truncated\":true}");
+                return;
+            }
+        }
+    }
+    jprintf(b, "]}");
+}
+
 static void json_zone(Jbuf *b, double wx, double wz, UrbixEngine *e) {
     UrbixZoneAffinity aff = urbix_get_zone(e, wx, wz);
     jprintf(b, "{\"wx\":%.2f,\"wz\":%.2f,\"weights\":[", wx, wz);
@@ -347,7 +422,8 @@ static void json_shutdown(Jbuf *b) {
 
 /* ---- Request dispatch ---- */
 static void handle_request(int fd, const char *req_raw, const char *web_dir,
-                           UrbixEngine *e, uint64_t seed) {
+                           UrbixEngine *e, uint64_t seed, uint16_t chunk_size,
+                           uint32_t draw_distance) {
     char method[8], path[512], version[16];
     if (sscanf(req_raw, "%7s %511s %15s", method, path, version) != 3) {
         send_error(fd, 400, "Bad Request", "malformed request line");
@@ -364,7 +440,7 @@ static void handle_request(int fd, const char *req_raw, const char *web_dir,
 
     Jbuf b = {0};
     if (strcmp(path, "/api/config") == 0) {
-        json_config(&b, seed);
+        json_config(&b, seed, chunk_size, draw_distance);
     } else if (strcmp(path, "/api/chunk") == 0) {
         int32_t cx = 0, cy = 0;
         if (!query_i(q, "cx", &cx) || !query_i(q, "cy", &cy)) {
@@ -373,6 +449,15 @@ static void handle_request(int fd, const char *req_raw, const char *web_dir,
             return;
         }
         json_chunk(&b, cx, cy, e);
+    } else if (strcmp(path, "/api/chunks") == 0) {
+        int32_t cx = 0, cy = 0, r = 0;
+        if (!query_i(q, "cx", &cx) || !query_i(q, "cy", &cy) ||
+            !query_i(q, "r", &r)) {
+            send_error(fd, 400, "Bad Request", "chunks needs cx=&cy=&r=");
+            free(b.p);
+            return;
+        }
+        json_chunks(&b, cx, cy, r, e);
     } else if (strcmp(path, "/api/interior") == 0) {
         int32_t wx = 0, wz = 0;
         if (!query_i(q, "wx", &wx) || !query_i(q, "wz", &wz)) {
@@ -381,6 +466,14 @@ static void handle_request(int fd, const char *req_raw, const char *web_dir,
             return;
         }
         json_interior(&b, wx, wz, e);
+    } else if (strcmp(path, "/api/rooms") == 0) {
+        int32_t wx = 0, wz = 0;
+        if (!query_i(q, "wx", &wx) || !query_i(q, "wz", &wz)) {
+            send_error(fd, 400, "Bad Request", "rooms needs wx=&wz=");
+            free(b.p);
+            return;
+        }
+        json_rooms(&b, wx, wz, e);
     } else if (strcmp(path, "/api/zone") == 0) {
         double wx = 0.0, wz = 0.0;
         if (!query_f(q, "wx", &wx) || !query_f(q, "wz", &wz)) {
@@ -406,11 +499,19 @@ static void handle_request(int fd, const char *req_raw, const char *web_dir,
     free(b.p);
 }
 
+static void usage(const char *prog) {
+    fprintf(stderr,
+            "usage: %s [--port 8311] [--seed 445566] [--web server/www]\n"
+            "           [--chunk-size 32] [--draw-distance 8]\n", prog);
+}
+
 /* ---- entry point ---- */
 int main(int argc, char **argv) {
     int  port  = DEFAULT_PORT;
     unsigned long seed = DEFAULT_SEED;
     const char *web_dir = DEFAULT_WEB_DIR;
+    unsigned long chunk_size = DEFAULT_CHUNK_SIZE;
+    unsigned long draw_distance = DEFAULT_DRAW_DIST;
 
     for (int i = 1; i < argc - 1; i += 2) {
         const char *flag = argv[i];
@@ -423,15 +524,36 @@ int main(int argc, char **argv) {
             if (!end || *end) { fprintf(stderr, "bad --seed\n"); return 2; }
         } else if (strcmp(flag, "--web") == 0) {
             web_dir = argv[i + 1];
+        } else if (strcmp(flag, "--chunk-size") == 0) {
+            char *end = NULL;
+            chunk_size = strtoul(argv[i + 1], &end, 10);
+            if (!end || *end || chunk_size == 0 || chunk_size > 256) {
+                fprintf(stderr, "bad --chunk-size (1..256)\n"); return 2;
+            }
+        } else if (strcmp(flag, "--draw-distance") == 0) {
+            char *end = NULL;
+            draw_distance = strtoul(argv[i + 1], &end, 10);
+            if (!end || *end || draw_distance == 0 || draw_distance > 64) {
+                fprintf(stderr, "bad --draw-distance (1..64)\n"); return 2;
+            }
         } else {
             fprintf(stderr, "unknown flag %s\n", flag);
+            usage(argv[0]);
             return 2;
         }
+    }
+    if (argc % 2 == 0 && argc > 1) {
+        /* Odd trailing argument with no value. */
+        fprintf(stderr, "flag %s needs a value\n", argv[argc - 1]);
+        usage(argv[0]);
+        return 2;
     }
 
     UrbixEngine *engine = urbix_engine_create((uint64_t)seed);
     if (!engine) { fprintf(stderr, "urbix_engine_create failed\n"); return 1; }
-    urbix_set_draw_distance(engine, 8);
+    if (chunk_size != DEFAULT_CHUNK_SIZE)
+        urbix_set_chunk_size(engine, (uint16_t)chunk_size);
+    urbix_set_draw_distance(engine, (uint32_t)draw_distance);
 
     signal(SIGPIPE, SIG_IGN);
 
@@ -454,8 +576,8 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    fprintf(stderr, "urbix serve: seed=%llu port=%d web=%s\n",
-            (unsigned long long)seed, port, web_dir);
+    fprintf(stderr, "urbix serve: seed=%llu port=%d web=%s chunk_size=%lu draw_distance=%lu\n",
+            (unsigned long long)seed, port, web_dir, chunk_size, draw_distance);
     fprintf(stderr, "  open http://localhost:%d in a browser\n", port);
 
     for (;;) {
@@ -468,7 +590,8 @@ int main(int argc, char **argv) {
             req[got] = '\0';
 char *end = strstr(req, "\r\n");
         if (end) *end = '\0';   /* just the request line is all we need */
-        handle_request(cfd, req, web_dir, engine, seed);
+        handle_request(cfd, req, web_dir, engine, seed,
+                       (uint16_t)chunk_size, (uint32_t)draw_distance);
     }
     close(cfd);
     if (g_shutdown) {

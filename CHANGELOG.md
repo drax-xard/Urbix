@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **3D-explorer SDK refresh (`3d-explorer-sdk/`, 0.10.0 → 0.15.0)**:
+  - Re-vendored `sdk/include/urbix.h`, `sdk/lib/liburbix.{a,dylib}`, and the
+    `urbix-0.15.0-macos-aarch64.tar.gz` release artifact (+ `.sha256`);
+    Linux/Windows tarballs keep shipping from CI (`release.yml`) with the
+    same layout.
+  - `docs/api.md` rewritten for 0.15.0: M11/M12 street-hierarchy flags,
+    `ZoneParams.arterial_every`, full Blueprint v2 + `TAG_*`/`FURN_*` tables,
+    3-grid `UrbixInterior` payload, and `urbix_generate_interior_rooms`.
+  - `examples/explore_grid.c` decodes the paved hierarchy;
+    `explore_interior.c` validates the appended furniture layer; new
+    `examples/explore_rooms.c` prints per-room records.
+  - `server/serve.c`: furniture in `/api/interior`, new `/api/rooms` and
+    batched `/api/chunks?r=` endpoints, live `/api/config` (chunk
+    size/draw distance/paving tables), `--chunk-size`/`--draw-distance`
+    flags; portable `server/build.sh` (macOS/Linux/MinGW).
+  - `server/www` viewer: paved-hierarchy overlay + walkability mode (V),
+    teleport (T), batch streaming with frame-time/fetch HUD, interiors with
+    furniture, derived window glazing, and room/unit stats.
+  - `server/test.sh` extended to 18 assertions covering the new endpoints
+    (interior probes pick a built cell dynamically).
+
 ## [0.15.0] — 2026-09-16
 
 ### Added

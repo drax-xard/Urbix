@@ -1,18 +1,23 @@
 /* examples/explore_interior.c
  *
- * Worked example of reading a building's interior through the Milestone-10
- * FFI: pick a built cell from a chunk, request its interior by world
- * coordinates, and print the per-storey tile grids (walls / doors / core /
- * corridor / rooms with kinds).
+ * Worked example of reading a building's interior through the FFI: pick a
+ * built cell from a chunk, request its interior by world coordinates, and
+ * print the per-storey tile grids (walls / doors / core / corridor / rooms
+ * with kinds + furniture).
  *
  * Build (macOS / Apple Silicon):
  *   cc -I ../sdk/include explore_interior.c ../sdk/lib/liburbix.a \
  *      -framework Security -framework CoreFoundation -lm -o explore_interior
+ * Linux:
+ *   cc -I ../sdk/include explore_interior.c ../sdk/lib/liburbix.a \
+ *      -ldl -lm -pthread -o explore_interior
  * Run:
  *   ./explore_interior
  *
  * The payload layout (UrbixInterior.data) is documented in docs/api.md §5:
- * per floor, tiles[W*D] (Tile enum bytes) then kinds[W*D] (room-kind tags).
+ * per floor, tiles[W*D] (Tile enum bytes) then kinds[W*D] (room-kind tags)
+ * then furn[W*D] (furniture codes, 0 = bare; M15, appended so readers
+ * slicing the first two thirds keep working).
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -66,21 +71,37 @@ int main(void) {
            "footprint=%ux%u floors=%u\n",
            wx, wz, (unsigned long long)in.interior_id, in.zone, in.door_side,
            in.footprint_w, in.footprint_d, in.floor_count);
-    printf("  len=%llu (expect %llu = floors*2*W*D)\n",
-           (unsigned long long)in.len,
-           (unsigned long long)in.floor_count * 2ULL * grid);
+    if (in.len != (uint64_t)in.floor_count * 3ULL * grid) {
+        fprintf(stderr, "bad interior length %llu (expect floors*3*W*D = %llu)\n",
+                (unsigned long long)in.len,
+                (unsigned long long)in.floor_count * 3ULL * grid);
+        urbix_interior_free(in);
+        urbix_engine_destroy(engine);
+        return 1;
+    }
+    printf("  len=%llu (= floors*3*W*D: tiles+kinds+furn)\n",
+           (unsigned long long)in.len);
 
     const uint8_t *p = in.data;
     for (uint16_t f = 0; f < in.floor_count; ++f) {
-        unsigned rooms = 0;
-        for (uint64_t i = 0; i < grid; ++i)
+        unsigned rooms = 0, furnished = 0;
+        for (uint64_t i = 0; i < grid; ++i) {
             if (p[i] == 5) ++rooms;
-        printf("  floor %2u: %u rooms  |  ", f, rooms);
+            if (p[2 * grid + i] != 0) {
+                ++furnished;
+                if (p[i] != 5)
+                    printf("  floor %u: WARNING furn on non-room tile %llu\n", f,
+                           (unsigned long long)i);
+            }
+        }
+        printf("  floor %2u: %u room tiles, %u furnished  |  ", f, rooms, furnished);
         /* Print the first row of tiles so the run output is self-describing. */
         for (uint64_t x = 0; x < in.footprint_w; ++x)
             printf("%c", tile_name(p[x])[0]);
-        printf("  |  kinds[0..]=%u,%u,%u\n", p[grid], p[grid + 1], p[grid + 2]);
-        p += 2 * grid;
+        printf("  |  kinds[0..]=%u,%u,%u furn[0..]=%u,%u,%u\n",
+               p[grid], p[grid + 1], p[grid + 2],
+               p[2 * grid], p[2 * grid + 1], p[2 * grid + 2]);
+        p += 3 * grid;
     }
 
     urbix_interior_free(in);
