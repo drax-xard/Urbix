@@ -397,9 +397,83 @@ function spawnChunk(c) {
     group.add(pave);
   }
 
+  /* Facade windows: one panel per cell per storey on all four faces, so
+   * tall masses read at human scale. Unlit glass with a sparse deterministic
+   * scattering of warm lit rooms. Over a per-chunk budget we fall back to
+   * every second storey rather than dropping facades. */
+  let win = null;
+  if (masses.length > 0) {
+    const WIN_ROW = 4.0;    /* one row per storey (vertical units are metres) */
+    const WIN_COL = 1.0;    /* one column per cell along each face */
+    let rowStep = 1;
+    let panels = collectWindows(masses, WIN_ROW, WIN_COL, rowStep);
+    if (panels.length > 9000) {
+      rowStep = 2;
+      panels = collectWindows(masses, WIN_ROW, WIN_COL, rowStep);
+    }
+    if (panels.length > 0) {
+      win = new THREE.InstancedMesh(
+        UNIT_BOX,
+        new THREE.MeshBasicMaterial({ color: 0xffffff }),
+        panels.length
+      );
+      const m = new THREE.Matrix4();
+      const p = new THREE.Vector3();
+      const s = new THREE.Vector3();
+      const e = new THREE.Euler();
+      const q = new THREE.Quaternion();
+      const GLASS = new THREE.Color(0x24313e);
+      const LIT = new THREE.Color(0xffd9a0);
+      panels.forEach((it, i) => {
+        p.set(it.x, it.y, it.z);
+        e.set(0, it.ry, 0);
+        q.setFromEuler(e);
+        if (it.ry !== 0) s.set(0.06, 1.8, 0.55);
+        else s.set(0.55, 1.8, 0.06);
+        win.setMatrixAt(i, m.compose(p, q, s));
+        /* Deterministic lit scattering from position hash. */
+        const hh = Math.abs(Math.sin(it.x * 12.9898 + it.z * 78.233 + it.y * 37.719) * 43758.5453) % 1;
+        win.setColorAt(i, hh < 0.22 ? LIT : GLASS);
+      });
+      win.instanceMatrix.needsUpdate = true;
+      if (win.instanceColor) win.instanceColor.needsUpdate = true;
+      group.add(win);
+    }
+  }
+
   group.userData = { cx: c.cx, cy: c.cy };
-  chunks.set(key, { group, data, mesh, roof, pave, paveKinds, cx: c.cx, cy: c.cy });
+  chunks.set(key, { group, data, mesh, roof, pave, paveKinds, win, cx: c.cx, cy: c.cy });
   scene.add(group);
+}
+
+/* Window panel placements for merged masses: {x, y, z, ry} with ry = 0 on
+ * ±z faces and PI/2 on ±x faces. Rows run ground-up per storey; the top
+ * metre is left bare so crowns read as roofs, and masses under 8 m (sheds,
+ * houses) stay unglazed. */
+function collectWindows(masses, rowH, colW, rowStep) {
+  const out = [];
+  for (const mass of masses) {
+    if (mass.h < 8) continue;
+    const w = mass.x1 - mass.x0 + 1;
+    const d = mass.z1 - mass.z0 + 1;
+    const cx = mass.x0 + w / 2;
+    const cz = mass.z0 + d / 2;
+    let row = 0;
+    for (let y = 2.6; y < mass.h - 1; y += rowH, row++) {
+      if (row % rowStep !== 0) continue;
+      for (let ix = 0; ix < w; ix += colW) {
+        const px = mass.x0 + ix + colW / 2;
+        out.push({ x: px, y, z: cz - d / 2 - 0.035, ry: 0 });
+        out.push({ x: px, y, z: cz + d / 2 + 0.035, ry: 0 });
+      }
+      for (let iz = 0; iz < d; iz += colW) {
+        const pz = mass.z0 + iz + colW / 2;
+        out.push({ x: cx - w / 2 - 0.035, y, z: pz, ry: Math.PI / 2 });
+        out.push({ x: cx + w / 2 + 0.035, y, z: pz, ry: Math.PI / 2 });
+      }
+    }
+  }
+  return out;
 }
 
 /* Re-tint every loaded chunk in place for the walkability overlay (V). */
@@ -444,7 +518,7 @@ function updateStream() {
     if (d > STREAM_RADIUS) {
       scene.remove(entry.group);
       pickMeshes = pickMeshes.filter((m) => m !== entry.mesh && m !== entry.roof);
-      for (const em of [entry.mesh, entry.roof, entry.pave])
+      for (const em of [entry.mesh, entry.roof, entry.pave, entry.win])
         if (em && em.material) em.material.dispose();   /* UNIT_BOX geometry is shared, keep it */
       chunks.delete(key);
     }

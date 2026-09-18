@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   boxes at the group max, so lots read as continuous masses with setback
   steps instead of per-cell needles (data untouched). Also unstacked the
   overlapping status/popup HUD lines (`style.css`).
+- **Viewer facade windows**: one instanced panel per cell per storey on all
+  four faces of every mass over 8 m (dark glass + deterministic warm lit
+  scatter), halving row density over a per-chunk budget — towers now read
+  at human scale from the orbit view.
 
 ## [0.18.0] — 2026-09-18
 
