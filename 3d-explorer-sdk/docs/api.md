@@ -1,4 +1,4 @@
-# Urbix Engine — C API Reference (v0.17.0)
+# Urbix Engine — C API Reference (v0.18.0)
 
 This is the authoritative reference for calling the Urbix procedural city
 engine from C (or any language with C interop: C++, Rust, C#, Unity, Godot,
@@ -93,6 +93,7 @@ typedef struct ZoneParams {
     uint8_t block_size;
     uint8_t palette_count;
     uint8_t arterial_every;   /* M11: every K-th street is a 2-cell avenue; < 2 disables */
+    uint8_t slenderness_max;  /* height cap = K * narrowest lot side in metres; 0 = off */
 } ZoneParams;
 
 typedef struct BlueprintRoom {

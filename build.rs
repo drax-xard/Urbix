@@ -64,6 +64,7 @@ fn main() {
         "  uint8_t block_size;\n",
         "  uint8_t palette_count;\n",
         "  uint8_t arterial_every;\n",
+        "  uint8_t slenderness_max;\n",
         "} ZoneParams;\n",
     );
     if !content.contains("typedef struct ZoneParams")

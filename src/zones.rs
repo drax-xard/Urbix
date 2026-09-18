@@ -80,7 +80,8 @@ impl ZoneType {
 ///
 /// 1 cell = 4 m. `block_size` is in cells; multiply by 4 for metres.
 /// `arterial_every` counts ordinary streets: every K-th street is a 2-cell
-/// arterial avenue (`K == 0` means no arterials).
+/// arterial avenue (`K == 0` means no arterials). `slenderness_max` caps a
+/// lot's height at `K × min(lot_w, lot_d)` metres (`0` disables the cap).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[repr(C)]
 pub struct ZoneParams {
@@ -98,6 +99,11 @@ pub struct ZoneParams {
     /// Snapped (not blended) from the dominant zone; see [`zone_params`].
     #[serde(default = "default_arterial_every")]
     pub arterial_every: u8,
+    /// Slenderness cap: a lot's height may not exceed this multiple of its
+    /// narrowest footprint side in metres (`0` disables). Snapped (not
+    /// blended) from the dominant zone, like the other lot-scale policies.
+    #[serde(default = "default_slenderness_max")]
+    pub slenderness_max: u8,
 }
 
 /// Serde default for [`ZoneParams::arterial_every`] so pre-M11 config files
@@ -107,6 +113,13 @@ pub struct ZoneParams {
 #[must_use]
 pub const fn default_arterial_every() -> u8 {
     4
+}
+
+/// Serde default for [`ZoneParams::slenderness_max`] so pre-clamp config
+/// files without the field keep parsing (they get the chunky-mid-rise cap).
+#[must_use]
+pub const fn default_slenderness_max() -> u8 {
+    5
 }
 
 /// Default parameters for a single [`ZoneType`].
@@ -128,6 +141,7 @@ pub fn zone_defaults(zone: ZoneType) -> ZoneParams {
             block_size: 11,
             palette_count: 6,
             arterial_every: 4,
+            slenderness_max: 5,
         },
         ZoneType::Residential => ZoneParams {
             height_min: 4.0,
@@ -136,6 +150,7 @@ pub fn zone_defaults(zone: ZoneType) -> ZoneParams {
             block_size: 10,
             palette_count: 5,
             arterial_every: 5,
+            slenderness_max: 5,
         },
         ZoneType::Commercial => ZoneParams {
             height_min: 10.0,
@@ -144,6 +159,7 @@ pub fn zone_defaults(zone: ZoneType) -> ZoneParams {
             block_size: 9,
             palette_count: 7,
             arterial_every: 4,
+            slenderness_max: 5,
         },
         ZoneType::Industrial => ZoneParams {
             height_min: 6.0,
@@ -152,6 +168,7 @@ pub fn zone_defaults(zone: ZoneType) -> ZoneParams {
             block_size: 14,
             palette_count: 4,
             arterial_every: 6,
+            slenderness_max: 5,
         },
         ZoneType::Park => ZoneParams {
             height_min: 0.0,
@@ -160,6 +177,7 @@ pub fn zone_defaults(zone: ZoneType) -> ZoneParams {
             block_size: 18,
             palette_count: 3,
             arterial_every: 0,
+            slenderness_max: 5,
         },
     }
 }
@@ -169,8 +187,8 @@ pub fn zone_defaults(zone: ZoneType) -> ZoneParams {
 /// `affinity` is a length-`ZONE_COUNT` weight vector (produced by the Voronoi
 /// layer, one entry per [`ZoneType`]) expected to be non-negative. Heights,
 /// density, and palette count are affinity-weighted averages. `block_size`
-/// and `arterial_every` are **snapped from the dominant zone** (argmax, ties
-/// toward the lower index) instead of averaged: averaging grid periods
+/// `block_size`, `arterial_every`, and `slenderness_max` are **snapped from
+/// the dominant zone** (argmax, ties toward the lower index) instead of averaged: averaging grid periods
 /// produces hybrid spacings (e.g. 7/9/10) that belong to neither district,
 /// while snapping keeps each block buildable and each fabric legible.
 /// If the vector is all-in on a single zone the result equals that
@@ -227,6 +245,7 @@ pub fn zone_params(affinity: &[f32; ZONE_COUNT]) -> ZoneParams {
         block_size: grid.block_size,
         palette_count: (palette_sum * inv).round() as u8,
         arterial_every: grid.arterial_every,
+        slenderness_max: grid.slenderness_max,
     }
 }
 
@@ -250,6 +269,10 @@ mod tests {
             assert!(
                 p.arterial_every <= 16,
                 "arterial_every out of range for {zone:?}"
+            );
+            assert!(
+                p.slenderness_max <= 12,
+                "slenderness_max out of range for {zone:?}"
             );
         }
     }

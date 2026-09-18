@@ -32,7 +32,7 @@ check() { # check <label> <got> <needle>
 cfg=$(curl -fsS "http://localhost:$PORT/api/config" 2>/dev/null)
 check "/api/config zones"     "$cfg" '"zone_hues"'
 check "/api/config seed"      "$cfg" "\"seed\":$SEED"
-check "/api/config sdk"       "$cfg" '"sdk":"0.17.0"'
+check "/api/config sdk"       "$cfg" '"sdk":"0.18.0"'
 check "/api/config paving"    "$cfg" '"arterial_every"'
 
 chunk=$(curl -fsS "http://localhost:$PORT/api/chunk?cx=0&cy=0" 2>/dev/null)

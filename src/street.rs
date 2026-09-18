@@ -325,6 +325,7 @@ mod tests {
             block_size: 0,
             palette_count: 1,
             arterial_every: 0,
+            slenderness_max: 0,
         };
         // block_size 0 must not panic; treat as 1 (every cell is a street).
         assert!(

@@ -176,12 +176,14 @@ pub fn generate_chunk(
                 let slot = lot_slot(&block, params.block_size, seed);
                 let clump = block_noise(block.bx, block.bz, seed);
                 let boost = voronoi.cbd_factor(world_x as f64, world_z as f64);
+                let rect = crate::lot::lot_rect(&block, params.block_size, seed);
                 let (mut height, mut palette) = building::assign_building(
                     slot.lot_id,
                     slot.corner,
                     clump,
                     boost,
                     Some((world_x, world_z)),
+                    rect,
                     &params,
                     seed,
                 );
@@ -212,6 +214,12 @@ pub fn generate_chunk(
                 let landmark_ok = special == SpecialKind::None || special == SpecialKind::TowerPark;
                 if height > 0.0 && landmark_ok && is_landmark(slot.lot_id, zone, seed) {
                     height = (height * 1.5).min(params.height_max * 1.6 + 1.0);
+                }
+                // Post-boost slenderness: landmark and tower-park bonuses
+                // bypass assign_building's clamp, so re-apply the same
+                // footprint cap here — chunky fabric, no spikes.
+                if height > 0.0 {
+                    height = height.min(building::slenderness_cap(&params, rect.0, rect.1));
                 }
                 // Tower-park non-tower lots and shed-less empties stay open.
                 if height <= 0.0 && special == SpecialKind::TowerPark && slot.slot != slot.count / 2

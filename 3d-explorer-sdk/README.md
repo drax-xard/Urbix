@@ -25,11 +25,11 @@ deterministic city in chunks; you render it.
     ├── lib/
     │   ├── liburbix.a        <-- static library
     │   └── liburbix.dylib    <-- dynamic library
-    └── urbix-0.17.0-macos-aarch64.tar.gz   <-- CI release artifact (same contents)
+    └── urbix-0.18.0-macos-aarch64.tar.gz   <-- CI release artifact (same contents)
 ```
 
 This build vendors **macOS, Apple Silicon (`aarch64`)**. Version:
-**0.17.0**. Linux (`linux-x86_64`) and Windows (`windows-x86_64`)
+**0.18.0**. Linux (`linux-x86_64`) and Windows (`windows-x86_64`)
 tarballs ship from the same GitHub Release (`release.yml`) with the same
 layout — swap `sdk/lib` + `sdk/include` to retarget this SDK.
 
@@ -92,7 +92,7 @@ cc -I sdk/include your_system.c sdk/lib/urbix.lib \
 (If linking the `.dylib`/`.so`, use `-L sdk/lib -lurbix` and ensure the
 shared lib is findable at runtime via `DYLD_LIBRARY_PATH`/`LD_LIBRARY_PATH`
 or `install_name_tool`. The `urbix-*.tar.gz` artifacts in GitHub Releases
-carry the same layout per target — see `sdk/urbix-0.17.0-*.tar.gz`.)
+carry the same layout per target — see `sdk/urbix-0.18.0-*.tar.gz`.)
 
 ## Chunk buffer memory — read this carefully
 
@@ -162,6 +162,6 @@ it needs a localhost connection only.
 
 ## License & provenance
 
-This SDK packages `urbix` v0.17.0. See `sdk/.../LICENSE` (inside the tarball) and
+This SDK packages `urbix` v0.18.0. See `sdk/.../LICENSE` (inside the tarball) and
 the engine repo metadata. The header and libs are generated from the Urbix crate
 (`cargo build --release` regenerates `include/urbix.h` via cbindgen).

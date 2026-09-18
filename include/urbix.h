@@ -442,6 +442,7 @@ typedef struct ZoneParams {
   uint8_t block_size;
   uint8_t palette_count;
   uint8_t arterial_every;
+  uint8_t slenderness_max;
 } ZoneParams;
 typedef struct WorldConfig {
     /**

@@ -276,7 +276,7 @@ static void serve_file(int fd, const char *web_dir, const char *path) {
 /* ---- JSON endpoints ---- */
 static void json_config(Jbuf *b, uint64_t seed, uint16_t chunk_size,
                         uint32_t draw_distance) {
-    jprintf(b, "{\"version\":1,\"sdk\":\"0.17.0\",\"seed\":%llu",
+    jprintf(b, "{\"version\":1,\"sdk\":\"0.18.0\",\"seed\":%llu",
             (unsigned long long)seed);
     jprintf(b, ",\"chunk_size\":%u,\"draw_distance\":%u,\"floor_height\":%.1f,\"cell_meters\":4",
             chunk_size, draw_distance, DEFAULT_FLOOR_H);
@@ -523,7 +523,8 @@ static void handle_request(int fd, const char *req_raw, const char *web_dir,
  * Lines: `key = value`, `#` comments, blank lines skipped. Keys:
  *   seed, chunk_size, draw_distance,
  *   <zone>.height_min, <zone>.height_max, <zone>.density,
- *   <zone>.block_size, <zone>.arterial_every, <zone>.palette_count
+ *   <zone>.block_size, <zone>.arterial_every, <zone>.palette_count,
+ *   <zone>.slenderness_max (height cap multiple of lot width, 0 = off)
  *   (<zone> in downtown/residential/commercial/industrial/park),
  *   interior_floor_height, interior_max_floors.
  * CLI flags override file values. Unknown keys / bad values are fatal. */
@@ -615,6 +616,7 @@ static int apply_override(WorldConfig *cfg, unsigned long *seed,
         if (strcmp(field, "block_size") == 0) cfg->zones[z].block_size = (uint8_t)u;
         else if (strcmp(field, "arterial_every") == 0) cfg->zones[z].arterial_every = (uint8_t)u;
         else if (strcmp(field, "palette_count") == 0) cfg->zones[z].palette_count = (uint8_t)u;
+        else if (strcmp(field, "slenderness_max") == 0) cfg->zones[z].slenderness_max = (uint8_t)u;
         else return 0;
         return 1;
     }

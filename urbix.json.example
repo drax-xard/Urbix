@@ -19,7 +19,8 @@
       "density": 0.95,
       "block_size": 11,
       "palette_count": 6,
-      "arterial_every": 4
+      "arterial_every": 4,
+      "slenderness_max": 5
     },
     {
       "height_min": 4.0,
@@ -27,7 +28,8 @@
       "density": 0.80,
       "block_size": 10,
       "palette_count": 5,
-      "arterial_every": 5
+      "arterial_every": 5,
+      "slenderness_max": 5
     },
     {
       "height_min": 10.0,
@@ -35,7 +37,8 @@
       "density": 0.90,
       "block_size": 9,
       "palette_count": 7,
-      "arterial_every": 4
+      "arterial_every": 4,
+      "slenderness_max": 5
     },
     {
       "height_min": 6.0,
@@ -43,7 +46,8 @@
       "density": 0.70,
       "block_size": 14,
       "palette_count": 4,
-      "arterial_every": 6
+      "arterial_every": 6,
+      "slenderness_max": 5
     },
     {
       "height_min": 0.0,
@@ -51,7 +55,8 @@
       "density": 0.10,
       "block_size": 18,
       "palette_count": 3,
-      "arterial_every": 0
+      "arterial_every": 0,
+      "slenderness_max": 5
     }
   ]
 }

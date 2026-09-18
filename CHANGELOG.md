@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] — 2026-09-18
+
+### Added
+
+- **Slenderness clamp** (chunky fabric guarantee): new per-zone
+  `ZoneParams.slenderness_max` (default 5, serde-defaulted so old config
+  files parse, `is_valid` guards ≤ 12, snapped from the dominant zone like
+  the other lot-scale policies). A lot's height may not exceed
+  `slenderness_max × min(lot_w, lot_d)` metres (1 cell = 4 m); `0` disables.
+  Enforced in `building::assign_building` (new `lot_footprint` argument via
+  `lot::lot_rect`) and re-applied in `chunk.rs` after landmark/special-block
+  boosts through the shared `building::slenderness_cap` helper, so both
+  sites always agree. `ZoneParams` stays 16 B; `include/urbix.h` regenerated.
+
 ## [0.17.0] — 2026-09-18
 
 ### Changed

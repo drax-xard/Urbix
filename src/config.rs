@@ -138,6 +138,7 @@ impl Default for WorldConfig {
                     block_size: 11,
                     palette_count: 6,
                     arterial_every: 4,
+                    slenderness_max: 5,
                 },
                 ZoneParams {
                     height_min: 4.0,
@@ -146,6 +147,7 @@ impl Default for WorldConfig {
                     block_size: 10,
                     palette_count: 5,
                     arterial_every: 5,
+                    slenderness_max: 5,
                 },
                 ZoneParams {
                     height_min: 10.0,
@@ -154,6 +156,7 @@ impl Default for WorldConfig {
                     block_size: 9,
                     palette_count: 7,
                     arterial_every: 4,
+                    slenderness_max: 5,
                 },
                 ZoneParams {
                     height_min: 6.0,
@@ -162,6 +165,7 @@ impl Default for WorldConfig {
                     block_size: 14,
                     palette_count: 4,
                     arterial_every: 6,
+                    slenderness_max: 5,
                 },
                 ZoneParams {
                     height_min: 0.0,
@@ -170,6 +174,7 @@ impl Default for WorldConfig {
                     block_size: 18,
                     palette_count: 3,
                     arterial_every: 0,
+                    slenderness_max: 5,
                 },
             ],
             zone_hues: DEFAULT_ZONE_HUES,
@@ -237,6 +242,9 @@ impl WorldConfig {
                 return false;
             }
             if z.arterial_every > 16 {
+                return false;
+            }
+            if z.slenderness_max > 12 {
                 return false;
             }
         }
@@ -349,9 +357,9 @@ impl WorldConfig {
     ///
     /// Mirrors `crate::zones::zone_params` but reads from `self.zones` instead
     /// of the global `zone_defaults`. Heights, density, and palette count are
-    /// affinity-weighted averages; `block_size` and `arterial_every` snap from
-    /// the dominant zone (argmax, ties toward the lower index) so transition
-    /// bands never produce hybrid grid spacings.
+    /// affinity-weighted averages; `block_size`, `arterial_every`, and
+    /// `slenderness_max` snap from the dominant zone (argmax, ties toward the
+    /// lower index) so transition bands never produce hybrid grid spacings.
     #[must_use]
     pub fn blended_zone_params(&self, affinity: &[f32; crate::zones::ZONE_COUNT]) -> ZoneParams {
         let mut total = 0.0f32;
@@ -385,6 +393,7 @@ impl WorldConfig {
             block_size: grid.block_size,
             palette_count: (palette_sum * inv).round() as u8,
             arterial_every: grid.arterial_every,
+            slenderness_max: grid.slenderness_max,
         }
     }
 
