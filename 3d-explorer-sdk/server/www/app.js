@@ -8,8 +8,8 @@
  * furniture), and /api/rooms for its per-room records.
  *
  * Controls:
- *   orbit  — drag / scroll (damped); click a building (or G/Enter toward it) to
- *            fade into its interior; G or Esc fades back out
+ *   orbit  — drag / scroll (damped); double-click a building (or G/Enter
+ *            toward it) to fade into its interior; G or Esc fades back out
  *   inside — WASD/arrows move (walls block), Q/E turn, R/F storey up/down,
  *            mouse-look on click; the view stays level at pedestrian eye height
  *   V      — toggle walkability overlay (dark masses + high-contrast paving)
@@ -408,7 +408,7 @@ function countBoxes() {
   return n;
 }
 
-/* ---- interior (click a building to go inside) ---- */
+/* ---- interior (double-click a building to go inside) ---- */
 let inspecting = null;  /* { wx, wz, zone, floors, w, dep, ox, oz, active } */
 const interiorGroup = new THREE.Group();
 interiorGroup.visible = false;
@@ -826,6 +826,14 @@ canvas.addEventListener("mousedown", (e) => {
     }
     return;
   }
+  /* Exterior: nothing on mousedown — entry is double-click so orbit drags
+     that start on a building never teleport you inside. */
+});
+
+canvas.addEventListener("dblclick", (e) => {
+  if (e.button !== 0 || inspecting) return;
+  pointerX = e.clientX;
+  pointerY = e.clientY;
   pickCell();
 });
 
@@ -891,8 +899,8 @@ window.addEventListener("keydown", (e) => {
     walkMode = !walkMode;
     restyleChunks();
     modeHint.textContent = walkMode
-      ? "walk overlay · V toggles · drag orbit · scroll zoom · click/G enter · T teleport"
-      : "drag orbit · scroll zoom · click a building (or G) to enter · V walk overlay · T teleport";
+      ? "walk overlay · V toggles · drag orbit · scroll zoom · double-click/G enter · T teleport"
+      : "drag orbit · scroll zoom · double-click a building (or G) to enter · V walk overlay · T teleport";
     return;
   }
   if (e.code === "KeyT") {
@@ -933,8 +941,8 @@ async function exitBuilding() {
   });
   transitionBusy = false;
   modeHint.textContent = walkMode
-    ? "walk overlay · V toggles · drag orbit · scroll zoom · click/G enter · T teleport"
-    : "drag orbit · scroll zoom · click a building (or G) to enter · V walk overlay · T teleport";
+    ? "walk overlay · V toggles · drag orbit · scroll zoom · double-click/G enter · T teleport"
+    : "drag orbit · scroll zoom · double-click a building (or G) to enter · V walk overlay · T teleport";
 }
 
 /* ---- main loop ---- */

@@ -129,8 +129,9 @@ shipped library and serves JSON plus a Three.js single-page explorer.
 ./server/serve --seed 7 --chunk-size 32 --draw-distance 8 --web server/www
 ```
 
-Controls: drag to orbit, scroll to zoom. Look at a building and click it (or
-press G/Enter) to fade into its interior — the exterior fades out so you never
+Controls: drag to orbit, scroll to zoom. Look at a building and double-click
+it (or press G/Enter) to fade into its interior — the exterior fades out so
+you never
 see both at once. Inside, interior walls block your movement (no clipping out
 through the facade); WASD/arrows move, Q/E turn, R/F change storey, mouse-look
 on click, G or Esc fades back out to the same orbit view. The camera stays
