@@ -766,6 +766,17 @@ void urbix_set_chunk_size(struct UrbixEngine *engine, uint16_t size);
 struct UrbixEngine *urbix_engine_create_with_config(const struct WorldConfig *config);
 
 /**
+ * Return the engine's default configuration by value.
+ *
+ * Lets C consumers start from compiled-in defaults and patch only the
+ * fields they care about (e.g. per-zone height bands for proportion
+ * experiments), then pass the result to
+ * [`urbix_engine_create_with_config`] or [`urbix_set_config`]. The returned
+ * value always passes [`WorldConfig::is_valid`].
+ */
+struct WorldConfig urbix_default_config(void);
+
+/**
  * Replace an engine's configuration wholesale (modular customization).
  *
  * Regenerates the Voronoi diagram and clears the chunk cache. No-ops on null

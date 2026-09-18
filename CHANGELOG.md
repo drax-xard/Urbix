@@ -5,7 +5,15 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.16.0] — 2026-09-18
+
+### Added
+
+- **FFI default-config getter**: `urbix_default_config()` returns
+  `WorldConfig::default()` by value so C consumers can patch a few fields
+  (e.g. per-zone height bands) and pass the result to
+  `urbix_engine_create_with_config` / `urbix_set_config` (covered by a
+  round-trip test).
 
 ### Changed
 
@@ -29,6 +37,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     furniture, derived window glazing, and room/unit stats.
   - `server/test.sh` extended to 18 assertions covering the new endpoints
     (interior probes pick a built cell dynamically).
+  - Demo proportion A/B: `server/serve --config` loads a `KEY = VALUE`
+    override file over `urbix_default_config()` (zone height bands, density,
+    floor height; CLI flags win); `server/chunky.overrides` ships a chunky
+    mid-rise starting point (Downtown 24–110 m); `/api/config` reports the
+    effective `height_min/max`; `test.sh` covers the override path.
 
 ## [0.15.0] — 2026-09-16
 

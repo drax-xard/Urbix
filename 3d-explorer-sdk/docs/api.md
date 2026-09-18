@@ -1,4 +1,4 @@
-# Urbix Engine — C API Reference (v0.15.0)
+# Urbix Engine — C API Reference (v0.16.0)
 
 This is the authoritative reference for calling the Urbix procedural city
 engine from C (or any language with C interop: C++, Rust, C#, Unity, Godot,
@@ -536,7 +536,9 @@ a non-NULL result.
 
 > **Defaults**: if you only want a different seed, use
 > `urbix_engine_create(seed)` — it uses the same defaults as the table above
-> and is the simplest path.
+> and is the simplest path. To tune a few fields, start from
+> `urbix_default_config()`, patch what you need, and pass it to
+> `urbix_engine_create_with_config` (invalid configs return NULL).
 
 ---
 
@@ -575,6 +577,7 @@ as an error (allocation or bad config).
 |---|---|---|
 | `urbix_engine_create(seed)` | `u64` | `UrbixEngine*` (or NULL) |
 | `urbix_engine_create_with_config(&cfg)` | `const WorldConfig*` | `UrbixEngine*` (or NULL) |
+| `urbix_default_config()` | – | `WorldConfig` (patch + pass to create/set) |
 | `urbix_engine_destroy(e)` | `UrbixEngine*` | – |
 | `urbix_generate_chunk(e, cx, cy)` | `int32_t,int32_t` | `UrbixChunkBuffer` (free me) |
 | `urbix_chunk_free(buf)` | `UrbixChunkBuffer` | – |

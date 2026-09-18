@@ -32,7 +32,7 @@ check() { # check <label> <got> <needle>
 cfg=$(curl -fsS "http://localhost:$PORT/api/config" 2>/dev/null)
 check "/api/config zones"     "$cfg" '"zone_hues"'
 check "/api/config seed"      "$cfg" "\"seed\":$SEED"
-check "/api/config sdk"       "$cfg" '"sdk":"0.15.0"'
+check "/api/config sdk"       "$cfg" '"sdk":"0.16.0"'
 check "/api/config paving"    "$cfg" '"arterial_every"'
 
 chunk=$(curl -fsS "http://localhost:$PORT/api/chunk?cx=0&cy=0" 2>/dev/null)
@@ -82,5 +82,19 @@ code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:$PORT/api/nope" 
 trap - EXIT
 kill "$SRV" 2>/dev/null
 wait "$SRV" 2>/dev/null
+
+# --config override path: chunky bands apply, CLI --seed wins over the file.
+PORT2=$((PORT + 1))
+./server/serve --port "$PORT2" --seed 7 --web server/www --config server/chunky.overrides >/dev/null 2>&1 &
+SRV2=$!
+trap 'kill "$SRV2" 2>/dev/null; wait "$SRV2" 2>/dev/null' EXIT
+sleep 0.5
+cfg2=$(curl -fsS "http://localhost:$PORT2/api/config" 2>/dev/null)
+check "/api/config chunky"   "$cfg2" '"height_max":[110.0,14.0,45.0,20.0,2.0]'
+check "/api/config cliseed"  "$cfg2" '"seed":7'
+trap - EXIT
+kill "$SRV2" 2>/dev/null
+wait "$SRV2" 2>/dev/null
+
 [ "$fail" -eq 0 ] || { echo "test.sh: failures"; exit 1; }
 echo "test.sh: all passed"

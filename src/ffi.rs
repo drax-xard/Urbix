@@ -500,6 +500,18 @@ pub unsafe extern "C" fn urbix_engine_create_with_config(
     Box::into_raw(Box::new(engine)) as *mut UrbixEngine
 }
 
+/// Return the engine's default configuration by value.
+///
+/// Lets C consumers start from compiled-in defaults and patch only the
+/// fields they care about (e.g. per-zone height bands for proportion
+/// experiments), then pass the result to
+/// [`urbix_engine_create_with_config`] or [`urbix_set_config`]. The returned
+/// value always passes [`WorldConfig::is_valid`].
+#[no_mangle]
+pub extern "C" fn urbix_default_config() -> WorldConfig {
+    WorldConfig::default()
+}
+
 /// Replace an engine's configuration wholesale (modular customization).
 ///
 /// Regenerates the Voronoi diagram and clears the chunk cache. No-ops on null
@@ -590,6 +602,22 @@ mod tests {
 
         // SAFETY: buf released once; engine destroyed once.
         unsafe { urbix_chunk_free(buf) };
+        urbix_engine_destroy(engine);
+    }
+
+    #[test]
+    fn default_config_round_trips_through_create() {
+        // The FFI default getter agrees with Rust defaults and builds a
+        // working engine; patching a field keeps validity.
+        let mut cfg = urbix_default_config();
+        assert!(cfg.is_valid());
+        assert_eq!(cfg.chunk_size, 32);
+        assert_eq!(cfg.zones[0].height_max, 200.0);
+        cfg.zones[0].height_max = 110.0;
+        assert!(cfg.is_valid());
+        // SAFETY: cfg is a valid local.
+        let engine = unsafe { urbix_engine_create_with_config(&cfg) };
+        assert!(!engine.is_null());
         urbix_engine_destroy(engine);
     }
 

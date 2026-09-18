@@ -17,7 +17,12 @@
  *   ./server/build.sh   (portable: macOS / Linux / MinGW; see the script)
  * Run (from 3d-explorer-sdk/):
  *   ./server/serve [--port 8311] [--seed 445566] [--web server/www]
- *                  [--chunk-size 32] [--draw-distance 8]
+ *                  [--chunk-size 32] [--draw-distance 8] [--config server/chunky.overrides]
+ *
+ * --config points at a demo override file (KEY = VALUE lines): engine
+ * defaults from urbix_default_config() patched with your values, so
+ * proportion experiments (e.g. lower height bands) need no recompile.
+ * See server/chunky.overrides for a chunky-mid-rise starting point.
  *
  * Endpoints:
  *   GET /api/config               { seed, chunk_size, draw_distance, floor_height,
@@ -74,6 +79,10 @@ static const char *ZONE_NAMES[ZONE_COUNT] = {
  * 1 cell = 4 m; arterial_every < 2 disables avenues). */
 static const uint8_t ZONE_BLOCK_SIZE[ZONE_COUNT] = { 11, 10, 9, 14, 18 };
 static const uint8_t ZONE_ARTERIAL_EVERY[ZONE_COUNT] = { 4, 5, 4, 6, 0 };
+/* Effective per-zone height bands, snapshotted at startup from the engine
+ * config (defaults or --config overrides) for /api/config. */
+static float G_HEIGHT_MIN[ZONE_COUNT] = { 40.0f, 4.0f, 12.0f, 6.0f, 0.0f };
+static float G_HEIGHT_MAX[ZONE_COUNT] = { 200.0f, 18.0f, 60.0f, 25.0f, 2.0f };
 
 /* ---- Growable JSON buffer (dependency-free, fprintf-style appends) ---- */
 typedef struct {
@@ -267,7 +276,7 @@ static void serve_file(int fd, const char *web_dir, const char *path) {
 /* ---- JSON endpoints ---- */
 static void json_config(Jbuf *b, uint64_t seed, uint16_t chunk_size,
                         uint32_t draw_distance) {
-    jprintf(b, "{\"version\":1,\"sdk\":\"0.15.0\",\"seed\":%llu",
+    jprintf(b, "{\"version\":1,\"sdk\":\"0.16.0\",\"seed\":%llu",
             (unsigned long long)seed);
     jprintf(b, ",\"chunk_size\":%u,\"draw_distance\":%u,\"floor_height\":%.1f,\"cell_meters\":4",
             chunk_size, draw_distance, DEFAULT_FLOOR_H);
@@ -287,6 +296,14 @@ static void json_config(Jbuf *b, uint64_t seed, uint16_t chunk_size,
     jprintf(b, "],\"arterial_every\":[");
     for (int z = 0; z < ZONE_COUNT; ++z) {
         jprintf(b, "%s%u", z ? "," : "", ZONE_ARTERIAL_EVERY[z]);
+    }
+    jprintf(b, "],\"height_min\":[");
+    for (int z = 0; z < ZONE_COUNT; ++z) {
+        jprintf(b, "%s%.1f", z ? "," : "", (double)G_HEIGHT_MIN[z]);
+    }
+    jprintf(b, "],\"height_max\":[");
+    for (int z = 0; z < ZONE_COUNT; ++z) {
+        jprintf(b, "%s%.1f", z ? "," : "", (double)G_HEIGHT_MAX[z]);
     }
     jprintf(b, "]}");
 }
@@ -499,10 +516,151 @@ static void handle_request(int fd, const char *req_raw, const char *web_dir,
     free(b.p);
 }
 
+/* ---- Demo override file (--config) ----
+ *
+ * Minimal KEY = VALUE tuning on top of urbix_default_config() — a subset of
+ * urbix.toml semantics for proportion experiments without recompiling.
+ * Lines: `key = value`, `#` comments, blank lines skipped. Keys:
+ *   seed, chunk_size, draw_distance,
+ *   <zone>.height_min, <zone>.height_max, <zone>.density,
+ *   <zone>.block_size, <zone>.arterial_every, <zone>.palette_count
+ *   (<zone> in downtown/residential/commercial/industrial/park),
+ *   interior_floor_height, interior_max_floors.
+ * CLI flags override file values. Unknown keys / bad values are fatal. */
+static char *trim(char *s) {
+    while (*s == ' ' || *s == '\t') ++s;
+    char *e = s + strlen(s);
+    while (e > s && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\r' || e[-1] == '\n'))
+        *--e = '\0';
+    return s;
+}
+
+static int zone_index(const char *name) {
+    for (int z = 0; z < ZONE_COUNT; ++z)
+        if (strcmp(name, ZONE_NAMES[z]) == 0) return z;
+    return -1;
+}
+
+static int parse_double(const char *s, double *out) {
+    errno = 0;
+    char *end = NULL;
+    double v = strtod(s, &end);
+    if (errno || end == s || *end) return 0;
+    *out = v;
+    return 1;
+}
+
+static int parse_ulong(const char *s, unsigned long *out) {
+    errno = 0;
+    char *end = NULL;
+    unsigned long v = strtoul(s, &end, 10);
+    if (errno || end == s || *end) return 0;
+    *out = v;
+    return 1;
+}
+
+/* Apply one override line to cfg / scalar holders. Returns 0 on error. */
+static int apply_override(WorldConfig *cfg, unsigned long *seed,
+                          unsigned long *chunk_size, unsigned long *draw_distance,
+                          const char *key, const char *val) {
+    double d = 0.0;
+    unsigned long u = 0;
+    if (strcmp(key, "seed") == 0) {
+        if (!parse_ulong(val, &u)) return 0;
+        *seed = u;
+        return 1;
+    }
+    if (strcmp(key, "chunk_size") == 0) {
+        if (!parse_ulong(val, &u) || u == 0 || u > 256) return 0;
+        *chunk_size = u;
+        return 1;
+    }
+    if (strcmp(key, "draw_distance") == 0) {
+        if (!parse_ulong(val, &u) || u == 0 || u > 64) return 0;
+        *draw_distance = u;
+        return 1;
+    }
+    if (strcmp(key, "interior_floor_height") == 0) {
+        if (!parse_double(val, &d)) return 0;
+        cfg->interior_floor_height = (float)d;
+        return 1;
+    }
+    if (strcmp(key, "interior_max_floors") == 0) {
+        if (!parse_ulong(val, &u) || u == 0 || u > 255) return 0;
+        cfg->interior_max_floors = (uint8_t)u;
+        return 1;
+    }
+    const char *dot = strchr(key, '.');
+    if (dot) {
+        char zone[32];
+        size_t zl = (size_t)(dot - key);
+        if (zl >= sizeof(zone)) return 0;
+        memcpy(zone, key, zl);
+        zone[zl] = '\0';
+        int z = zone_index(zone);
+        if (z < 0) return 0;
+        const char *field = dot + 1;
+        if (strcmp(field, "height_min") == 0 || strcmp(field, "height_max") == 0) {
+            if (!parse_double(val, &d)) return 0;
+            if (strcmp(field, "height_min") == 0) cfg->zones[z].height_min = (float)d;
+            else cfg->zones[z].height_max = (float)d;
+            return 1;
+        }
+        if (strcmp(field, "density") == 0) {
+            if (!parse_double(val, &d)) return 0;
+            cfg->zones[z].density = (float)d;
+            return 1;
+        }
+        if (!parse_ulong(val, &u) || u > 255) return 0;
+        if (strcmp(field, "block_size") == 0) cfg->zones[z].block_size = (uint8_t)u;
+        else if (strcmp(field, "arterial_every") == 0) cfg->zones[z].arterial_every = (uint8_t)u;
+        else if (strcmp(field, "palette_count") == 0) cfg->zones[z].palette_count = (uint8_t)u;
+        else return 0;
+        return 1;
+    }
+    return 0;
+}
+
+static int load_overrides(const char *path, WorldConfig *cfg, unsigned long *seed,
+                          unsigned long *chunk_size, unsigned long *draw_distance) {
+    FILE *f = fopen(path, "r");
+    if (!f) { fprintf(stderr, "cannot open --config %s\n", path); return 0; }
+    char line[256];
+    int lineno = 0, ok = 1;
+    while (fgets(line, sizeof(line), f)) {
+        ++lineno;
+        if (strchr(line, '\n') == NULL && !feof(f)) {
+            fprintf(stderr, "%s:%d: line too long\n", path, lineno);
+            ok = 0;
+            break;
+        }
+        char *t = trim(line);
+        if (*t == '\0' || *t == '#') continue;
+        char *eq = strchr(t, '=');
+        if (!eq) {
+            fprintf(stderr, "%s:%d: want KEY = VALUE\n", path, lineno);
+            ok = 0;
+            break;
+        }
+        *eq = '\0';
+        const char *key = trim(t);
+        const char *val = trim(eq + 1);
+        if (!apply_override(cfg, seed, chunk_size, draw_distance, key, val)) {
+            fprintf(stderr, "%s:%d: bad key or value '%s'\n", path, lineno, key);
+            ok = 0;
+            break;
+        }
+    }
+    fclose(f);
+    return ok;
+}
+
 static void usage(const char *prog) {
     fprintf(stderr,
             "usage: %s [--port 8311] [--seed 445566] [--web server/www]\n"
-            "           [--chunk-size 32] [--draw-distance 8]\n", prog);
+            "           [--chunk-size 32] [--draw-distance 8] [--config overrides]\n"
+            "  --config: demo override file (KEY = VALUE lines, see serve.c header\n"
+            "            and server/chunky.overrides); CLI flags win over the file.\n", prog);
 }
 
 /* ---- entry point ---- */
@@ -510,8 +668,10 @@ int main(int argc, char **argv) {
     int  port  = DEFAULT_PORT;
     unsigned long seed = DEFAULT_SEED;
     const char *web_dir = DEFAULT_WEB_DIR;
+    const char *config_path = NULL;
     unsigned long chunk_size = DEFAULT_CHUNK_SIZE;
     unsigned long draw_distance = DEFAULT_DRAW_DIST;
+    int seed_set = 0, chunk_set = 0, draw_set = 0;
 
     for (int i = 1; i < argc - 1; i += 2) {
         const char *flag = argv[i];
@@ -522,6 +682,7 @@ int main(int argc, char **argv) {
             char *end = NULL;
             seed = strtoul(argv[i + 1], &end, 10);
             if (!end || *end) { fprintf(stderr, "bad --seed\n"); return 2; }
+            seed_set = 1;
         } else if (strcmp(flag, "--web") == 0) {
             web_dir = argv[i + 1];
         } else if (strcmp(flag, "--chunk-size") == 0) {
@@ -530,12 +691,16 @@ int main(int argc, char **argv) {
             if (!end || *end || chunk_size == 0 || chunk_size > 256) {
                 fprintf(stderr, "bad --chunk-size (1..256)\n"); return 2;
             }
+            chunk_set = 1;
         } else if (strcmp(flag, "--draw-distance") == 0) {
             char *end = NULL;
             draw_distance = strtoul(argv[i + 1], &end, 10);
             if (!end || *end || draw_distance == 0 || draw_distance > 64) {
                 fprintf(stderr, "bad --draw-distance (1..64)\n"); return 2;
             }
+            draw_set = 1;
+        } else if (strcmp(flag, "--config") == 0) {
+            config_path = argv[i + 1];
         } else {
             fprintf(stderr, "unknown flag %s\n", flag);
             usage(argv[0]);
@@ -549,11 +714,25 @@ int main(int argc, char **argv) {
         return 2;
     }
 
-    UrbixEngine *engine = urbix_engine_create((uint64_t)seed);
-    if (!engine) { fprintf(stderr, "urbix_engine_create failed\n"); return 1; }
-    if (chunk_size != DEFAULT_CHUNK_SIZE)
-        urbix_set_chunk_size(engine, (uint16_t)chunk_size);
-    urbix_set_draw_distance(engine, (uint32_t)draw_distance);
+    /* Base config = engine defaults; --config patches it, CLI flags win. */
+    WorldConfig cfg = urbix_default_config();
+    cfg.seed = (uint64_t)seed;
+    cfg.chunk_size = (uint16_t)chunk_size;
+    cfg.draw_distance = (uint32_t)draw_distance;
+    if (config_path) {
+        unsigned long fseed = seed, fchunk = chunk_size, fdraw = draw_distance;
+        if (!load_overrides(config_path, &cfg, &fseed, &fchunk, &fdraw)) return 2;
+        if (!seed_set) { seed = fseed; cfg.seed = (uint64_t)fseed; }
+        if (!chunk_set) { chunk_size = fchunk; cfg.chunk_size = (uint16_t)fchunk; }
+        if (!draw_set) { draw_distance = fdraw; cfg.draw_distance = (uint32_t)fdraw; }
+    }
+
+    UrbixEngine *engine = urbix_engine_create_with_config(&cfg);
+    if (!engine) { fprintf(stderr, "invalid engine config (rejected)\n"); return 1; }
+    for (int z = 0; z < ZONE_COUNT; ++z) {
+        G_HEIGHT_MIN[z] = cfg.zones[z].height_min;
+        G_HEIGHT_MAX[z] = cfg.zones[z].height_max;
+    }
 
     signal(SIGPIPE, SIG_IGN);
 
