@@ -263,11 +263,60 @@ function loadSquare(cx, cy, r) {
     });
 }
 
+/* Merge adjacent built cells into single building masses.
+ *
+ * The engine varies height ±10% per cell inside a lot, so drawing one box
+ * per cell renders every lot as a bed of needles. Cells that touch, share
+ * zone/palette, and sit within 12% (min 2 m) of the seed height merge into
+ * one rect box at the group max — the street wall reads as continuous
+ * masses with occasional setback steps instead of spikes. Purely a render
+ * choice; the data is untouched. */
+function mergeMasses(cells) {
+  const byKey = new Map();   /* "x,z" -> cell */
+  for (const cell of cells) byKey.set(cell.x + "," + cell.z, cell);
+  const masses = [];
+  for (const seed of cells) {
+    const sk = seed.x + "," + seed.z;
+    if (!byKey.has(sk)) continue;   /* already absorbed */
+    const tol = Math.max(2, seed.h * 0.12);
+    const same = (cell) =>
+      cell.zone === seed.zone && cell.pal === seed.pal &&
+      Math.abs(cell.h - seed.h) <= tol;
+    /* Expand right along the seed row. */
+    let x1 = seed.x;
+    for (;;) {
+      const n = byKey.get((x1 + 1) + "," + seed.z);
+      if (!n || !same(n)) break;
+      x1++;
+    }
+    /* Expand downward while every column of the span matches. */
+    let z1 = seed.z;
+    outer: for (;;) {
+      const nz = z1 + 1;
+      for (let x = seed.x; x <= x1; x++) {
+        const n = byKey.get(x + "," + nz);
+        if (!n || !same(n)) break outer;
+      }
+      z1 = nz;
+    }
+    let h = 0;
+    for (let z = seed.z; z <= z1; z++)
+      for (let x = seed.x; x <= x1; x++) {
+        const n = byKey.get(x + "," + z);
+        h = Math.max(h, n.h);
+        byKey.delete(x + "," + z);
+      }
+    masses.push({ x0: seed.x, z0: seed.z, x1, z1, h, zone: seed.zone, pal: seed.pal });
+  }
+  return masses;
+}
+
 function spawnChunk(c) {
   const key = c.cx + ":" + c.cy;
   if (chunks.has(key)) return;
 
   const built = c.cells.filter((cell) => cell.h > 0);
+  const masses = mergeMasses(built);
   const paved = c.cells.filter((cell) => groundKind(cell.flags, cell.h) !== null);
   const group = new THREE.Group();
   const data = [];
@@ -276,16 +325,16 @@ function spawnChunk(c) {
   let roof = null;
   let pave = null;
 
-  if (built.length > 0) {
+  if (masses.length > 0) {
     mesh = new THREE.InstancedMesh(
       UNIT_BOX,
       new THREE.MeshLambertMaterial({ color: 0xffffff }),
-      built.length
+      masses.length
     );
     roof = new THREE.InstancedMesh(
       UNIT_BOX,
       new THREE.MeshLambertMaterial({ color: 0xffffff }),
-      built.length
+      masses.length
     );
     mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     roof.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -294,18 +343,25 @@ function spawnChunk(c) {
     const p = new THREE.Vector3();
     const s = new THREE.Vector3();
     const WHITE = new THREE.Color(0xffffff);
-    built.forEach((cell, i) => {
-      const h = Math.max(cell.h, 0.05);
-      const tint = cellColor(cell.zone, cell.pal, h);
-      p.set(cell.x, h / 2, cell.z);
-      s.set(1, h, 1);
+    masses.forEach((mass, i) => {
+      const h = Math.max(mass.h, 0.05);
+      const w = mass.x1 - mass.x0 + 1;
+      const d = mass.z1 - mass.z0 + 1;
+      const tint = cellColor(mass.zone, mass.pal, h);
+      p.set(mass.x0 + w / 2, h / 2, mass.z0 + d / 2);
+      s.set(w, h, d);
       mesh.setMatrixAt(i, m.compose(p, q, s));
       mesh.setColorAt(i, tint);
-      p.set(cell.x, h + 0.09, cell.z);   /* rooftop crown, ~9cm above the slab */
-      s.set(0.92, 0.18, 0.92);
+      p.set(mass.x0 + w / 2, h + 0.09, mass.z0 + d / 2);   /* rooftop slab */
+      s.set(Math.max(w - 0.08, 0.2), 0.18, Math.max(d - 0.08, 0.2));
       roof.setMatrixAt(i, m.compose(p, q, s));
       roof.setColorAt(i, tint.clone().lerp(WHITE, 0.55));
-      data.push({ wx: cell.x, wz: cell.z, height: h, zone: cell.zone, pal: cell.pal, i });
+      /* Pick target: the mass centre cell (always a built cell of the group,
+         so interior lookup lands on a real lot). */
+      data.push({
+        wx: mass.x0 + Math.floor(w / 2), wz: mass.z0 + Math.floor(d / 2),
+        height: h, zone: mass.zone, pal: mass.pal, i,
+      });
     });
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;

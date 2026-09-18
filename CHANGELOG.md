@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Viewer lot massing** (`3d-explorer-sdk/server/www/app.js`): adjacent built
+  cells sharing zone/palette within 12% height merge into single building
+  boxes at the group max, so lots read as continuous masses with setback
+  steps instead of per-cell needles (data untouched). Also unstacked the
+  overlapping status/popup HUD lines (`style.css`).
+
 ## [0.18.0] — 2026-09-18
 
 ### Added
