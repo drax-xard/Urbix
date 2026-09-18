@@ -143,7 +143,9 @@ teleport the orbit target to a world cell. The page pulls `/api/chunks`
 (one batch per frame around the camera) and `/api/interior` + `/api/rooms`
 on entry, so memory stays bounded; the HUD shows frame time and fetch stats.
 Exteriors render the full street hierarchy (arterials, sidewalks, plazas,
-greenways) and interiors show furniture, window glazing, and room/unit stats.
+greenways), merged building masses with per-storey facade windows (sparse
+warm lit rooms included, for human scale), and interiors show furniture,
+window glazing, and room/unit stats.
 
 To stop the demo, press Shift+Esc (confirm the dialog): the page asks the
 server to shut down via `/api/shutdown` and then closes itself (browsers only
