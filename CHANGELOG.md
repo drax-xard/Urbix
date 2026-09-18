@@ -17,7 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Viewer facade windows**: one instanced panel per cell per storey on all
   four faces of every mass over 8 m (dark glass + deterministic warm lit
   scatter), halving row density over a per-chunk budget — towers now read
-  at human scale from the orbit view.
+  at human scale from the orbit view. Panels carry `polygonOffset` and sit
+  0.05 off the facade, and the camera far plane hugs the fog (1200), so
+  distant windows no longer z-fight into streaks.
 
 ## [0.18.0] — 2026-09-18
 

@@ -87,7 +87,9 @@ const scene = new THREE.Scene();
 scene.background = skyTex;
 scene.fog = new THREE.Fog(HAZE, 160, 560);
 
-const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 2000);
+/* Far plane hugs the fog (opaque past 560): a tighter frustum keeps depth
+   precision usable hundreds of metres out, where facade details live. */
+const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 1200);
 camera.position.set(64, 90, 96);
 
 /* Soft cool fill + warm late-afternoon sun for readable silhouettes. */
@@ -414,7 +416,13 @@ function spawnChunk(c) {
     if (panels.length > 0) {
       win = new THREE.InstancedMesh(
         UNIT_BOX,
-        new THREE.MeshBasicMaterial({ color: 0xffffff }),
+        /* polygonOffset pulls panels decisively in front of the facade:
+           at 300+ m the 0.05 gap is below depth-buffer precision and the
+           panels otherwise z-fight into streaks. */
+        new THREE.MeshBasicMaterial({
+          color: 0xffffff, polygonOffset: true,
+          polygonOffsetFactor: -2, polygonOffsetUnits: -2,
+        }),
         panels.length
       );
       const m = new THREE.Matrix4();
@@ -463,13 +471,13 @@ function collectWindows(masses, rowH, colW, rowStep) {
       if (row % rowStep !== 0) continue;
       for (let ix = 0; ix < w; ix += colW) {
         const px = mass.x0 + ix + colW / 2;
-        out.push({ x: px, y, z: cz - d / 2 - 0.035, ry: 0 });
-        out.push({ x: px, y, z: cz + d / 2 + 0.035, ry: 0 });
+        out.push({ x: px, y, z: cz - d / 2 - 0.05, ry: 0 });
+        out.push({ x: px, y, z: cz + d / 2 + 0.05, ry: 0 });
       }
       for (let iz = 0; iz < d; iz += colW) {
         const pz = mass.z0 + iz + colW / 2;
-        out.push({ x: cx - w / 2 - 0.035, y, z: pz, ry: Math.PI / 2 });
-        out.push({ x: cx + w / 2 + 0.035, y, z: pz, ry: Math.PI / 2 });
+        out.push({ x: cx - w / 2 - 0.05, y, z: pz, ry: Math.PI / 2 });
+        out.push({ x: cx + w / 2 + 0.05, y, z: pz, ry: Math.PI / 2 });
       }
     }
   }
