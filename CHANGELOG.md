@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Satellite budget/plan (pending)**: new `docs/satellites.md` with realistic
+  budgets for the two recommended non-fork satellites — WASM component
+  (5–6 pd) and streaming server, Rust-axum first (5.5–7.5 pd, Go port +3–4) —
+  including work breakdowns, acceptance criteria, risks, and decision gates.
+  No code changes.
 - **Milestone 17 plan (pending)**: new `docs/grammar_massing.md` buildable spec
   for G0 split-grammar massing (podium/tower, pitched/sawtooth roofs, crowns
   as per-cell height steps; `massing_mode = 0` reproduces legacy;
