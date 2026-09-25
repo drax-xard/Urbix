@@ -143,11 +143,14 @@ furniture, queryable rooms).
   paths → additive flow arterials; pending Milestone 16). L0 (value-driven
   re-tag) and L2 (footfall lots) stay deferred.
 
-### 2.7 WFC + L-system hybrid
+### 2.7 WFC + L-system hybrid — G0 PROMOTED to M17 (G1/G2 deferred)
 - Keep Voronoi for districts; street topology via Wave Function Collapse
   learned from OSM slices (Manhattan/Barcelona/Kyoto); building massing via
   split grammar (`mass → setback → facade → windows`).
 - Swap example inputs to get Haussmann vs. Shinjuku, not `block_size` tuning.
+- **Buildable G0 spec: `docs/grammar_massing.md`** (split-grammar massing as
+  per-cell height steps; pending Milestone 17). G1 (WFC fabrics) and G2
+  (grammar↔interior bridge) stay deferred.
 
 ### 2.8 4D Urbix — time as input
 - `hash(x,y,t,seed)` where `t` = decade. Same coords in 1920 = brick low-rise,

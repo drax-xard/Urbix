@@ -679,6 +679,29 @@ walkability non-regression; bench < 1.3×.
 `interiors_gate` green; MINOR bump to `0.19.0` (`WorldConfig` grows; `Cell` /
 `ZoneParams` frozen).
 
+### Milestone 17 — Grammar massing (split-grammar buildings, G0) — ⬜ PENDING
+
+**Goal:** lots stop extruding as flat rectangles; per-zone split-grammar
+massing (podium/tower, pitched houses, sawtooth sheds, crown caps) compresses
+into per-cell height steps. Specified in `docs/grammar_massing.md` (promoted
+from `docs/thought_experiment.md` §2.7 G0; G1 WFC streets / G2 interior bridge
+stay deferred).
+
+| File | Deliverable |
+|---|---|
+| `src/massing.rs` (new) | `MassingParams` per-zone table (`repr(C)`, serde, defaults); pure `massing_for()` step fn. |
+| `src/building.rs` | Thread rect+offset through steps (podium → roof → crown → jitter → caps). |
+| `src/config.rs` | `massing_mode` (`0` = legacy byte-identical), `massing: [MassingParams; 5]`; serde defaults + `is_valid` + file round-trip. |
+| `src/hash.rs` | Domains `MASS_PODIUM`/`MASS_CROWN`/`MASS_ROOF`. |
+
+**Tests:** legacy gate; podium<tower ordering; crown share range;
+ridge/eaves; sawtooth period + cross-chunk phase; reserved `setback_every`
+no-op; config compat; layout asserts; walkability non-regression; bench
+< 1.1×.
+
+**Exit criteria:** stepped masses in `viz`; gates green; MINOR bump to
+`0.20.0` (`WorldConfig` grows again; `Cell` / `ZoneParams` frozen).
+
 ---
 
 ## 8. Future Extensions (explicitly deferred)

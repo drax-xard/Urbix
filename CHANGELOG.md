@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Milestone 17 plan (pending)**: new `docs/grammar_massing.md` buildable spec
+  for G0 split-grammar massing (podium/tower, pitched/sawtooth roofs, crowns
+  as per-cell height steps; `massing_mode = 0` reproduces legacy;
+  `Cell`/`ZoneParams` frozen, `WorldConfig` grows → `0.20.0` on build).
+  `Urbix_Project.md` gains M17 ⬜. No code changes.
 - **Milestone 16 plan (pending)**: new `docs/grown_streets.md` buildable spec
   for L1 flow arterials (site-graph economy → CBD-pinned desire paths →
   additive `IS_ARTERIAL` avenues; `flow_path_count = 0` reproduces legacy;
