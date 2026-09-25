@@ -658,6 +658,27 @@ cache-hit path deterministic.
 **Exit criteria:** extended `interior_report` + interiors gate example;
 MINOR bump to `0.15.0`.
 
+### Milestone 16 — Grown streets (flow arterials, L1 agent-sim) — ⬜ PENDING
+
+**Goal:** avenues emerge from simulated flow instead of only repeating every
+`arterial_every` streets. Specified in `docs/grown_streets.md` (promoted from
+`docs/thought_experiment.md` §2.6 L1).
+
+| File | Deliverable |
+|---|---|
+| `src/region.rs` | Site-graph economy sim (pop/jobs → gravity traffic → value/flow, 3 fixed passes); `FlowPath` desire-path segments (top-N by traffic, CBD-pinned); `flow_arterial_at()` world-space query. |
+| `src/chunk.rs` | Flow wiring (flag write before sidewalk ring; flow∩grid plaza rate); lot pipeline untouched. |
+| `src/config.rs` | `flow_path_count` (default 8, `0` = legacy byte-identical), `flow_half_width` (default 1.0); serde defaults + `is_valid` + file round-trip. |
+| `src/hash.rs` | Domains `FLOW_POP`/`FLOW_JOBS`. |
+
+**Tests:** sim determinism; CBD pin; on-path/off-path query; `count = 0`
+byte-equality; config compat; `Cell` 40 B / `ZoneParams` 16 B asserts;
+walkability non-regression; bench < 1.3×.
+
+**Exit criteria:** radial avenue star at CBD + cross-links; `walkability` +
+`interiors_gate` green; MINOR bump to `0.19.0` (`WorldConfig` grows; `Cell` /
+`ZoneParams` frozen).
+
 ---
 
 ## 8. Future Extensions (explicitly deferred)
@@ -689,9 +710,9 @@ by the current architecture. Each is listed with the hook already in place.
   including intersections, avenue widths, and junctions, enabling navigation,
   traffic, and pathfinding.
 - Would be a new `road_net.rs` module consuming the same Voronoi/cell data.
-- Near-term step (not deferred): Milestone 11 hierarchy — per-district
-  orientation/warp + per-zone arterials + plazas — specified in
-  `docs/believable_city.md` §4 (11.2–11.3). Full graph/pathfinding stays deferred.
+- Near-term step (in progress): Milestone 16 flow arterials — site-graph
+  economy → desire-path avenues additive over the M11 lattice — specified in
+  `docs/grown_streets.md` (§8.3 full graph/pathfinding stays deferred).
 
 ### 8.4 Terrain & elevation
 - The city currently lives on a flat plane.

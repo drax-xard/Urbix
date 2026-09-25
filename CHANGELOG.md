@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Milestone 16 plan (pending)**: new `docs/grown_streets.md` buildable spec
+  for L1 flow arterials (site-graph economy → CBD-pinned desire paths →
+  additive `IS_ARTERIAL` avenues; `flow_path_count = 0` reproduces legacy;
+  `Cell`/`ZoneParams` frozen, `WorldConfig` grows → `0.19.0` on build).
+  `Urbix_Project.md` gains M16 ⬜ + §8.3 pointer. No code changes.
+- **Thought-experiment doc**: new `docs/thought_experiment.md` capturing
+  alternative language / framework / paradigm rebuilds (Zig, Odin, Go+gRPC,
+  BEAM, Taichi/Mojo, GPU-native, DB/SQL, USD/glTF, WASM Component Model,
+  node-graph DSL, agent sim, WFC+L-systems, 4D time, LLM/MCP, Merkle-city)
+  plus goal-by-goal upgrades and top-3 prototypes. Non-normative, no code
+  changes.
+
 ### Changed
 
 - **Viewer lot massing** (`3d-explorer-sdk/server/www/app.js`): adjacent built
