@@ -112,6 +112,8 @@ then packing the results into flat `#[repr(C)]` cell records.
   Since M9, this extends to interiors: `WorldConfig` carries a per-zone
   `Blueprint` table (fixed-size `#[repr(C)]`, serde-tuned room templates —
   `interior_floor_height`, `interior_max_floors`, `interior_blueprints`).
+  Since M16, flow avenues join them: `flow_path_count` (default 8, `0` =
+  legacy lattice exactly) and `flow_half_width` (default 1.0).
 - **Lean dependencies.** Core generation is `hash` + `zones` + `region` with no
   heavy deps; `clap`/`serde`/`toml` power the CLI/file-input, `criterion`/`image`
   are dev-only (benchmarks/visualizer).

@@ -1,8 +1,7 @@
-# Session report — city believability + interiors M11 → M15, then SDK + realism to 0.18.0
+# Session report — city believability + interiors M11 → M15, then SDK + realism to 0.18.0, then M16 grown streets (0.19.0)
 
 > Working handoff note, not project documentation. Written 2026-09-16,
-> last updated after the 0.18.0 realism pass (2026-09-18).
-> Tree is clean at `4b77ec9`.
+> last updated after the M16 audit + doc refresh (2026-09-25).
 
 ## Timeline (all requested, built, verified, committed locally; user pushes)
 
@@ -132,17 +131,59 @@ All requested, built, verified, committed locally; user pushes.
     `polygonOffset(-2)` + 0.05 offset + far plane 2000→1200 (fog opaque
     past 560, nothing lost).
 
-## Current state
+## Current state (2026-09-25, post-M16)
 
-* `main` at `4b77ec9`; `Cargo.toml` `0.18.0`; milestones M1–M15 ✅ (no new
-  milestones; 0.16.0–0.18.0 are unplanned realism/FFI releases).
-* Suite green at commit: 152 lib + integration + 36 doctests;
-  `cargo clippy` clean (only pre-existing third-party `block` notice);
-  `cargo fmt --check` clean; bench compiles; `walkability` and
-  `interiors_gate` gates pass; `test.sh` 22/22; C examples compile;
-  viewer changes eyeballed by user from screenshots (no browser here).
-* SDK re-vendored as `urbix-0.18.0-macos-aarch64` (+sha256); Linux/Windows
-  still ship from CI `release.yml`.
+* `main` at `33427c6` (+ `900c1a6` audit fixes); `Cargo.toml` `0.19.0`;
+  M16 ✅ DONE (flow arterials, `docs/grown_streets.md`); M17 ⬜ pending
+  (grammar massing, `docs/grammar_massing.md`); thought-experiment
+  (`docs/thought_experiment.md`) and satellite budget (`docs/satellites.md`)
+  docs landed as planning references.
+* Suite green: 166 lib + integration + 37 doctests; `cargo clippy` clean
+  (only pre-existing third-party `block` notice); `cargo fmt --check` clean;
+  `cargo doc` back to the 5 pre-existing warnings (1 new redundant-link
+  warning caught and fixed in audit); bench compiles with ~0% single-chunk
+  delta vs pre-M16; `walkability` and `interiors_gate` gates pass;
+  `server/test.sh` all-pass against the vendored 0.18.0 pair.
+* SDK still vendored as `urbix-0.18.0-macos-aarch64` (+sha256): header/libs
+  are a self-consistent 0.18.0 pair (server builds + tests green), but they
+  lag the 0.19.0 engine — re-vendor (header, macOS libs, tarball, doc
+  version bumps) rides with the next SDK release, not done yet.
+* M16 empirical guarantees (audit-proven, not just argued): `count = 0`
+  output is byte-identical to pre-M16 code over 100 A/B chunks (3 seeds +
+  negative coords); bench A/B shows no measurable perf delta.
+
+## Session 3 — M16 grown streets + audit (0.18.0 → 0.19.0)
+
+All requested, built, verified, committed locally; user pushes.
+
+23. **M16 implementation → `0.19.0`** (`33427c6`, spec `docs/grown_streets.md`
+    from the §2.6 L1 thought experiment):
+    `hash.rs` `FLOW_POP/FLOW_JOBS`; `config.rs` `flow_path_count` (8, `0` =
+    legacy) + `flow_half_width` (1.0) with serde defaults + `is_valid` +
+    strip-and-reparse compat tests; `region.rs` closed-form site-graph
+    economy + CBD-pinned desire-path ranking (`total_cmp` + index tie-break)
+    + `flow_arterial_at` + 8 unit tests; `chunk.rs` additive flag wiring
+    (before sidewalk ring, 15% flow∩grid plazas, flow-aware `abuts_street`)
+    + 3 chunk tests + recomputed street-flag test; `street.rs` header note
+    (flow deliberately not in `street_info` — frame-independent);
+    `cbindgen.toml` excludes; `include/urbix.h` regen (+11 lines, domains
+    excluded); example configs + `walkability` ranked-path dump;
+    `docs/world_generation.md` pipeline; `Urbix_Project.md` M16 ✅ + module
+    map; `README.md` status/version/customization rows; `CHANGELOG.md`
+    `0.19.0`. As-built deviations from spec: closed-form single pass (no
+    iteration loop), `f32` half-width, `abuts_street` 8th arg with clippy
+    allow, always-on path dump instead of a flag.
+24. **M16 audit (user: "make sure nothing broke")** (`900c1a6`): worktree A/B
+    byte-identity proof (above); edge review (empty/tiny diagrams, NaN
+    vectors, sort totality, cast ranges) → one real find: degenerate
+    `span = 0` via direct API poisoned keys with NaN → `knee2` floor +
+    finiteness test; wiring re-read (plaza single-roll, greenway precedence,
+    early-out soundness); consistency sweep (`api.md` needs nothing per
+    M13–M15 precedent, `examples.md` blurb, spec "3 passes"/"≤12" leftovers
+    corrected); SDK `build.sh` + `test.sh` green as-is.
+25. **Doc refresh (this session):** M17/satellites docs re-tensed for landed
+    M16, module-map + README customization rows, `CHANGELOG.md` Unreleased
+    Fixed entry for the NaN guard, this report regenerated.
 
 ## Conventions that bit (remember next session)
 
@@ -179,13 +220,32 @@ All requested, built, verified, committed locally; user pushes.
   screenshots. `test.sh` covers server JSON only.
 * `sed -i '' 's/.../.../g'` version bumps also hit historical "since X"
   references — re-check and revert those lines.
+* M16 lessons: deterministic ranking = `total_cmp` + full index tie-break
+  (comparator never returns Equal for distinct items — sort-algorithm
+  independent); frame-independent queries (`flow_arterial_at`) live outside
+  `street_info` and are OR'd in `chunk.rs`; legacy escape hatches
+  (`count = 0`) deserve an *empirical* worktree A/B (100 chunks, neg coords),
+  not just a logic argument — it took 10 minutes and settled the question;
+  `f32` for small-scale widths, `f64` for world coords; `cargo doc` warning
+  count is compared against base (5 pre-existing) on every milestone.
 
 ## Open threads / next up
 
-* **No pending milestones** — §7 is all green through M15. Natural next
-  epics (none specced): enter/exit teleport API, terrain/water (§8.4),
-  road-graph navigation (§8.3), time/weather data (§8.5), dynamic overlays
-  (§8.6), language bindings / WASM (§8.7).
+* **M17 grammar massing is next** (`docs/grammar_massing.md` ⬜, targets
+  `0.20.0`): `MassingParams` table on `WorldConfig`, `massing_mode = 0`
+  legacy gate, no `Cell`/`ZoneParams` growth. Spec already accounts for
+  landed M16.
+* **SDK re-vendor to 0.19.0** before any SDK work: `sdk/include/urbix.h`,
+  `sdk/lib/liburbix.{a,dylib}`, new `urbix-0.19.0-macos-aarch64.tar.gz` +
+  `.sha256`, `3d-explorer-sdk/README.md` + `docs/api.md` version bumps
+  (0.18.0 → 0.19.0), then `build.sh` + `test.sh`. Linux/Windows tarballs
+  still ship from CI `release.yml`.
+* Satellites (`docs/satellites.md`): build WASM when a JS/Python consumer
+  exists, server when remote clients need the city — decision gates in doc.
+* Deferred still: L0 value re-tag + L2 footfall (need M16 avenues locked —
+  they are now), G1 WFC fabrics + G2 grammar↔interior bridge (need M17),
+  terrain/water (§8.4), road-graph (§8.3), time/weather (§8.5), mutable
+  overlays (§8.6).
 * Offered but unconfirmed: perpendicular snapping for seam-stub
   T-junctions in the explorer.
 * If towers still read slender anywhere: `downtown.slenderness_max = 4`
@@ -193,8 +253,8 @@ All requested, built, verified, committed locally; user pushes.
   Leftover realism levers (viewer): per-instance facade window grids are
   in; ground-floor retail fronts, chunk-border mass seams, and far-distance
   window fade are not.
-* Pre-existing debt noticed, not touched: main `README` version lines
-  (still say 0.9.0) vs `Cargo.toml`; `docs/interiors.md` old
+* Pre-existing debt noticed, not touched: `docs/interiors.md` old
   line-number references; `walkability` "tall cells" is a relative
   (>1.3× band max) proxy, not true landmarks — its count moves when bands
-  move even as the absolute skyline drops.
+  move even as the absolute skyline drops. (Fixed 2026-09-25: main `README`
+  version lines now say 0.19.0; M16 status row added.)

@@ -38,8 +38,9 @@ Goals:
   houses, sawtooth sheds — five zones read as five architectures from the air.
 * Tune without recompile: per-zone massing tables in TOML/JSON like
   blueprints.
-* Compose with everything pending: M16 flow avenues get lined with stepped
-  masses; slenderness clamp keeps authority (steps never outgrow the lot).
+* Compose with everything built: M16 flow avenues (landed, 0.19.0) get lined
+  with stepped masses; slenderness clamp keeps authority (steps never outgrow
+  the lot).
 
 Non-goals for M17:
 
@@ -150,9 +151,8 @@ as reserved, test that nonzero parses and validates but does not alter output
   `setback_every <= 32` (reserved, validated, unwired).
 * `ZoneParams` untouched (full at 16 B). `Cell` untouched (40 B asserts stay).
   `CellFlags` untouched.
-* `WorldConfig` size grows → MINOR bump to `0.20.0` (on top of M16's
-  `0.19.0`; if M16 is unbuilt when this lands, the bump covers both and the
-  spec notes the stack). `include/urbix.h` regenerated.
+* `WorldConfig` size grows → MINOR bump to `0.20.0` on top of M16's landed
+  `0.19.0`. `include/urbix.h` regenerated.
 * `MassingParams` is a new exported type: add to `cbindgen.toml` `include`
   list, and mirror the `ZoneParams` precedent in `build.rs` (manual fallback
   def + asserts inside the guard) if cbindgen omits it. New hash domains
@@ -250,9 +250,9 @@ consume `MassingParams`, not the reverse.
 * Pitched roofs on narrow lots alias into spikes → mitigated by ridge math in
   integer space + slenderness cap applied after steps; test narrowest lots
   explicitly.
-* `WorldConfig` growth stacking with M16 → mitigated by documenting the
-  combined bump if M16 is unbuilt; appending (never interleaving) keeps old
-  readers' prefix slices valid per repo wire discipline.
+* `WorldConfig` growth appends (never interleaves), keeping old readers'
+  prefix slices valid per repo wire discipline; M16 already grew it once, M17
+  appends after.
 * Artists want full grammar tuning now (rule trees, not 5 scalars) →
   explicitly out of scope; the fixed-row table is the same compromise
   `Blueprint` made in M9 and it scaled fine through M14.

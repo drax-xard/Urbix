@@ -3,10 +3,10 @@
 Status: ⬜ **PENDING** (plan only, no code). For future reference — build only
 when a consumer needs it, not speculatively.
 
-Context: the Rust core stays canonical (`src/`, ~10.4k lines, 152 lib tests +
+Context: the Rust core stays canonical (`src/`, ~10.4k lines, 166 lib tests +
 integration + doctests, C ABI, 3-target release tarballs). Both satellites
-consume the core as-is; neither forks it. If the core changes underneath
-(M16/M17 `WorldConfig` growth), satellites re-test but do not redesign —
+consume the core as-is; neither forks it. M16 `WorldConfig` growth already
+landed (0.19.0); if M17 lands first, satellites re-test but do not redesign —
 their contracts are versioned against the crate version.
 
 Person-day basis: 1 person-day ≈ 6 focused hours (solo-dev pace, this repo's
@@ -68,7 +68,7 @@ Python wheel on PyPI, no GPU inside WASM, no threading/SharedArrayBuffer
 
 ### Risks
 
-- WIT/ABI churn across `WorldConfig` growth (M16/M17) → mitigate: WIT carries a `version()` + config schema hash;JS checks and warns on mismatch.
+- WIT/ABI churn across `WorldConfig` growth (M17 next) → mitigate: WIT carries a `version()` + config schema hash;JS checks and warns on mismatch.
 - `jco`/wasmtime version drift → pin in CI, update quarterly, never floating.
 - Performance disappointment (WASM 2–3× slower per chunk) → acceptable: WASM serves tools/viewer panels, never the 60 fps hot path.
 
@@ -152,7 +152,7 @@ proven A (port the HTTP layer, keep the engine).
 | 2 — Server, Option B (Go, after A) | +3–4 pd | +1 wk | A proven first |
 | **Both (A path)** | **10.5–13.5 pd** | **~3–4 wks** | — |
 
-Recommended order: **WASM first** (smaller, proves the versioning story M16/M17 will stress, immediately useful for the web viewer), **server second** (heavier, needs the ETag/caps design). Do not start either mid-milestone — build on a green `main`, and re-run parity after M16/M17 land.
+Recommended order: **WASM first** (smaller, proves the versioning story M17 will stress, immediately useful for the web viewer), **server second** (heavier, needs the ETag/caps design). Do not start either mid-milestone — build on a green `main`, and re-run parity after M17 lands.
 
 ### Ongoing costs (honest footnote)
 
@@ -169,6 +169,6 @@ Recommended order: **WASM first** (smaller, proves the versioning story M16/M17 
 ## References
 
 - Core: `Urbix_Project.md` §2 (modules/FFI), `docs/api.md`, `include/urbix.h`.
-- Pending core work that satellites must track: `docs/grown_streets.md` (M16), `docs/grammar_massing.md` (M17).
+- Pending core work that satellites must track: `docs/grammar_massing.md` (M17). M16 flow avenues already landed (0.19.0).
 - Existing server precedent: `3d-explorer-sdk/server/` (`serve.c`, `test.sh`, `www/`).
 - Origin: `docs/thought_experiment.md` §§1D/1F/2.4.

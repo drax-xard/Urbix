@@ -41,10 +41,10 @@ boundary and a C FFI surface exposed from the start.
 | `src/ffi.rs` | `#[no_mangle] extern "C"` entry points. Thin wrappers that delegate to `engine`. |
 | `src/engine.rs` | `WorldEngine` — stateful handle holding config, cache, and Voronoi sites. |
 | `src/data.rs` | All core data types (`Cell`, `Chunk`, `ChunkHeader`, `ChunkId`, `InteriorId`, `CellFlags`). All public types are `#[repr(C)]`. |
-| `src/config.rs` | Tunables: `ChunkSize`, `DrawDistance`, `VoronoiSiteCount`, `Seed`. |
+| `src/config.rs` | Tunables: `ChunkSize`, `DrawDistance`, `VoronoiSiteCount`, `Seed`, zone tables, interior blueprints, flow-avenue knobs (`WorldConfig`, TOML/JSON loaded). |
 | `src/zones.rs` | `ZoneType` enum (Downtown, Residential, Commercial, Industrial, Park), per-zone parameter structs, color palettes. |
-| `src/region.rs` | Voronoi diagram generation from seed, nearest-site query, fuzzy border blending → zone affinity vector. |
-| `src/chunk.rs` | Orchestrates chunk generation: queries zone affinity at each cell, delegates to `street` and `building`. |
+| `src/region.rs` | Voronoi diagram generation from seed, nearest-site query, fuzzy border blending → zone affinity vector; flow economy + desire-path avenues (M16). |
+| `src/chunk.rs` | Orchestrates chunk generation: queries zone affinity at each cell, delegates to `street` and `building`; ORs flow avenues onto the street answer (M16). |
 | `src/cache.rs` | LRU cache keyed by `ChunkId` with distance-based eviction. |
 | `src/street.rs` | Street grid layout and block subdivision, tuned per zone. |
 | `src/building.rs` | Building footprint detection, height assignment, palette selection. |

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Degenerate-span NaN guard** (post-0.19.0 audit): the flow-economy gravity
+  falloff floors its knee at `1e-9`, so a zero span passed directly to
+  `generate_with_config` (rejected by `is_valid`, but constructible by API
+  consumers) can no longer poison path weights with NaN. Covered by a
+  finiteness regression test; all-normal configs are unaffected.
+
 ### Added
 
 - **Satellite budget/plan (pending)**: new `docs/satellites.md` with realistic
