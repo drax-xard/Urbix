@@ -66,7 +66,7 @@ pub struct VoronoiSite {
 /// A desire-path avenue between two district sites (Milestone 16).
 ///
 /// Straight segments in absolute world coordinates — the same construction as
-/// [`Diagonal`][crate::lot::Diagonal] — so they cross chunks and districts
+/// [`Diagonal`] — so they cross chunks and districts seamlessly and every
 /// seamlessly and every chunk agrees on every cell. Per-cell membership is
 /// tested by [`VoronoiDiagram::flow_arterial_at`].
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -648,7 +648,10 @@ fn simulate_flow(
     cbd_idx: Option<usize>,
 ) -> (Vec<SiteEconomy>, Vec<FlowPath>) {
     let n = sites.len();
-    let knee2 = (span * 0.25) * (span * 0.25);
+    // Floored: a degenerate zero span (reachable only via direct API misuse —
+    // `is_valid` requires `100..=100_000`) would otherwise divide by zero and
+    // poison keys and weights with NaN. `max` maps a NaN span to the floor too.
+    let knee2 = ((span * 0.25) * (span * 0.25)).max(1e-9);
     // Hashed residents/workplaces per site, in index order.
     let mut pop = vec![0.0f64; n];
     let mut jobs = vec![0.0f64; n];
@@ -1218,6 +1221,35 @@ mod tests {
         assert_eq!(
             d.flow_arterial_at(-2000.5, -3000.5, 2.0),
             d.flow_arterial_at(-2000.5, -3000.5, 2.0)
+        );
+    }
+
+    #[test]
+    fn flow_sim_survives_degenerate_span() {
+        // `is_valid` rejects a zero span, but `generate_with_config` takes
+        // any config by design (same as site counts) — it must never panic
+        // or poison weights with NaN, even with all sites co-located.
+        let cfg = WorldConfig {
+            seed: 445566,
+            voronoi_span: 0.0,
+            ..Default::default()
+        };
+        let d = VoronoiDiagram::generate_with_config(&cfg);
+        for p in d.flow_paths() {
+            assert!(
+                p.weight.is_finite(),
+                "non-finite weight on degenerate span: {p:?}"
+            );
+        }
+        for i in 0..d.sites().len() {
+            let (v, f) = d.site_economy(i).expect("economy covers every site");
+            assert!(v.is_finite() && f.is_finite(), "non-finite economy {i}");
+        }
+        // Co-located sites collapse every segment to a point: the query
+        // still answers (point-distance fallback) without panicking.
+        assert_eq!(
+            d.flow_arterial_at(0.0, 0.0, 1.0),
+            d.flow_arterial_at(0.0, 0.0, 1.0)
         );
     }
 }

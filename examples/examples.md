@@ -71,7 +71,8 @@ Flags:
 Drives the public pipeline over an `extent × extent` grid and prints
 ground-plane statistics (scale canon: 1 cell = 4 m): paved shares, plaza
 counts, mean uninterrupted street-wall length, junction census, tall-cell
-density per km². Exits 1 on degenerate fabric, so CI can gate on it.
+density per km², and the ranked flow desire paths behind the arterial share
+(M16). Exits 1 on degenerate fabric, so CI can gate on it.
 
 ```sh
 cargo run --release --example walkability -- --seed 445566 --extent 8

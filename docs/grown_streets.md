@@ -15,7 +15,7 @@ Locked decisions:
 
 1. **Simulate sites, not cells.** The economy runs once on the 16–64-site
    Voronoi graph at `generate_with_config` time. Per-cell cost is one
-   point-to-segment pass over ≤ 12 paths — no agents stepped per chunk.
+   point-to-segment pass over a handful of paths — no agents stepped per chunk.
 2. **Additive, not replacement.** The `arterial_every` lattice is untouched.
    Flow arterials OR onto `IS_ARTERIAL`. `flow_path_count = 0` reproduces
    legacy output byte-identically (escape hatch + test anchor).
@@ -91,7 +91,7 @@ d2 = (xi-xj)² + (yi-yj)²
 traffic[i->j] = pop[i] * jobs[j] / (1 + d2 / knee²),  knee = span * 0.25
 ```
 
-Fixed iteration (3 passes, order-independent via snapshot — same discipline
+Closed form, evaluated once in site-index order (same snapshot discipline
 as the adjacency buffer in `region.rs`):
 
 ```
@@ -100,6 +100,10 @@ pollution[i] = sum over Industrial j of jobs[j] / (1 + d2(i,j) / knee²) * 0.4
 flow[i] = sum_j traffic[i->j] + sum_j traffic[j->i]   // through-traffic
 ```
 
+([AS-BUILT] the plan first sketched this as 3 fixed passes; the formulas do
+not recur, so the build evaluates them directly — no iteration loop, one
+fewer determinism surface, same outputs.)
+
 Outputs stored per site (two `Vec<f32>` beside `sites`, or a small
 `SiteEconomy { value, flow }` array — private, never FFI):
 
@@ -107,9 +111,9 @@ Outputs stored per site (two `Vec<f32>` beside `sites`, or a small
   does NOT re-tag zones, does NOT replace `cbd_factor`).
 * `flow[i]` — ranks path endpoints.
 
-Determinism notes: iteration count fixed (3), accumulation order fixed
-(index order), all `f64` arithmetic (same as Shepard today). Document the
-summation order in code comments — it is part of the wire-stable output.
+Determinism notes: closed-form single evaluation, accumulation in site-index
+order, all `f64` arithmetic (same as Shepard today). Document the summation
+order in code comments — it is part of the wire-stable output.
 
 ### 16.2 Desire paths (once per diagram)
 
@@ -145,7 +149,7 @@ New `VoronoiDiagram` method (pure, world-space, chunk-consistent):
 pub fn flow_arterial_at(&self, world_x: f64, world_z: f64, half_width: f64) -> bool
 ```
 
-* Point-to-segment distance to each path (≤ 12 paths, early-out on first hit).
+* Point-to-segment distance to each path (≤ 16 paths, early-out on first hit).
   Squared-distance formulation, no `sqrt` until the final compare — or compare
   in squared space outright.
 * `half_width` from config (default 1.0 cells → 2-cell avenues, matching the
@@ -173,7 +177,7 @@ Rules inherited (no special cases):
 * **Greenways/special blocks/landmarks:** unchanged. Flow avenues do not
   create or suppress them.
 
-Perf budget: ≤ 12 segments × ~10 flops per cell on avenue-candidate cells
+Perf budget: ≤ 16 segments × ~10 flops per cell on avenue-candidate cells
 only — hoist behind the existing street-hit early-out where possible
 (lattice/diagonal/seam hits skip the flow pass; flow only runs on cells that
 would otherwise be block interior). `cargo bench --bench chunk_gen` must show
