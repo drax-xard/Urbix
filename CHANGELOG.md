@@ -19,17 +19,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as per-cell height steps; `massing_mode = 0` reproduces legacy;
   `Cell`/`ZoneParams` frozen, `WorldConfig` grows → `0.20.0` on build).
   `Urbix_Project.md` gains M17 ⬜. No code changes.
-- **Milestone 16 plan (pending)**: new `docs/grown_streets.md` buildable spec
-  for L1 flow arterials (site-graph economy → CBD-pinned desire paths →
-  additive `IS_ARTERIAL` avenues; `flow_path_count = 0` reproduces legacy;
-  `Cell`/`ZoneParams` frozen, `WorldConfig` grows → `0.19.0` on build).
-  `Urbix_Project.md` gains M16 ⬜ + §8.3 pointer. No code changes.
 - **Thought-experiment doc**: new `docs/thought_experiment.md` capturing
   alternative language / framework / paradigm rebuilds (Zig, Odin, Go+gRPC,
   BEAM, Taichi/Mojo, GPU-native, DB/SQL, USD/glTF, WASM Component Model,
   node-graph DSL, agent sim, WFC+L-systems, 4D time, LLM/MCP, Merkle-city)
   plus goal-by-goal upgrades and top-3 prototypes. Non-normative, no code
   changes.
+
+## [0.19.0] — 2026-09-25
+
+### Added
+
+- **Grown streets** (Milestone 16 — flow arterials, L1 agent-sim; spec in
+  `docs/grown_streets.md`, now marked done with as-built notes):
+  - Site-graph flow economy (`src/region.rs`): hashed residents/workplaces
+    per site (`FLOW_POP`/`FLOW_JOBS`), pairwise gravity traffic with a
+    rational falloff (`knee = span × 0.25`), per-site value/flow —
+    closed-form single pass, index-ordered, arithmetic-only (no new libm
+    surface). Per-site diagnostics via `site_economy()`.
+  - Desire paths: top `flow_path_count` (default 8) site pairs by traffic
+    (Park–Park never emitted, `total_cmp` ranking with index tie-break),
+    path #0 pinned on the CBD anchor; stored as world-space `FlowPath`
+    segments with normalized traffic weights (`flow_paths()` accessor).
+  - Per-cell query `flow_arterial_at(x, z, half_width)` (squared-distance,
+    degenerate-segment safe; empty path list answers false).
+  - Chunk wiring (`src/chunk.rs`): flow avenues OR onto the lattice as
+    `IS_STREET + IS_ARTERIAL` — additive, dropout-immune, winning over
+    greenways, skipped only for existing avenues; flow∩grid crossings earn
+    plazas at the 15% diagonal rate; the sidewalk ring sees flow avenues via
+    `abuts_street` (8th arg + clippy-allow precedent). Lot/interior pipeline
+    untouched. `flow_path_count = 0` reproduces the pre-16 lattice
+    byte-identically (gateway-tested).
+  - Config (`src/config.rs`): `flow_path_count` (default 8, `0` disables),
+    `flow_half_width` (default 1.0, valid `0.5..=2.0`) — appended to
+    `WorldConfig`, serde-defaulted (strip-and-reparse compat proven for
+    TOML+JSON), guarded by `is_valid`; `urbix.toml/json.example` updated.
+  - `walkability` prints the ranked desire paths (endpoints + weights) after
+    the gate; `docs/world_generation.md` pipeline updated.
+  - Tests: sim determinism, CBD pin, midpoint/far-field query, provable
+    single-segment off-path case, `count = 0` legacy gate, additive-paving
+    and sidewalk-ring chunk proofs, engine `set_config` path rebuild, and
+    the street-flag recomputation test now covers the flow term.
+  - Gates: `walkability` green (arterial 8.8% with avenues, street-wall mean
+    17.0 cells unregressed), `interiors_gate` green, single-chunk bench delta
+    ~0% (budget was 1.3×).
+
+### Changed
+
+- Default seeds regenerate with flow avenues (expected MINOR break, same
+  precedent as M11/M12; `flow_path_count = 0` restores legacy exactly).
+- `Urbix_Project.md` M16 ✅, `README.md` status row.
 
 ### Changed
 

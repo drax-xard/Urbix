@@ -51,6 +51,18 @@ pub fn default_interior_blueprints() -> [Blueprint; ZONE_COUNT] {
     default_blueprints()
 }
 
+/// Serde `default` fn for [`WorldConfig::flow_path_count`].
+#[must_use]
+pub const fn default_flow_path_count() -> u8 {
+    8
+}
+
+/// Serde `default` fn for [`WorldConfig::flow_half_width`].
+#[must_use]
+pub const fn default_flow_half_width() -> f32 {
+    1.0
+}
+
 /// Default hues used by `examples/viz.rs` / `interactive.rs` (promoted to config
 /// in Milestone 8 so artists tune without recompiling).
 pub const DEFAULT_ZONE_HUES: [[u8; 3]; ZONE_COUNT] = [
@@ -117,6 +129,15 @@ pub struct WorldConfig {
     /// Per-zone interior layout rule tables (Milestone 9 blueprint schema).
     #[serde(default = "default_interior_blueprints")]
     pub interior_blueprints: [Blueprint; ZONE_COUNT],
+    /// Desire-path avenues kept from the flow ranking (Milestone 16, see
+    /// `docs/grown_streets.md`). `0` disables flow arterials entirely, which
+    /// reproduces the pre-16 lattice byte-identically.
+    #[serde(default = "default_flow_path_count")]
+    pub flow_path_count: u8,
+    /// Flow avenue half-width in cells (Milestone 16). `1.0` paves a 2-cell
+    /// avenue, matching lattice arterials and diagonal boulevards.
+    #[serde(default = "default_flow_half_width")]
+    pub flow_half_width: f32,
 }
 
 impl Default for WorldConfig {
@@ -183,6 +204,8 @@ impl Default for WorldConfig {
             interior_floor_height: crate::layout::DEFAULT_FLOOR_HEIGHT,
             interior_max_floors: crate::layout::DEFAULT_MAX_FLOORS,
             interior_blueprints: crate::layout::default_blueprints(),
+            flow_path_count: default_flow_path_count(),
+            flow_half_width: default_flow_half_width(),
         }
     }
 }
@@ -262,6 +285,13 @@ impl WorldConfig {
             return false;
         }
         if self.interior_max_floors == 0 {
+            return false;
+        }
+        // Flow avenues (Milestone 16): bounded path count, sane half-width.
+        if self.flow_path_count > 16 {
+            return false;
+        }
+        if !(0.5..=2.0).contains(&self.flow_half_width) {
             return false;
         }
         for bp in &self.interior_blueprints {
@@ -456,7 +486,7 @@ impl WorldConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::WorldConfig;
+    use super::{default_flow_half_width, default_flow_path_count, WorldConfig};
 
     #[test]
     fn default_is_valid() {
@@ -614,5 +644,73 @@ mod tests {
         assert_eq!(cfg.seed, 12345);
         assert_eq!(cfg.chunk_size, 16);
         assert!(cfg.is_valid());
+    }
+
+    #[test]
+    fn rejects_bad_flow_knobs() {
+        // Path counts above the per-cell budget and half-widths outside the
+        // avenue scale are invalid; the band edges stay valid.
+        assert!(!WorldConfig {
+            flow_path_count: 17,
+            ..Default::default()
+        }
+        .is_valid());
+        assert!(!WorldConfig {
+            flow_half_width: 0.4,
+            ..Default::default()
+        }
+        .is_valid());
+        assert!(!WorldConfig {
+            flow_half_width: 2.5,
+            ..Default::default()
+        }
+        .is_valid());
+        assert!(WorldConfig {
+            flow_path_count: 0,
+            ..Default::default()
+        }
+        .is_valid());
+        assert!(WorldConfig {
+            flow_path_count: 16,
+            flow_half_width: 2.0,
+            ..Default::default()
+        }
+        .is_valid());
+    }
+
+    #[test]
+    fn pre_flow_files_without_new_fields_still_parse() {
+        // Simulate a pre-M16 file by dropping the flow keys from a current
+        // default serialization: parsing must succeed, stay valid, and fall
+        // back to the M16 defaults (8 avenues, 1.0 half-width).
+        let full = toml::to_string(&WorldConfig::default()).unwrap();
+        let mut stripped = String::new();
+        for line in full.lines() {
+            let t = line.trim_start();
+            if t.starts_with("flow_path_count") || t.starts_with("flow_half_width") {
+                continue;
+            }
+            stripped.push_str(line);
+            stripped.push('\n');
+        }
+        assert!(
+            stripped.len() < full.len(),
+            "strip step removed nothing — key names drifted?"
+        );
+        let parsed = WorldConfig::from_toml_str(&stripped).unwrap();
+        assert!(parsed.is_valid());
+        assert_eq!(parsed.flow_path_count, default_flow_path_count());
+        assert_eq!(parsed.flow_half_width, default_flow_half_width());
+        let json = serde_json::to_string(&WorldConfig::default()).unwrap();
+        let stripped_json = json
+            .replace("\"flow_path_count\":8,", "")
+            .replace(",\"flow_half_width\":1.0}", "}");
+        assert!(
+            stripped_json.len() < json.len(),
+            "json strip removed nothing — key names drifted?"
+        );
+        let parsed_json = WorldConfig::from_json_str(&stripped_json).unwrap();
+        assert!(parsed_json.is_valid());
+        assert_eq!(parsed_json.flow_path_count, default_flow_path_count());
     }
 }

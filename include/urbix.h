@@ -505,6 +505,17 @@ typedef struct WorldConfig {
      * Per-zone interior layout rule tables (Milestone 9 blueprint schema).
      */
     struct Blueprint interior_blueprints[ZONE_COUNT];
+    /**
+     * Desire-path avenues kept from the flow ranking (Milestone 16, see
+     * `docs/grown_streets.md`). `0` disables flow arterials entirely, which
+     * reproduces the pre-16 lattice byte-identically.
+     */
+    uint8_t flow_path_count;
+    /**
+     * Flow avenue half-width in cells (Milestone 16). `1.0` paves a 2-cell
+     * avenue, matching lattice arterials and diagonal boulevards.
+     */
+    float flow_half_width;
 } WorldConfig;
 
 /**

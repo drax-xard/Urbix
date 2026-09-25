@@ -1,7 +1,8 @@
 # Grown Streets — Flow Arterials (Milestone 16, L1 Agent-Sim)
 
-Status: ⬜ **PENDING** (plan only, no code). Parent: `Urbix_Project.md` §7 M16,
-`docs/thought_experiment.md` §2.6 (L1 row).
+Status: ✅ **DONE** (released in 0.19.0). This document was the build
+specification; the implementation follows it as built. Notes on as-built
+deviations are marked [AS-BUILT] inline.
 
 This document is the buildable specification for the L1 slice of
 agent-simulation Urbix: **arterials emerge from simulated flow, not from
@@ -294,3 +295,26 @@ footfall or L0 zone re-tagging until avenues are locked — they consume
 * Wire/FFI: `docs/api.md`, `src/data.rs`, `src/ffi.rs`, `include/urbix.h`.
 * Fabric spec: `docs/believable_city.md` (§2 scale, §12–§13 avenues/seams).
 * Origin: `docs/thought_experiment.md` §2.6.
+
+## 9. As-built notes (0.19.0)
+
+* [AS-BUILT] The economy sim is a **closed-form single pass**, not "3 fixed
+  passes": every output (traffic, pollution, value, flow) derives directly
+  from the hashed draws with no recurrence, so no iteration loop exists.
+  Stronger than specced — one fewer determinism surface, same outputs.
+* [AS-BUILT] `flow_arterial_at` takes `half_width: f32` (coordinates stay
+  `f64` for span precision; width is small-scale cell units).
+* [AS-BUILT] `abuts_street` grew an 8th argument (`flow_half_width`) and
+  carries `#[allow(clippy::too_many_arguments)]` with justification, the same
+  precedent as `building::assign_building` — full pipeline context per
+  neighbour reads clearer than a bundle struct here.
+* [AS-BUILT] The `--flow-paths` dump landed as **always-on lines** in
+  `walkability` (ranked endpoints + weights after the gate) rather than a
+  flag — 8 deterministic lines, no parser plumbing, same debuggability.
+* [AS-BUILT] Perf: single-chunk bench shows **no measurable delta**
+  (~631 µs vs ~630 µs baseline, p = 0.42) — far inside the 1.3× budget. The
+  avenue early-out plus the empty-vec fast path make flow ~free.
+* [AS-BUILT] Walkability at seed 445566 / extent 8: street 20.2%, arterial
+  8.8% (up from lattice-only — the expected avenue-share rise), sidewalk
+  24.5%, street-wall mean 17.0 cells (68 m, no regression), 530 junctions.
+  `walkability` + `interiors_gate` gates green.

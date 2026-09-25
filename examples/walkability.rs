@@ -1,10 +1,11 @@
 //! # walkability.rs — walkability metrics for the generated city
 //!
-//! A headless acceptance check for Milestones 11–12: generates an `extent ×
-//! extent` grid of chunks and reports ground-plane statistics — paved shares
-//! (streets, arterials, sidewalks, plazas, greenways), plaza counts, mean
-//! uninterrupted street-wall length, junction mix, and tall-cell density per
-//! km² (scale canon: 1 cell = 4 m, so one cell is 16 m²).
+//! A headless acceptance check for Milestones 11–12 (plus 16 flow avenues):
+//! generates an `extent × extent` grid of chunks and reports ground-plane
+//! statistics — paved shares (streets, arterials, sidewalks, plazas,
+//! greenways), plaza counts, mean uninterrupted street-wall length, junction
+//! mix, tall-cell density per km² (scale canon: 1 cell = 4 m, so one cell is
+//! 16 m²), and the ranked desire paths behind the arterial share.
 //!
 //! ## Usage
 //!
@@ -232,6 +233,17 @@ fn main() -> ExitCode {
     if street == 0 || sidewalk == 0 || arterial == 0 {
         eprintln!("degenerate fabric: street={street} sidewalk={sidewalk} arterial={arterial}");
         return ExitCode::from(1);
+    }
+
+    // Flow avenues (Milestone 16): the ranked desire paths behind the
+    // arterial share above — endpoints in world cells, weight = traffic
+    // share. Path #0 is pinned on the CBD anchor.
+    println!("  flow avenues: {} path(s)", voronoi.flow_paths().len());
+    for (i, p) in voronoi.flow_paths().iter().enumerate() {
+        println!(
+            "    path {i}: ({:.0},{:.0}) -> ({:.0},{:.0}) weight {:.3}",
+            p.ax, p.ay, p.bx, p.by, p.weight
+        );
     }
     ExitCode::SUCCESS
 }

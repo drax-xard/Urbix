@@ -16,6 +16,7 @@ seed
 Voronoi sites (immutable, 24–48 points) ──►  continuous zone-affinity field
  │                                            + per-district frame (angle/warp)
  │                                            + CBD peak factor
+ │                                            + flow avenues (M16 desire paths)
  ▼
 per-cell: world_x = cx*CS + lx , world_z = cy*CS + ly  (i64, §1.1)
  │
@@ -62,6 +63,13 @@ rules: CBD anchor (site nearest the origin is Downtown), adjacency buffer
 quantized district frames, and the `1.0–1.5` CBD peak factor. Milestone 12
 adds two global diagonal boulevards per diagram (an X pair 90° apart, defined
 in world coordinates so they cross chunks and districts seamlessly).
+Milestone 16 adds a site-graph flow economy plus desire paths, computed once
+per diagram: hashed residents/workplaces per site (`FLOW_POP`/`FLOW_JOBS`),
+pairwise gravity traffic with a rational falloff (`knee = span × 0.25`),
+per-site value/flow, and the top `flow_path_count` (default 8, CBD-pinned)
+site pairs kept as straight world-space avenue segments. The sim is
+closed-form and index-ordered (no iteration loop, arithmetic-only), so it is
+bit-stable per `(seed, config)` and costs nothing per chunk.
 
 ## 3. Chunk Layer (`src/chunk.rs`)
 
@@ -82,10 +90,16 @@ cy, &config, &voronoi) -> ChunkBuffer` walks `local_x/y` in row-major order:
    cell of a Voronoi bisector pave as arterial avenues both grids tee into),
    and hashed dropout: ~8% of local stretches vanish between arterials
    (superblocks), reopening as `IS_GREENWAY` linear parks 60% of the time.
+   Flow avenues (M16) OR on top: `voronoi.flow_arterial_at(...)` paves cells
+   within `flow_half_width` (default 1.0) of any desire path as
+   `IS_STREET + IS_ARTERIAL` — additive, dropout-immune, winning over
+   greenways; skipped only for existing avenues. `flow_path_count = 0`
+   empties the path list, reproducing the pre-16 lattice byte-identically.
    Intersections in Downtown/Commercial become `IS_PLAZA` on a 2% hash (15%
-   where a diagonal crosses the grid).
+   where a diagonal or flow avenue crosses the grid).
 6. Sidewalk ring: a non-street, non-green cell abutting any street cell (same
-   full query on 4-neighbours) becomes `IS_SIDEWALK` — paved, no-build.
+   full query on 4-neighbours, flow avenues included via `abuts_street`)
+   becomes `IS_SIDEWALK` — paved, no-build.
 7. Lots: `lot::block_loc` + `lot::lot_slot` split the block interior into a
    2-D pack of up to 9 lots (`domain::LOT_SPLIT`).
    `building::assign_building` derives one height/palette per lot

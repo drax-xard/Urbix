@@ -474,6 +474,28 @@ mod tests {
     }
 
     #[test]
+    fn set_config_rebuilds_flow_paths() {
+        // `set_config` regenerates the Voronoi diagram, so the flow economy
+        // re-runs: disabling paths empties them, re-enabling restores the
+        // identical ranking (same seed → same sim).
+        let mut engine = WorldEngine::new(445566);
+        let before = engine.voronoi().flow_paths().to_vec();
+        assert!(!before.is_empty());
+        let legacy = WorldConfig {
+            seed: 445566,
+            flow_path_count: 0,
+            ..Default::default()
+        };
+        engine.set_config(legacy);
+        assert!(engine.voronoi().flow_paths().is_empty());
+        engine.set_config(WorldConfig {
+            seed: 445566,
+            ..Default::default()
+        });
+        assert_eq!(engine.voronoi().flow_paths(), &before[..]);
+    }
+
+    #[test]
     fn set_chunk_size_applies_to_later_generation() {
         let mut engine = WorldEngine::new(7);
         // One chunk at the default size.

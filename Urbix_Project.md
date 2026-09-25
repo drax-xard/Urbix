@@ -658,7 +658,7 @@ cache-hit path deterministic.
 **Exit criteria:** extended `interior_report` + interiors gate example;
 MINOR bump to `0.15.0`.
 
-### Milestone 16 — Grown streets (flow arterials, L1 agent-sim) — ⬜ PENDING
+### Milestone 16 — Grown streets (flow arterials, L1 agent-sim) — ✅ DONE
 
 **Goal:** avenues emerge from simulated flow instead of only repeating every
 `arterial_every` streets. Specified in `docs/grown_streets.md` (promoted from
@@ -666,18 +666,19 @@ MINOR bump to `0.15.0`.
 
 | File | Deliverable |
 |---|---|
-| `src/region.rs` | Site-graph economy sim (pop/jobs → gravity traffic → value/flow, 3 fixed passes); `FlowPath` desire-path segments (top-N by traffic, CBD-pinned); `flow_arterial_at()` world-space query. |
-| `src/chunk.rs` | Flow wiring (flag write before sidewalk ring; flow∩grid plaza rate); lot pipeline untouched. |
+| `src/region.rs` | Site-graph economy sim (pop/jobs → gravity traffic → value/flow, closed-form single pass); `FlowPath` desire-path segments (top-N by traffic, CBD-pinned); `flow_arterial_at()` world-space query. |
+| `src/chunk.rs` | Flow wiring (additive flags before sidewalk ring; flow∩grid plaza rate at 15%); lot pipeline untouched. |
 | `src/config.rs` | `flow_path_count` (default 8, `0` = legacy byte-identical), `flow_half_width` (default 1.0); serde defaults + `is_valid` + file round-trip. |
 | `src/hash.rs` | Domains `FLOW_POP`/`FLOW_JOBS`. |
 
-**Tests:** sim determinism; CBD pin; on-path/off-path query; `count = 0`
-byte-equality; config compat; `Cell` 40 B / `ZoneParams` 16 B asserts;
-walkability non-regression; bench < 1.3×.
+**Tests:** sim determinism; CBD pin; on-path/off-path query (incl. provable
+single-segment case); `count = 0` legacy gate; sidewalk-ring flow proof;
+config compat; `Cell` 40 B / `ZoneParams` 16 B asserts; walkability
+non-regression; bench delta ~0% (budget was 1.3×).
 
 **Exit criteria:** radial avenue star at CBD + cross-links; `walkability` +
 `interiors_gate` green; MINOR bump to `0.19.0` (`WorldConfig` grows; `Cell` /
-`ZoneParams` frozen).
+`ZoneParams` frozen) — met.
 
 ### Milestone 17 — Grammar massing (split-grammar buildings, G0) — ⬜ PENDING
 

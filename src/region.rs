@@ -63,6 +63,41 @@ pub struct VoronoiSite {
     pub zone: ZoneType,
 }
 
+/// A desire-path avenue between two district sites (Milestone 16).
+///
+/// Straight segments in absolute world coordinates — the same construction as
+/// [`Diagonal`][crate::lot::Diagonal] — so they cross chunks and districts
+/// seamlessly and every chunk agrees on every cell. Per-cell membership is
+/// tested by [`VoronoiDiagram::flow_arterial_at`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FlowPath {
+    /// World-space x of endpoint A (a site position).
+    pub ax: f64,
+    /// World-space y of endpoint A.
+    pub ay: f64,
+    /// World-space x of endpoint B (a site position).
+    pub bx: f64,
+    /// World-space y of endpoint B.
+    pub by: f64,
+    /// Normalized traffic share (`pair_traffic / total_traffic`), informational:
+    /// ranks the avenue without affecting geometry.
+    pub weight: f32,
+}
+
+/// Per-site flow-economy outcome (Milestone 16).
+///
+/// Private to this module and never FFI: in M16 only the derived
+/// [`FlowPath`]s affect generation. `value`/`flow` are exposed through
+/// [`VoronoiDiagram::site_economy`] for gates, tests, and future L0 work.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SiteEconomy {
+    /// Economic mass: workplaces plus half the inbound traffic, minus the
+    /// industrial pollution shadow.
+    value: f32,
+    /// Through-traffic: outbound plus inbound gravity flow.
+    flow: f32,
+}
+
 /// An immutable Voronoi diagram of district sites derived from a seed.
 ///
 /// Construct with [`VoronoiDiagram::generate`] or [`VoronoiDiagram::generate_with_config`];
@@ -77,6 +112,13 @@ pub struct VoronoiSite {
 ///
 /// Milestone 12 adds two global diagonal boulevards (Broadway-style avenues
 /// cutting across district grids, derived from the seed) alongside the sites.
+///
+/// Milestone 16 adds a site-graph flow economy plus desire-path avenues: each
+/// site draws a hashed population and workplace count, pairwise gravity
+/// traffic ranks site pairs, and the top pairs become straight world-space
+/// avenue segments (`FlowPath`) that pave as `IS_ARTERIAL` in `chunk.rs`.
+/// The sim runs once here (closed-form, index-ordered, arithmetic-only) so
+/// per-cell cost is one point-to-segment pass over a handful of paths.
 #[derive(Clone, Debug, PartialEq)]
 pub struct VoronoiDiagram {
     sites: Vec<VoronoiSite>,
@@ -84,6 +126,8 @@ pub struct VoronoiDiagram {
     shepard_epsilon: f64,
     seed: u64,
     diagonals: Vec<Diagonal>,
+    economy: Vec<SiteEconomy>,
+    flow_paths: Vec<FlowPath>,
 }
 
 impl VoronoiDiagram {
@@ -118,6 +162,8 @@ impl VoronoiDiagram {
     /// Generate sites using a full `WorldConfig` (modular customization,
     /// Milestone 8). Uses `config.voronoi_span`, `shepard_power`,
     /// `shepard_epsilon`, and `zone_weights` instead of the hardcoded defaults.
+    /// Milestone 16 additionally runs the flow economy and keeps
+    /// `config.flow_path_count` desire paths (CBD-pinned); `0` disables them.
     #[must_use]
     pub fn generate_with_config(config: &WorldConfig) -> Self {
         let seed = config.seed;
@@ -139,7 +185,9 @@ impl VoronoiDiagram {
             .collect();
         // CBD anchor: the site nearest the origin becomes Downtown so the
         // skyline has one legible peak and `cbd_factor` has a stable centre.
-        if let Some(centre) = sites
+        // The index is kept: Milestone 16 pins desire-path #0 on it so the
+        // avenue star aligns with the skyline peak.
+        let cbd_idx: Option<usize> = sites
             .iter()
             .enumerate()
             .min_by(|(_, a), (_, b)| {
@@ -147,8 +195,8 @@ impl VoronoiDiagram {
                     .partial_cmp(&(b.x * b.x + b.y * b.y))
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
-            .map(|(i, _)| i)
-        {
+            .map(|(i, _)| i);
+        if let Some(centre) = cbd_idx {
             sites[centre].zone = ZoneType::Downtown;
         }
         // Adjacency buffer: an Industrial site whose nearest neighbour is
@@ -199,12 +247,22 @@ impl VoronoiDiagram {
                 half_width: 1.0,
             });
         }
+        // Flow economy + desire paths (Milestone 16, see `docs/grown_streets.md`).
+        // Closed-form gravity model over the site graph: no iteration loop is
+        // needed (every output derives directly from hashed pop/jobs), and all
+        // accumulation runs in site-index order, so the result is bit-stable
+        // for the same `(seed, config)`. Only `+ - * /` — no transcendentals —
+        // so the cross-platform libm caveat does not widen.
+        let (economy, flow_paths) =
+            simulate_flow(&sites, seed, span, config.flow_path_count, cbd_idx);
         Self {
             sites,
             shepard_power: config.shepard_power,
             shepard_epsilon: config.shepard_epsilon,
             seed,
             diagonals,
+            economy,
+            flow_paths,
         }
     }
 
@@ -221,6 +279,58 @@ impl VoronoiDiagram {
     #[must_use]
     pub fn diagonals(&self) -> &[Diagonal] {
         &self.diagonals
+    }
+
+    /// Borrow the desire-path avenues (Milestone 16).
+    ///
+    /// Straight world-space segments ranked by simulated traffic; empty when
+    /// `flow_path_count` is 0. Consumed by [`Self::flow_arterial_at`].
+    #[must_use]
+    pub fn flow_paths(&self) -> &[FlowPath] {
+        &self.flow_paths
+    }
+
+    /// Per-site flow-economy outcome: `(value, flow)` (Milestone 16).
+    ///
+    /// Informational in M16 — drives path ranking, not zones. Returns `None`
+    /// for out-of-range indices.
+    #[must_use]
+    pub fn site_economy(&self, idx: usize) -> Option<(f32, f32)> {
+        self.economy.get(idx).map(|e| (e.value, e.flow))
+    }
+
+    /// Whether a world cell carries a flow avenue (Milestone 16).
+    ///
+    /// True when the point lies within `half_width` (cells) of any desire
+    /// path. Pure world-space geometry over absolute coordinates — like
+    /// diagonals and seams — so every chunk agrees on every cell, including
+    /// negative coordinates. Empty path lists (count 0) always answer false,
+    /// which is what keeps the legacy lattice byte-identical.
+    ///
+    /// ## Example
+    ///
+    /// ```
+    /// use urbix::region::VoronoiDiagram;
+    /// let d = VoronoiDiagram::generate(42, 32);
+    /// // The midpoint of the first path is on an avenue ...
+    /// let p = d.flow_paths()[0];
+    /// assert!(d.flow_arterial_at((p.ax + p.bx) / 2.0, (p.ay + p.by) / 2.0, 1.0));
+    /// // ... while a point outside the site span cannot be near any
+    /// // site-to-site segment (segments stay inside ±span).
+    /// assert!(!d.flow_arterial_at(30_000.0, -30_000.0, 1.0));
+    /// ```
+    #[must_use]
+    pub fn flow_arterial_at(&self, world_x: f64, world_z: f64, half_width: f32) -> bool {
+        if self.flow_paths.is_empty() {
+            return false;
+        }
+        // Width is small-scale (cells); f32 is plenty. Coordinates stay f64
+        // for precision over the i64 world span.
+        let hw = half_width as f64;
+        let hw2 = hw * hw;
+        self.flow_paths
+            .iter()
+            .any(|p| point_segment_dist2(world_x, world_z, p.ax, p.ay, p.bx, p.by) <= hw2)
     }
 
     /// Index of the site nearest `(world_x, world_z)` (linear scan; the map
@@ -467,6 +577,176 @@ fn pick_zone_with(h: u64, weights: &[f64; ZONE_COUNT]) -> ZoneType {
     // Floating-point tail: t landed (numerically) at the very top; fall back
     // to the last zone rather than leaving it unassigned.
     *ZoneType::all().last().expect("ZONE_COUNT > 0")
+}
+
+/// Resident-population capacity multiplier per zone (flow economy, M16).
+///
+/// Homes house people; workplaces and parks house few. Multiplies the hashed
+/// `0.3..=1.0` draw so every site keeps a nonzero mass (highways reach
+/// everywhere, just thinner in the sticks).
+fn pop_capacity(zone: ZoneType) -> f64 {
+    match zone {
+        ZoneType::Residential => 1.3,
+        ZoneType::Downtown => 1.1,
+        ZoneType::Commercial => 1.0,
+        ZoneType::Industrial => 0.6,
+        ZoneType::Park => 0.15,
+    }
+}
+
+/// Workplace capacity multiplier per zone (flow economy, M16).
+fn jobs_capacity(zone: ZoneType) -> f64 {
+    match zone {
+        ZoneType::Downtown => 1.5,
+        ZoneType::Commercial => 1.3,
+        ZoneType::Industrial => 1.0,
+        ZoneType::Residential => 0.4,
+        ZoneType::Park => 0.05,
+    }
+}
+
+/// Squared distance from a point to a segment (flow avenue membership).
+///
+/// Pure arithmetic over absolute coordinates; co-located endpoints degrade to
+/// point distance so degenerate segments stay total.
+fn point_segment_dist2(px: f64, py: f64, ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
+    let dx = bx - ax;
+    let dy = by - ay;
+    let len2 = dx * dx + dy * dy;
+    if len2 < 1e-12 {
+        let ex = px - ax;
+        let ey = py - ay;
+        return ex * ex + ey * ey;
+    }
+    let t = (((px - ax) * dx + (py - ay) * dy) / len2).clamp(0.0, 1.0);
+    let cx = ax + t * dx - px;
+    let cy = ay + t * dy - py;
+    cx * cx + cy * cy
+}
+
+/// Flow economy + desire-path ranking (Milestone 16, see `docs/grown_streets.md`).
+///
+/// Closed-form gravity model over the site graph: hashed residents and
+/// workplaces (`FLOW_POP`/`FLOW_JOBS`), pairwise traffic with a rational
+/// distance falloff (`knee = span * 0.25`, same family as `cbd_factor`'s
+/// Lorentzian), then per-site value/flow and a ranked pair list. No iteration
+/// loop is needed — every output derives directly from the draws — and all
+/// accumulation runs in site-index order, so the result is bit-stable for the
+/// same `(sites, seed, span, path_count)`.
+///
+/// Path #0 is pinned on the CBD anchor site (paired with its busiest
+/// partner); the rest take the global ranking (traffic desc, index tie-break
+/// via `total_cmp`, so the order is deterministic even on float tails).
+/// Park-to-Park pairs are never emitted. `path_count == 0` (or fewer than two
+/// sites) yields no paths; the economy is still computed so diagnostics keep
+/// working in legacy mode.
+fn simulate_flow(
+    sites: &[VoronoiSite],
+    seed: u64,
+    span: f64,
+    path_count: u8,
+    cbd_idx: Option<usize>,
+) -> (Vec<SiteEconomy>, Vec<FlowPath>) {
+    let n = sites.len();
+    let knee2 = (span * 0.25) * (span * 0.25);
+    // Hashed residents/workplaces per site, in index order.
+    let mut pop = vec![0.0f64; n];
+    let mut jobs = vec![0.0f64; n];
+    for (i, site) in sites.iter().enumerate() {
+        let idx = i as i64;
+        pop[i] = (0.3 + 0.7 * hash_unit(idx, 0, seed, domain::FLOW_POP) as f64)
+            * pop_capacity(site.zone);
+        jobs[i] = (0.3 + 0.7 * hash_unit(idx, 1, seed, domain::FLOW_JOBS) as f64)
+            * jobs_capacity(site.zone);
+    }
+    let pair_key = |a: usize, b: usize| -> f64 {
+        let dx = sites[a].x - sites[b].x;
+        let dy = sites[a].y - sites[b].y;
+        let falloff = 1.0 + (dx * dx + dy * dy) / knee2;
+        // Bidirectional gravity flow on the shared falloff.
+        (pop[a] * jobs[b] + pop[b] * jobs[a]) / falloff
+    };
+    // Per-site value/flow in index order.
+    let mut economy = Vec::with_capacity(n);
+    for i in 0..n {
+        let mut inbound = 0.0f64;
+        let mut outbound = 0.0f64;
+        let mut pollution = 0.0f64;
+        for j in 0..n {
+            let dx = sites[i].x - sites[j].x;
+            let dy = sites[i].y - sites[j].y;
+            let falloff = 1.0 + (dx * dx + dy * dy) / knee2;
+            outbound += pop[i] * jobs[j] / falloff;
+            inbound += pop[j] * jobs[i] / falloff;
+            if sites[j].zone == ZoneType::Industrial {
+                pollution += jobs[j] / falloff * 0.4;
+            }
+        }
+        economy.push(SiteEconomy {
+            value: (jobs[i] + 0.5 * inbound - pollution) as f32,
+            flow: (outbound + inbound) as f32,
+        });
+    }
+    // Ranked desire paths.
+    let mut flow_paths = Vec::new();
+    let want = usize::from(path_count);
+    if want == 0 || n < 2 {
+        return (economy, flow_paths);
+    }
+    let mut pairs: Vec<(usize, usize, f64)> = Vec::new();
+    let mut total = 0.0f64;
+    for i in 0..n {
+        for j in (i + 1)..n {
+            if sites[i].zone == ZoneType::Park && sites[j].zone == ZoneType::Park {
+                continue;
+            }
+            let key = pair_key(i, j);
+            total += key;
+            pairs.push((i, j, key));
+        }
+    }
+    if pairs.is_empty() {
+        return (economy, flow_paths);
+    }
+    pairs.sort_by(|a, b| b.2.total_cmp(&a.2).then(a.0.cmp(&b.0)).then(a.1.cmp(&b.1)));
+    let pinned: Option<(usize, usize)> = cbd_idx.and_then(|c| {
+        pairs
+            .iter()
+            .find(|(a, b, _)| *a == c || *b == c)
+            .map(|&(a, b, _)| (a, b))
+    });
+    let mut take: Vec<(usize, usize)> = Vec::new();
+    if let Some(pb) = pinned {
+        take.push(pb);
+    }
+    for &(a, b, _) in &pairs {
+        if take.len() >= want {
+            break;
+        }
+        if Some((a, b)) == pinned {
+            continue;
+        }
+        take.push((a, b));
+    }
+    // Weights normalize over candidate traffic so avenues stay comparable
+    // across configs; the degenerate-zero guard only exists for symmetry
+    // (hashed draws keep every key positive in practice).
+    let norm = if total == 0.0 { 1.0 } else { total };
+    flow_paths = take
+        .into_iter()
+        .map(|(a, b)| {
+            let sa = &sites[a];
+            let sb = &sites[b];
+            FlowPath {
+                ax: sa.x,
+                ay: sa.y,
+                bx: sb.x,
+                by: sb.y,
+                weight: (pair_key(a, b) / norm) as f32,
+            }
+        })
+        .collect();
+    (economy, flow_paths)
 }
 
 #[cfg(test)]
@@ -780,5 +1060,164 @@ mod tests {
                 }
             }
         }
+    }
+
+    // --- Milestone 16: flow economy + desire paths ---
+
+    /// Origin-nearest site index (the CBD anchor forces it Downtown).
+    fn cbd_site_idx(d: &VoronoiDiagram) -> usize {
+        d.sites()
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| {
+                (a.x * a.x + a.y * a.y)
+                    .partial_cmp(&(b.x * b.x + b.y * b.y))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(i, _)| i)
+            .expect("diagram has sites")
+    }
+
+    #[test]
+    fn flow_sim_is_deterministic() {
+        for seed in [1u64, 7, 42, 445566] {
+            let a = VoronoiDiagram::generate(seed, 32);
+            let b = VoronoiDiagram::generate(seed, 32);
+            assert_eq!(a.flow_paths(), b.flow_paths(), "seed {seed}");
+            for i in 0..a.sites().len() {
+                assert_eq!(a.site_economy(i), b.site_economy(i), "seed {seed} site {i}");
+            }
+        }
+    }
+
+    #[test]
+    fn flow_paths_reference_real_sites_and_skip_park_pairs() {
+        for seed in [1u64, 7, 42, 99, 445566] {
+            let d = VoronoiDiagram::generate(seed, 32);
+            let paths = d.flow_paths();
+            // 32 sites yield hundreds of candidate pairs; the default count
+            // keeps exactly 8.
+            assert_eq!(paths.len(), 8, "seed {seed}");
+            let mut wsum = 0.0f32;
+            for p in paths {
+                let za = d
+                    .sites()
+                    .iter()
+                    .find(|s| s.x == p.ax && s.y == p.ay)
+                    .map(|s| s.zone)
+                    .expect("endpoint A is a site position");
+                let zb = d
+                    .sites()
+                    .iter()
+                    .find(|s| s.x == p.bx && s.y == p.by)
+                    .map(|s| s.zone)
+                    .expect("endpoint B is a site position");
+                assert!(
+                    !(za == ZoneType::Park && zb == ZoneType::Park),
+                    "seed {seed}: Park-to-Park avenue"
+                );
+                assert!(
+                    (0.0..=1.0).contains(&p.weight),
+                    "seed {seed}: weight out of range: {}",
+                    p.weight
+                );
+                wsum += p.weight;
+            }
+            // Kept shares of the candidate traffic sum to at most the whole.
+            assert!(
+                (0.0..=1.0 + 1e-6).contains(&wsum),
+                "seed {seed}: weight sum {wsum}"
+            );
+        }
+    }
+
+    #[test]
+    fn flow_first_path_pins_the_cbd() {
+        for seed in [1u64, 7, 42, 99, 445566] {
+            let d = VoronoiDiagram::generate(seed, 32);
+            let c = &d.sites()[cbd_site_idx(&d)];
+            assert_eq!(c.zone, ZoneType::Downtown);
+            let p = &d.flow_paths()[0];
+            let touches = (p.ax == c.x && p.ay == c.y) || (p.bx == c.x && p.by == c.y);
+            assert!(touches, "seed {seed}: path #0 misses the CBD anchor");
+        }
+    }
+
+    #[test]
+    fn flow_query_hits_midpoints_and_misses_far_field() {
+        let d = VoronoiDiagram::generate(42, 32);
+        for p in d.flow_paths() {
+            let mx = (p.ax + p.bx) / 2.0;
+            let mz = (p.ay + p.by) / 2.0;
+            assert!(d.flow_arterial_at(mx, mz, 1.0), "midpoint off avenue");
+        }
+        // Far outside the site span no site-to-site segment can reach.
+        assert!(!d.flow_arterial_at(30_000.0, -30_000.0, 1.0));
+        assert!(!d.flow_arterial_at(-30_000.0, 30_000.0, 2.0));
+    }
+
+    #[test]
+    fn flow_query_off_path_single_segment() {
+        // Two-site diagram: exactly one segment exists in the whole world, so
+        // a perpendicular offset is provably off-path. The CBD anchor forces
+        // one endpoint Downtown, so the pair is never Park-Park. Scan for a
+        // long segment so the offset geometry is crisp.
+        let d = (11u64..200)
+            .map(|s| VoronoiDiagram::generate(s, 2))
+            .find(|d| {
+                let p = &d.flow_paths()[0];
+                let dx = p.bx - p.ax;
+                let dy = p.by - p.ay;
+                dx * dx + dy * dy >= 100.0 * 100.0
+            })
+            .expect("a long two-site segment in the scan band");
+        assert_eq!(d.flow_paths().len(), 1);
+        let p = d.flow_paths()[0];
+        assert!(d.flow_arterial_at((p.ax + p.bx) / 2.0, (p.ay + p.by) / 2.0, 1.0));
+        let dx = p.bx - p.ax;
+        let dy = p.by - p.ay;
+        let len = (dx * dx + dy * dy).sqrt();
+        let ox = (p.ax + p.bx) / 2.0 - dy / len * 50.0;
+        let oz = (p.ay + p.by) / 2.0 + dx / len * 50.0;
+        assert!(!d.flow_arterial_at(ox, oz, 1.0));
+        assert!(!d.flow_arterial_at(ox, oz, 2.0));
+    }
+
+    #[test]
+    fn flow_zero_count_disables_paths() {
+        let cfg = WorldConfig {
+            seed: 445566,
+            flow_path_count: 0,
+            ..Default::default()
+        };
+        assert!(cfg.is_valid());
+        let d = VoronoiDiagram::generate_with_config(&cfg);
+        assert!(d.flow_paths().is_empty());
+        // Legacy gate: with no paths the query never fires, so the chunk
+        // wiring below can add nothing (byte-identical lattice).
+        for xi in -10..10 {
+            for zi in -10..10 {
+                assert!(
+                    !d.flow_arterial_at(xi as f64 * 37.0, zi as f64 * 53.0, 1.0),
+                    "flow fired with count 0 at ({xi},{zi})"
+                );
+            }
+        }
+        // Economy diagnostics still work in legacy mode.
+        assert!(d.site_economy(0).is_some());
+        assert!(d.site_economy(10_000).is_none());
+    }
+
+    #[test]
+    fn flow_queries_are_deterministic() {
+        let d = VoronoiDiagram::generate(7, 32);
+        assert_eq!(
+            d.flow_arterial_at(-123.0, 456.0, 1.0),
+            d.flow_arterial_at(-123.0, 456.0, 1.0)
+        );
+        assert_eq!(
+            d.flow_arterial_at(-2000.5, -3000.5, 2.0),
+            d.flow_arterial_at(-2000.5, -3000.5, 2.0)
+        );
     }
 }

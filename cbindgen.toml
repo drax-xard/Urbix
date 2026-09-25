@@ -57,6 +57,8 @@ exclude = [
     "DIAGONAL",
     "SPECIAL",
     "GREENWAY",
+    "FLOW_POP",
+    "FLOW_JOBS",
     "LAYOUT_CORE",
     "LAYOUT_WET",]
 

@@ -49,6 +49,10 @@
 //!   cheap neighbour check.
 //! - Sidewalk rings, plazas, and block interiors are composed in `chunk.rs`
 //!   on top of this query.
+//! - Flow avenues (Milestone 16) are deliberately NOT resolved here: they are
+//!   frame-independent world-space segments owned by `region.rs`, so
+//!   `chunk.rs` ORs them onto this answer (and into the sidewalk check)
+//!   instead of threading them through the district frame.
 //!
 //! ## Determinism
 //!

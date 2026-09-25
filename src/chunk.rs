@@ -103,21 +103,35 @@ pub fn generate_chunk(
                 if info.arterial {
                     flags = flags.insert(CellFlags::IS_ARTERIAL);
                 }
-            } else if info.greenway {
+            }
+            // Flow avenues (Milestone 16): world-space desire paths pave as
+            // arterials on top of the lattice answer. Additive and immune to
+            // dropout — a flow cell the lattice dropped (or greened) still
+            // reads as avenue, and a lattice local upgraded by flow gains the
+            // arterial bit. Skipped only when the cell is already an avenue
+            // (nothing to add). An empty path list (`flow_path_count == 0`)
+            // answers false everywhere, keeping the legacy lattice
+            // byte-identical.
+            let flow = !(info.street && info.arterial)
+                && voronoi.flow_arterial_at(world_x as f64, world_z as f64, config.flow_half_width);
+            if flow {
+                flags = flags.insert(CellFlags::IS_STREET);
+                flags = flags.insert(CellFlags::IS_ARTERIAL);
+            } else if !info.street && info.greenway {
                 // Dropped segments reborn as linear parks (no-build green).
                 flags = flags.insert(CellFlags::IS_GREENWAY);
             }
 
             // Plazas: a small hashed share of downtown/commercial grid
-            // intersections widens into pedestrian ground, and diagonal
-            // crossings earn squares more often (keeps IS_STREET so old
-            // renderers still draw pavement).
+            // intersections widens into pedestrian ground, and diagonal or
+            // flow-avenue crossings earn squares more often (keeps IS_STREET
+            // so old renderers still draw pavement).
             let grid_crossing = is_intersection(world_x, world_z, &params, &frame);
             if flags.contains(CellFlags::IS_STREET)
                 && ((grid_crossing
                     && (zone == ZoneType::Downtown || zone == ZoneType::Commercial)
                     && hash_unit(world_x, world_z, seed, domain::PLAZA) < 0.02)
-                    || (info.diagonal
+                    || ((info.diagonal || flow)
                         && grid_crossing
                         && hash_unit(world_x, world_z, seed, domain::PLAZA) < 0.15))
             {
@@ -129,7 +143,16 @@ pub fn generate_chunk(
             // same full query so chunk edges agree.
             if !flags.contains(CellFlags::IS_STREET)
                 && !flags.contains(CellFlags::IS_GREENWAY)
-                && abuts_street(world_x, world_z, &params, &frame, diags, voronoi, seed)
+                && abuts_street(
+                    world_x,
+                    world_z,
+                    &params,
+                    &frame,
+                    diags,
+                    voronoi,
+                    seed,
+                    config.flow_half_width,
+                )
             {
                 flags = flags.insert(CellFlags::IS_SIDEWALK);
             }
@@ -260,7 +283,10 @@ fn is_intersection(
 /// Used for the sidewalk ring; pure over absolute coords, hence
 /// cross-chunk consistent. Dropped segments read as interior/green, never
 /// as streets, so the ring hugs real roads only. Neighbour seam flags come
-/// from the neighbour's own position (seams are frame-independent).
+/// from the neighbour's own position (seams are frame-independent), and flow
+/// avenues are frame-independent too, so both stay consistent under the
+/// center cell's frame.
+#[allow(clippy::too_many_arguments)] // full pipeline context per neighbour; bundling hides the query
 fn abuts_street(
     world_x: i64,
     world_z: i64,
@@ -269,6 +295,7 @@ fn abuts_street(
     diagonals: &[crate::lot::Diagonal],
     voronoi: &VoronoiDiagram,
     seed: u64,
+    flow_half_width: f32,
 ) -> bool {
     const DIRS: [(i64, i64); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
     DIRS.iter().any(|(dx, dz)| {
@@ -276,6 +303,7 @@ fn abuts_street(
         let nz = world_z + dz;
         let seam = voronoi.is_seam_road(nx as f64, nz as f64);
         street::street_info(nx, nz, params, frame, diagonals, seam, seed).street
+            || voronoi.flow_arterial_at(nx as f64, nz as f64, flow_half_width)
     })
 }
 
@@ -622,11 +650,13 @@ mod tests {
     fn street_flags_match_independent_recomputation() {
         // Cross-chunk edges stay consistent because a cell's street flags are
         // a pure function of its *absolute* world coordinates in the district
-        // frame (via street_info), never of which chunk generated it.
-        // Recompute each cell's full street answer from the same continuous
-        // zone params + frame + diagonals and require a match on every bit
-        // the pipeline sets (street, arterial, greenway). (Plazas keep
-        // IS_STREET, so the street bit still matches the base answer.)
+        // frame (via street_info) plus frame-independent world-space avenues
+        // (diagonals, seams, Milestone 16 flow paths), never of which chunk
+        // generated it. Recompute each cell's full street answer from the
+        // same continuous zone params + frame + diagonals + flow and require
+        // a match on every bit the pipeline sets (street, arterial,
+        // greenway). (Plazas keep IS_STREET, so the street bit still matches
+        // the base answer.)
         let (cfg, voronoi) = fixture();
         let diags = voronoi.diagonals().to_vec();
         let n = i64::from(cfg.chunk_size);
@@ -649,19 +679,23 @@ mod tests {
                         seam,
                         cfg.seed,
                     );
+                    // Flow avenues OR onto the lattice answer (and win over
+                    // greenways); skipped only for existing avenues.
+                    let flow = !(expected.street && expected.arterial)
+                        && voronoi.flow_arterial_at(wx as f64, wz as f64, cfg.flow_half_width);
                     assert_eq!(
                         cell.flags.contains(CellFlags::IS_STREET),
-                        expected.street,
+                        expected.street || flow,
                         "street mismatch at world ({wx},{wz})"
                     );
                     assert_eq!(
                         cell.flags.contains(CellFlags::IS_ARTERIAL),
-                        expected.arterial,
+                        expected.arterial || flow,
                         "arterial mismatch at world ({wx},{wz})"
                     );
                     assert_eq!(
                         cell.flags.contains(CellFlags::IS_GREENWAY),
-                        expected.greenway,
+                        !flow && !expected.street && expected.greenway,
                         "greenway mismatch at world ({wx},{wz})"
                     );
                     index += 1;
@@ -1077,5 +1111,191 @@ mod tests {
         // one must be flagged (streets in parks genuinely stay unflagged).
         assert!(park_cells > 0, "no park-dominant cells sampled");
         assert!(flagged > 0, "no IS_PARK flag was ever set");
+    }
+
+    // --- Milestone 16: flow avenues in the chunk pipeline ---
+
+    /// World cell at the midpoint of a diagram's first desire path, rounded
+    /// to the nearest integer cell (within ~0.71 of the segment, so inside
+    /// the default half-width).
+    fn first_path_midpoint_cell(voronoi: &VoronoiDiagram) -> (i64, i64) {
+        let p = voronoi
+            .flow_paths()
+            .first()
+            .expect("diagram has flow paths");
+        (
+            ((p.ax + p.bx) / 2.0).round() as i64,
+            ((p.ay + p.by) / 2.0).round() as i64,
+        )
+    }
+
+    #[test]
+    fn flow_midpoint_cell_paves_as_arterial_street() {
+        // A desire-path midpoint paves unconditionally: street + arterial,
+        // height 0, no interior — regardless of what the lattice says there.
+        let cfg = WorldConfig {
+            seed: 445566,
+            ..Default::default()
+        };
+        let voronoi = VoronoiDiagram::generate(cfg.seed, cfg.voronoi_site_count);
+        let (wx, wz) = first_path_midpoint_cell(&voronoi);
+        let n = i64::from(cfg.chunk_size);
+        let (cx, cy) = (wx.div_euclid(n) as i32, wz.div_euclid(n) as i32);
+        let buf = generate_chunk(cx, cy, &cfg, &voronoi);
+        let (lx, ly) = (wx.rem_euclid(n), wz.rem_euclid(n));
+        let cell = buf.get_cell((ly * n + lx) as usize);
+        assert!(
+            cell.flags.contains(CellFlags::IS_STREET),
+            "flow midpoint not a street at ({wx},{wz})"
+        );
+        assert!(
+            cell.flags.contains(CellFlags::IS_ARTERIAL),
+            "flow midpoint not an arterial at ({wx},{wz})"
+        );
+        assert_eq!(cell.height, 0.0);
+        assert_eq!(cell.interior_id, 0);
+    }
+
+    #[test]
+    fn flow_wiring_is_additive_over_the_legacy_lattice() {
+        // Scan seeds for a desire-path midpoint the legacy lattice leaves
+        // non-arterial: the flow chunk must upgrade exactly that cell to an
+        // arterial street (additive — never removing lattice pavement).
+        let mut found = 0;
+        for seed in 0..30u64 {
+            let flow_cfg = WorldConfig {
+                seed,
+                ..Default::default()
+            };
+            let legacy_cfg = WorldConfig {
+                seed,
+                flow_path_count: 0,
+                ..Default::default()
+            };
+            assert!(legacy_cfg.is_valid());
+            let d_flow = VoronoiDiagram::generate(flow_cfg.seed, flow_cfg.voronoi_site_count);
+            let d_legacy = VoronoiDiagram::generate_with_config(&legacy_cfg);
+            // Same seed, paths disabled: identical sites, empty path list.
+            assert!(d_legacy.flow_paths().is_empty());
+            let (wx, wz) = first_path_midpoint_cell(&d_flow);
+            let n = i64::from(flow_cfg.chunk_size);
+            let (cx, cy) = (wx.div_euclid(n) as i32, wz.div_euclid(n) as i32);
+            let flow_buf = generate_chunk(cx, cy, &flow_cfg, &d_flow);
+            let legacy_buf = generate_chunk(cx, cy, &legacy_cfg, &d_legacy);
+            let (lx, ly) = (wx.rem_euclid(n), wz.rem_euclid(n));
+            let idx = (ly * n + lx) as usize;
+            let flow_cell = flow_buf.get_cell(idx);
+            let legacy_cell = legacy_buf.get_cell(idx);
+            assert!(flow_cell.flags.contains(CellFlags::IS_ARTERIAL));
+            if !legacy_cell.flags.contains(CellFlags::IS_ARTERIAL) {
+                // The upgrade case: lattice left it local/open, flow paved it.
+                assert!(flow_cell.flags.contains(CellFlags::IS_STREET));
+                assert_eq!(flow_cell.height, 0.0);
+                found += 1;
+            }
+            // Pavement is never removed: every legacy street stays a street.
+            for i in 0..legacy_buf.cell_count() {
+                if legacy_buf.get_cell(i).flags.contains(CellFlags::IS_STREET) {
+                    assert!(
+                        flow_buf.get_cell(i).flags.contains(CellFlags::IS_STREET),
+                        "seed {seed}: flow removed lattice pavement at cell {i}"
+                    );
+                }
+            }
+        }
+        assert!(found > 0, "no additive flow upgrade sampled");
+    }
+
+    #[test]
+    fn flow_avenues_feed_the_sidewalk_ring() {
+        // A cell abutting a flow avenue (and nothing else) reads as sidewalk
+        // in the flow chunk but not in the legacy chunk. `abuts_street` is
+        // exercised through the same params/frame the pipeline uses for the
+        // center cell, so the assertion covers the real wiring, not a model.
+        let mut found = 0;
+        for seed in 0..50u64 {
+            let flow_cfg = WorldConfig {
+                seed,
+                ..Default::default()
+            };
+            let legacy_cfg = WorldConfig {
+                seed,
+                flow_path_count: 0,
+                ..Default::default()
+            };
+            let d_flow = VoronoiDiagram::generate(flow_cfg.seed, flow_cfg.voronoi_site_count);
+            let d_legacy = VoronoiDiagram::generate_with_config(&legacy_cfg);
+            let (mx, mz) = first_path_midpoint_cell(&d_flow);
+            let n = i64::from(flow_cfg.chunk_size);
+            let (cx, cy) = (mx.div_euclid(n) as i32, mz.div_euclid(n) as i32);
+            let flow_buf = generate_chunk(cx, cy, &flow_cfg, &d_flow);
+            let legacy_buf = generate_chunk(cx, cy, &legacy_cfg, &d_legacy);
+            const DIRS: [(i64, i64); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
+            for (dx, dz) in DIRS {
+                let (nx, nz) = (mx + dx, mz + dz);
+                let (lx, lz) = (nx.rem_euclid(n), nz.rem_euclid(n));
+                // Neighbour must land in the same chunk (else the cell index
+                // below addresses the wrong chunk).
+                if nx.div_euclid(n) as i32 != cx || nz.div_euclid(n) as i32 != cy {
+                    continue;
+                }
+                // Skip neighbours the avenue itself paves.
+                if d_flow.flow_arterial_at(nx as f64, nz as f64, flow_cfg.flow_half_width) {
+                    continue;
+                }
+                // Replicate the pipeline's center-cell inputs exactly.
+                let affinity = d_flow.query(nx as f64, nz as f64);
+                let params = flow_cfg.blended_zone_params(&affinity);
+                let frame = d_flow.district_frame_for(nx as f64, nz as f64);
+                let diags = d_flow.diagonals();
+                let legacy_abuts = abuts_street(
+                    nx,
+                    nz,
+                    &params,
+                    &frame,
+                    diags,
+                    &d_legacy,
+                    seed,
+                    legacy_cfg.flow_half_width,
+                );
+                if legacy_abuts {
+                    continue; // lattice already rings it; not a flow proof
+                }
+                let flow_abuts = abuts_street(
+                    nx,
+                    nz,
+                    &params,
+                    &frame,
+                    diags,
+                    &d_flow,
+                    seed,
+                    flow_cfg.flow_half_width,
+                );
+                if !flow_abuts {
+                    continue;
+                }
+                let idx = (lz * n + lx) as usize;
+                let flow_cell = flow_buf.get_cell(idx);
+                let legacy_cell = legacy_buf.get_cell(idx);
+                // The ring must actually render: sidewalk in flow, absent in
+                // legacy (greenways and plazas are excluded — they never
+                // carry the ring by construction).
+                if flow_cell.flags.contains(CellFlags::IS_GREENWAY)
+                    || flow_cell.flags.contains(CellFlags::IS_PLAZA)
+                {
+                    continue;
+                }
+                assert!(
+                    flow_cell.flags.contains(CellFlags::IS_SIDEWALK),
+                    "seed {seed}: flow-abutting cell not ringed at ({nx},{nz})"
+                );
+                assert!(
+                    !legacy_cell.flags.contains(CellFlags::IS_SIDEWALK),
+                    "seed {seed}: legacy cell already ringed at ({nx},{nz})"
+                );
+                found += 1;
+            }
+        }
+        assert!(found > 0, "no flow-only sidewalk ring sampled");
     }
 }

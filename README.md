@@ -32,7 +32,7 @@ The full design lives in [`Urbix_Project.md`](Urbix_Project.md); in short:
 ## Status
 
 Tracked milestone-by-milestone in `Urbix_Project.md` §7 (✅ done / 🔨 in
-progress / ⬜ pending). Current version: `0.9.0` (see `CHANGELOG.md`).
+progress / ⬜ pending). Current version: `0.19.0` (see `CHANGELOG.md`).
 
 | Milestone | Status |
 |---|---|
@@ -51,6 +51,8 @@ progress / ⬜ pending). Current version: `0.9.0` (see `CHANGELOG.md`).
 | M13 — Interior structure (stacked cores, floor roles) | ✅ Done (0.13.0, see `docs/interiors.md`) |
 | M14 — Interior program (units, wet stacks, rules) | ✅ Done (0.14.0, see `docs/interiors.md`) |
 | M15 — Interior finish (furniture, metadata, cache) | ✅ Done (0.15.0, see `docs/interiors.md`) |
+| M16 — Grown streets (flow arterials, L1 agent-sim) | ✅ Done (0.19.0, see `docs/grown_streets.md`) |
+| M17 — Grammar massing (split-grammar buildings, G0) | ⬜ Pending (see `docs/grammar_massing.md`) |
 
 M9 completes data-driven interior layout generation: each built lot gets an
 `InteriorContext` (zone, blended affinity, footprint, height→floor derivation,
@@ -162,7 +164,7 @@ cc /tmp/basic_usage.o -L target/release -lurbix -ldl -lm -pthread -o /tmp/basic_
 
 ## Usage
 
-The library is in early development (currently `0.9.0`); the public surface is
+The library is in early development (currently `0.19.0`); the public surface is
 `WorldEngine` in Rust and the C ABI in `include/urbix.h` (see
 `Urbix_Project.md` §2.3-2.4 for the wire format):
 

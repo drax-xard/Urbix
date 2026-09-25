@@ -12,6 +12,8 @@
   "interior_height_range": [6, 14],
   "interior_floor_height": 4.0,
   "interior_max_floors": 64,
+  "flow_path_count": 8,
+  "flow_half_width": 1.0,
   "zones": [
     {
       "height_min": 24.0,

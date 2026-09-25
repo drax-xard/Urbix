@@ -34,6 +34,11 @@ interior_floor_height = 4.0
 interior_max_floors = 64
 # interior_blueprints omitted → defaults
 
+# Flow avenues (Milestone 16): desire paths from the site-graph economy pave
+# as arterials on top of the lattice. 0 disables them (legacy grid exactly).
+flow_path_count = 8
+flow_half_width = 1.0
+
 # Scale canon (Milestone 11): 1 cell = 4 m. Block sizes are in cells;
 # multiply by 4 for metres. `arterial_every` K makes every K-th street a
 # 2-cell arterial avenue (0 disables arterials).

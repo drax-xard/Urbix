@@ -96,6 +96,11 @@ pub mod domain {
     pub const SPECIAL: u8 = 58;
     /// Dropped streets reborn as linear parks (see `street.rs`).
     pub const GREENWAY: u8 = 59;
+
+    /// Site resident population draw for the flow economy (see `region.rs`).
+    pub const FLOW_POP: u8 = 60;
+    /// Site workplace draw for the flow economy (see `region.rs`).
+    pub const FLOW_JOBS: u8 = 61;
 }
 
 /// Hash a coordinate pair under a seed and domain into a `u64`.

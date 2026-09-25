@@ -133,15 +133,15 @@ furniture, queryable rooms).
 - Artists drag wires instead of editing 8-slot
   `[[interior_blueprints.rooms]]` arrays. Underneath still `hash()`.
 
-### 2.6 Agent-simulation Urbix (form follows process) — L1 PROMOTED to M16
+### 2.6 Agent-simulation Urbix (form follows process) — L1 DONE in 0.19.0 (M16)
 - Simulate land value + traffic + desire paths deterministically.
 - Arterials emerge where agents walk, not where `arterial_every=K` says.
   Commercial clusters at high betweenness; industrial repelled from
   residential (today's hardcoded adjacency buffer becomes emergent).
 - Same seed → same economy → same city, but believable because it was lived in.
-- **Buildable L1 spec: `docs/grown_streets.md`** (site-graph sim → desire
-  paths → additive flow arterials; pending Milestone 16). L0 (value-driven
-  re-tag) and L2 (footfall lots) stay deferred.
+- **Landed as `docs/grown_streets.md`** (site-graph sim → CBD-pinned desire
+  paths → additive flow arterials; Milestone 16, released 0.19.0). L0
+  (value-driven re-tag) and L2 (footfall lots) stay deferred.
 
 ### 2.7 WFC + L-system hybrid — G0 PROMOTED to M17 (G1/G2 deferred)
 - Keep Voronoi for districts; street topology via Wave Function Collapse
