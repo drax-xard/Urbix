@@ -36,7 +36,7 @@ use crate::config::WorldConfig;
 use crate::data::{Cell, CellFlags, ChunkBuffer, ChunkId, InteriorId};
 use crate::hash::{domain, hash_coords, hash_unit};
 use crate::layout::DoorSide;
-use crate::lot::{block_loc, block_noise, lot_slot};
+use crate::lot::{block_loc, block_noise, lot_slot, LotSlot};
 use crate::region::VoronoiDiagram;
 use crate::street;
 use crate::zones::ZoneType;
@@ -221,17 +221,7 @@ pub fn generate_chunk(
                 // IEEE identity) and the legacy post boosts below run instead,
                 // keeping flat output byte-identical in every mode.
                 let steps_live = massing.is_some_and(|m| !crate::massing::is_flat(m));
-                let landmark_boost = if is_landmark(slot.lot_id, zone, seed) {
-                    1.5
-                } else {
-                    1.0
-                };
-                let tower_boost =
-                    if special == SpecialKind::TowerPark && slot.slot == slot.count / 2 {
-                        1.35
-                    } else {
-                        1.0
-                    };
+                let (landmark_boost, tower_boost) = lot_boosts(special, &slot, zone, seed);
                 let pre_boost = if steps_live {
                     landmark_boost * tower_boost
                 } else {
@@ -287,9 +277,9 @@ pub fn generate_chunk(
                 }
                 // Landmarks: a hashed share of ordinary and tower lots rises
                 // ~1.5× — the wayfinding towers above the street wall.
-                // Market sheds stay low (no landmark boost).
-                let landmark_ok = special == SpecialKind::None || special == SpecialKind::TowerPark;
-                if height > 0.0 && landmark_ok && landmark_boost > 1.0 && !landmark_folded {
+                // Market sheds stay low (their boost is 1.0; see
+                // `lot_boosts`).
+                if height > 0.0 && landmark_boost > 1.0 && !landmark_folded {
                     height = (height * landmark_boost).min(params.height_max * 1.6 + 1.0);
                 }
                 // Post-boost slenderness: landmark and tower-park bonuses
@@ -442,6 +432,29 @@ fn is_landmark(lot_id: u64, zone: ZoneType, seed: u64) -> bool {
         ZoneType::Park => return false,
     };
     hash_unit(lot_id as i64, (lot_id >> 32) as i64, seed, domain::LANDMARK) < p
+}
+
+/// Landmark (×1.5) and tower-park (×1.35) multipliers for one lot.
+///
+/// Landmark applies to ordinary and tower-park lots only — market sheds stay
+/// low — tower-park to the block's middle lot only. The caller folds them
+/// pre-step when massing steps are live, or runs the legacy post boosts
+/// below when they are not; both paths share this one decision so they can
+/// never disagree. Deterministic per `(lot, zone, seed)`.
+fn lot_boosts(special: SpecialKind, slot: &LotSlot, zone: ZoneType, seed: u64) -> (f32, f32) {
+    let landmark = if (special == SpecialKind::None || special == SpecialKind::TowerPark)
+        && is_landmark(slot.lot_id, zone, seed)
+    {
+        1.5
+    } else {
+        1.0
+    };
+    let tower = if special == SpecialKind::TowerPark && slot.slot == slot.count / 2 {
+        1.35
+    } else {
+        1.0
+    };
+    (landmark, tower)
 }
 
 /// Derive a deterministic interior key for a lot.
@@ -1398,6 +1411,146 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn boost_table_pins_market_exclusion() {
+        // The landmark/tower-park boost decision, pinned without fixture
+        // luck: scan a few lot ids for landmark-rolled ones per zone (hash
+        // draws, never hardcoded cells), then assert the table.
+        for zone in [
+            ZoneType::Downtown,
+            ZoneType::Commercial,
+            ZoneType::Industrial,
+        ] {
+            let mut lot = None;
+            for candidate in 0..5000u64 {
+                if is_landmark(candidate, zone, 99) {
+                    lot = Some(candidate);
+                    break;
+                }
+            }
+            let lot = lot.expect("no landmark lot in 5000 draws");
+            let slot = LotSlot {
+                lot_id: lot,
+                slot: 1,
+                count: 3,
+                corner: false,
+            };
+            // Market sheds never take the landmark boost, in either mode.
+            assert_eq!(lot_boosts(SpecialKind::Market, &slot, zone, 99), (1.0, 1.0));
+            // Ordinary lots take it; the caller folds it pre-step when steps
+            // are live and post when they are not.
+            assert_eq!(lot_boosts(SpecialKind::None, &slot, zone, 99), (1.5, 1.0));
+            // Tower-park middle lots take both boosts; edge lots only landmark.
+            assert_eq!(
+                lot_boosts(SpecialKind::TowerPark, &slot, zone, 99),
+                (1.5, 1.35)
+            );
+            let edge = LotSlot { slot: 0, ..slot };
+            assert_eq!(
+                lot_boosts(SpecialKind::TowerPark, &edge, zone, 99),
+                (1.5, 1.0)
+            );
+            // Park never landmarks, anywhere.
+            let park = LotSlot {
+                lot_id: lot,
+                ..slot
+            };
+            assert_eq!(
+                lot_boosts(SpecialKind::None, &park, ZoneType::Park, 99),
+                (1.0, 1.0)
+            );
+        }
+    }
+
+    #[test]
+    fn market_sheds_skip_landmark_boost() {
+        // A market lot that rolls landmark must still build at the unboosted
+        // height (capped at 10): the landmark pre-step boost is for ordinary
+        // and tower lots only. Recomputes the pipeline exactly (same
+        // replicate-the-inputs discipline as the flow sidewalk test) with
+        // boost 1.0 and requires byte-equality.
+        let mut found = 0;
+        for seed in 0..200u64 {
+            let cfg = WorldConfig {
+                seed,
+                ..Default::default()
+            };
+            assert!(cfg.is_valid());
+            let voronoi = VoronoiDiagram::generate_with_config(&cfg);
+            for (cx, cy) in [(0, 0), (40, -25), (-60, 45), (90, 10)] {
+                let buf = generate_chunk(cx, cy, &cfg, &voronoi);
+                let n = i64::from(cfg.chunk_size);
+                for ly in 0..n {
+                    for lx in 0..n {
+                        let wx = i64::from(cx) * n + lx;
+                        let wz = i64::from(cy) * n + ly;
+                        let idx = (ly * n + lx) as usize;
+                        let cell = buf.get_cell(idx);
+                        if cell.height <= 0.0 {
+                            continue;
+                        }
+                        let affinity = voronoi.query(wx as f64, wz as f64);
+                        let params = cfg.blended_zone_params(&affinity);
+                        let zone = dominant_zone(&affinity);
+                        if zone != ZoneType::Commercial && zone != ZoneType::Industrial {
+                            continue; // only market zones prove the exclusion
+                        }
+                        let frame = voronoi.district_frame_for(wx as f64, wz as f64);
+                        let block = crate::lot::block_loc(wx, wz, params.block_size, &frame);
+                        if special_for(block.bx, block.bz, zone, seed) != SpecialKind::Market {
+                            continue;
+                        }
+                        let slot = crate::lot::lot_slot(&block, params.block_size, seed);
+                        if !is_landmark(slot.lot_id, zone, seed) {
+                            continue;
+                        }
+                        // Recompute with the only boosts the market path
+                        // allows (none): assign at 1.0, shed fallback, 10.0
+                        // cap, slender re-clamp — landmark must not appear.
+                        let clump = crate::lot::block_noise(block.bx, block.bz, seed);
+                        let boost = voronoi.cbd_factor(wx as f64, wz as f64);
+                        let rect = crate::lot::lot_rect(&block, params.block_size, seed);
+                        let off = crate::lot::lot_offset(&block, params.block_size, seed);
+                        let massing = if cfg.massing_mode == 0 {
+                            None
+                        } else {
+                            Some(&cfg.massing[zone as usize])
+                        };
+                        let (mut expected_h, mut expected_p) = crate::building::assign_building(
+                            slot.lot_id,
+                            slot.corner,
+                            clump,
+                            boost,
+                            1.0,
+                            Some((wx, wz)),
+                            rect,
+                            off,
+                            massing,
+                            cfg.interior_floor_height,
+                            &params,
+                            seed,
+                        );
+                        if expected_h <= 0.0 {
+                            (expected_h, expected_p) = market_shed(slot.lot_id, &params, seed);
+                        }
+                        expected_h = expected_h.min(10.0);
+                        if expected_h > 0.0 {
+                            expected_h = expected_h
+                                .min(crate::building::slenderness_cap(&params, rect.0, rect.1));
+                        }
+                        assert_eq!(
+                            (cell.height, cell.palette_id),
+                            (expected_h, expected_p),
+                            "seed {seed} ({wx},{wz}): market shed carries a boost"
+                        );
+                        found += 1;
+                    }
+                }
+            }
+        }
+        assert!(found > 0, "no landmark-rolled market sheds sampled");
     }
 
     #[test]

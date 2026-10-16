@@ -496,6 +496,43 @@ mod tests {
     }
 
     #[test]
+    fn set_config_toggles_massing_output() {
+        // Massing rides the config rebuild path (no Voronoi impact): flipping
+        // `massing_mode` through `set_config` changes heights but never
+        // flags, and the cache clear keeps stale buffers from mixing.
+        let mut engine = WorldEngine::new(69420);
+        let mut diffs = 0;
+        for (cx, cy) in [(0, 0), (1, 1), (-1, 2)] {
+            let grammar = engine.generate_chunk(cx, cy);
+            engine.set_config(WorldConfig {
+                seed: 69420,
+                massing_mode: 0,
+                ..Default::default()
+            });
+            let legacy = engine.generate_chunk(cx, cy);
+            assert_eq!(grammar.cell_count(), legacy.cell_count());
+            for i in 0..grammar.cell_count() {
+                let (g, l) = (grammar.get_cell(i), legacy.get_cell(i));
+                assert_eq!(
+                    (g.flags, g.palette_id, g.interior_id),
+                    (l.flags, l.palette_id, l.interior_id),
+                    "massing toggle moved non-height data at ({cx},{cy}) cell {i}"
+                );
+                if g.height != l.height {
+                    diffs += 1;
+                }
+            }
+            // Restore grammar for the next chunk (proves the toggle flips
+            // back, not just off).
+            engine.set_config(WorldConfig {
+                seed: 69420,
+                ..Default::default()
+            });
+        }
+        assert!(diffs > 0, "massing toggle changed no heights");
+    }
+
+    #[test]
     fn set_chunk_size_applies_to_later_generation() {
         let mut engine = WorldEngine::new(7);
         // One chunk at the default size.

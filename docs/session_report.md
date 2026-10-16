@@ -321,6 +321,14 @@ real finds en route, both fixed with regression tests:
 * **M11 packer aliasing** (`lot.rs`): `lot_slot` partition vs `lot_rect`
   spans disagree by 1 cell at rare boundaries (B=10/n=3 proven). Offsets
   clamp into the rect; `lot_rect` untouched for byte-compat.
+* **Market landmark leak** (`src/chunk.rs`, audit fix after the M17
+  commit): the first cut folded the landmark boost pre-step for market lots
+  in mode 1 (bounded by the 10 m shed cap, but against the spec's "market
+  sheds stay low"). Fixed by gating on the ordinary/tower-park exclusion,
+  then extracting the shared `lot_boosts` helper with a luck-free unit test
+  plus the full-pipeline market recomputation sweep. Lesson: `min()` caps
+  mask boost bugs — a discriminating gate (`raw < cap`) matters more than
+  fixture count.
 * Also: `LAYOUT_PICK`–`LAYOUT_FURNITURE` leaked into `urbix.h` since M9
   (only CORE/WET excluded) — fixed with the `MASS_*` excludes. Boost
   placement made mode-aware (`steps_live`) so flat == legacy bit-exactly.

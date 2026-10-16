@@ -40,7 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `lot::lot_offset`, snaps rules from the dominant zone, folds landmark
     (×1.5) and tower-park (×1.35) boosts pre-step only when steps are live —
     `massing_mode = 0` and flat tables share the legacy post-boost path, so
-    flat output is byte-identical in every mode (gateway-tested).
+    flat output is byte-identical in every mode (gateway-tested). The boost
+    decision lives in one `lot_boosts` helper shared by both paths (audit:
+    market sheds are excluded from the landmark boost in every mode).
   - `src/lot.rs`: new `lot_offset` helper (offsets always inside the rect;
     clamps the rare M11 pack-boundary alias cells, with the aliasing
     documented and `lot_rect` deliberately untouched for byte-compat).

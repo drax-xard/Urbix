@@ -54,10 +54,9 @@ use crate::zones::ZoneParams;
 /// - `lot_offset`: the cell's `(ox, oz)` position inside its lot from
 ///   `lot::lot_offset` — drives the massing ring/roof math. Ignored when
 ///   `massing` is `None`.
-/// - `massing`: split-grammar rules for the dominant zone, plus the floor
-///   height that converts podium floors to metres. `None` keeps the legacy
-///   flat extrude (M17 `massing_mode = 0`); `Some` with a flat table is
-///   bit-identical to `None` (see `massing::is_flat`).
+/// - `massing`: split-grammar rules for the dominant zone, or `None` to keep
+///   the legacy flat extrude (M17 `massing_mode = 0`). `Some` with a flat
+///   table is bit-identical to `None` (see `massing::is_flat`).
 /// - `floor_height`: metres per storey (`WorldConfig::interior_floor_height`);
 ///   only read when `massing` is `Some`.
 ///

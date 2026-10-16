@@ -302,6 +302,11 @@ consume `MassingParams`, not the reverse.
   clamp into the rect there (aliased cells read as edge ring —
   deterministic and seamless); `lot_rect` itself is deliberately untouched
   so slenderness caps and interior footprints stay byte-compatible.
+* [AS-BUILT] The boost decision lives in one `lot_boosts` helper shared by
+  the pre- and post-step paths so they can never disagree (audit fix: the
+  first cut applied the landmark boost to market lots in mode 1 — bounded by
+  the 10 m shed cap, but against the spec's "market sheds stay low"; pinned
+  by a luck-free unit test plus a full-pipeline market recomputation test).
 * [AS-BUILT] Validation at seed 69420 / extent 8 (the session's locked pair):
   `walkability` + `interiors_gate` green, bench delta inside 1.1×, `viz`
   overhead + `walk` eyeballed. Single-storey interpretation locked:
