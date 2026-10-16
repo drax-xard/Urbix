@@ -4,8 +4,11 @@
 //!
 //! WASD / drag pans `WorldEngine::set_center` + streaming `generate_chunk`.
 //! Wheel zooms, extent slider controls visible grid, mode toggles `hybrid` vs
-//! `affinity`, interior dots show `interior_id != 0`. HUD shows
+//! `affinity` vs `walk` vs `massing` (podium/tower/crown readout, M17),
+//! interior dots show `interior_id != 0`. HUD shows
 //! `generated_count` / `cache_len` proving bounded LRU.
+//!
+//! Flow avenues (M16 desire paths) draw teal apart from lattice arterials.
 //!
 //! Click any cell to select it: the controls panel then reports the interior
 //! mini-world for the selected lot (zone, floors, entrance side, per-storey
@@ -33,6 +36,17 @@ const ARTERIAL_RGB: [u8; 3] = [86, 72, 110];
 const SIDEWALK_RGB: [u8; 3] = [118, 118, 128];
 const PLAZA_RGB: [u8; 3] = [216, 200, 160];
 const GREENWAY_RGB: [u8; 3] = [140, 205, 120];
+/// Walk-mode park green: vivid so green masses pop against pavement.
+const WALK_PARK_RGB: [u8; 3] = [64, 170, 80];
+/// Walk-mode building mass: dark silhouette so the ground plane leads.
+const WALK_BUILDING_RGB: [u8; 3] = [28, 32, 44];
+/// Flow-avenue tint (Milestone 16): grown boulevards read apart from the
+/// lattice arterials.
+const FLOW_RGB: [u8; 3] = [52, 186, 174];
+/// Massing-mode podium edge (Milestone 17): street-wall ring cells.
+const PODIUM_RGB: [u8; 3] = [206, 134, 44];
+/// Massing-mode crowned core: lots whose crown roll hit, inner cells only.
+const CROWN_RGB: [u8; 3] = [255, 210, 90];
 
 fn dominant_zone(cell: &Cell) -> usize {
     let mut best = 0;
@@ -73,7 +87,21 @@ fn colour_cell(cell: &Cell, mode: &str, config: &WorldConfig) -> [u8; 3] {
     if mode == "affinity" {
         return hue;
     }
-    let params = urbix::zones::zone_params(&cell.zone_affinity);
+    if mode == "walk" {
+        if cell.flags.contains(CellFlags::IS_PARK) {
+            return WALK_PARK_RGB;
+        }
+        if cell.height <= 0.0 {
+            return hue;
+        }
+        return WALK_BUILDING_RGB;
+    }
+    hybrid_brighten(cell, hue, config)
+}
+
+/// Brighten a zone hue toward white by building height (hybrid core).
+fn hybrid_brighten(cell: &Cell, hue: [u8; 3], config: &WorldConfig) -> [u8; 3] {
+    let params = config.blended_zone_params(&cell.zone_affinity);
     let scale = if params.height_max > f32::EPSILON {
         (cell.height / params.height_max).clamp(0.0, 1.0)
     } else {
@@ -85,6 +113,44 @@ fn colour_cell(cell: &Cell, mode: &str, config: &WorldConfig) -> [u8; 3] {
         to_u8(hue[1], scale),
         to_u8(hue[2], scale),
     ]
+}
+
+/// Massing-mode colour for a built cell (Milestone 17): podium edge, tower
+/// core, or crowned core — recomputed through the same public helpers
+/// generation uses. Unstepped rules (flat tables) fall back to hybrid.
+fn massing_role_colour(
+    cell: &Cell,
+    config: &WorldConfig,
+    voronoi: &urbix::region::VoronoiDiagram,
+    world_x: i64,
+    world_z: i64,
+) -> [u8; 3] {
+    use urbix::lot::{block_loc, lot_offset, lot_rect, lot_slot};
+    use urbix::massing::{is_flat, lot_crowns, massing_ring};
+    let zone = dominant_zone(cell);
+    let mp = &config.massing[zone];
+    let hue = config
+        .zone_hues
+        .get(zone)
+        .copied()
+        .unwrap_or(ZONE_HUES[zone]);
+    if is_flat(mp) {
+        return hybrid_brighten(cell, hue, config);
+    }
+    let params = config.blended_zone_params(&cell.zone_affinity);
+    let frame = voronoi.district_frame_for(world_x as f64, world_z as f64);
+    let block = block_loc(world_x, world_z, params.block_size, &frame);
+    let rect = lot_rect(&block, params.block_size, config.seed);
+    let off = lot_offset(&block, params.block_size, config.seed);
+    let ring = massing_ring(rect, off);
+    if ring < mp.tower_inset {
+        return PODIUM_RGB;
+    }
+    let slot = lot_slot(&block, params.block_size, config.seed);
+    if lot_crowns(slot.lot_id, mp, config.seed) {
+        return CROWN_RGB;
+    }
+    hybrid_brighten(cell, hue, config)
 }
 
 struct App {
@@ -170,15 +236,23 @@ impl App {
     }
 }
 
-/// Legend glyph for a tile (shared with `examples/cli_demo.rs` / `viz.rs`).
-fn tile_glyph(tile: Tile, kind: u8) -> char {
+/// Legend glyph for a tile (shared with `examples/cli_demo.rs` / `viz.rs`;
+/// furnished rooms print uppercase, M15).
+fn tile_glyph(tile: Tile, kind: u8, furn: u8) -> char {
     match tile {
         Tile::Void => '.',
         Tile::Wall => '#',
         Tile::Door => 'D',
         Tile::Core => '+',
         Tile::Corridor => ' ',
-        Tile::Room => char::from(b'a' + kind % 26),
+        Tile::Room => {
+            let c = char::from(b'a' + kind % 26);
+            if furn == 0 {
+                c
+            } else {
+                c.to_ascii_uppercase()
+            }
+        }
     }
 }
 
@@ -190,16 +264,21 @@ fn floor_rows(floor: &Floor) -> Vec<String> {
             let mut row = String::with_capacity(w);
             for x in 0..w {
                 let i = z * w + x;
-                row.push(tile_glyph(floor.tiles[i], floor.kinds[i]));
+                row.push(tile_glyph(floor.tiles[i], floor.kinds[i], floor.furn[i]));
             }
             row
         })
         .collect()
 }
 
-/// Compact interior summary shown in the side panel: the lot's context, the
-/// blueprint that shaped it, and one line of room/circulation stats per storey.
-fn selection_summary(sel: &Selection) -> String {
+/// Compact interior summary shown in the side panel: the lot's context, its
+/// massing role (Milestone 17), the blueprint that shaped it, and one line of
+/// room/circulation stats per storey.
+fn selection_summary(
+    sel: &Selection,
+    config: &WorldConfig,
+    voronoi: &urbix::region::VoronoiDiagram,
+) -> String {
     let mut out = format!("selected cell ({}, {})\n", sel.world_x, sel.world_z);
     let layout = match &sel.layout {
         Some(layout) => layout,
@@ -210,6 +289,40 @@ fn selection_summary(sel: &Selection) -> String {
         "zone {:?}, footprint {}x{}, {} floor(s), entrance {:?}\n",
         ctx.zone, ctx.footprint_w, ctx.footprint_d, ctx.floor_count, ctx.door_side
     ));
+    // Massing readout (Milestone 17): the split-grammar rule for the lot's
+    // dominant zone plus this cell's role in it.
+    {
+        use urbix::lot::{block_loc, lot_offset, lot_rect, lot_slot};
+        use urbix::massing::{lot_crowns, massing_ring, podium_top};
+        let params = config.blended_zone_params(&ctx.zone_affinity);
+        let frame = voronoi.district_frame_for(sel.world_x as f64, sel.world_z as f64);
+        let block = block_loc(sel.world_x, sel.world_z, params.block_size, &frame);
+        let slot = lot_slot(&block, params.block_size, config.seed);
+        let rect = lot_rect(&block, params.block_size, config.seed);
+        let off = lot_offset(&block, params.block_size, config.seed);
+        let mp = &config.massing[ctx.zone as usize];
+        let ring = massing_ring(rect, off);
+        let roof = ["flat", "pitched", "sawtooth"]
+            .get(usize::from(mp.roof_mode))
+            .copied()
+            .unwrap_or("unknown");
+        let role = if ring < mp.tower_inset {
+            "podium edge"
+        } else if lot_crowns(slot.lot_id, mp, config.seed) {
+            "crowned core"
+        } else {
+            "tower core"
+        };
+        out.push_str(&format!(
+            "massing: {:?} podium {} floors/inset {} {} roof crown {:.0}% — ring {ring} (top {:.1} m), {role}\n",
+            ctx.zone,
+            mp.podium_floors,
+            mp.tower_inset,
+            roof,
+            mp.crown_share * 100.0,
+            podium_top(mp, config.interior_floor_height)
+        ));
+    }
     for (f, floor) in layout.floors.iter().enumerate() {
         let mut rooms = 0;
         let mut corridors = 0;
@@ -280,6 +393,8 @@ impl eframe::App for App {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.mode, "hybrid".to_string(), "hybrid");
                 ui.selectable_value(&mut self.mode, "affinity".to_string(), "affinity");
+                ui.selectable_value(&mut self.mode, "walk".to_string(), "walk");
+                ui.selectable_value(&mut self.mode, "massing".to_string(), "massing");
             });
             ui.separator();
             ui.label(format!(
@@ -301,7 +416,11 @@ impl eframe::App for App {
                 self.selection = None;
             } else if let Some(sel) = &mut self.selection {
                 ui.monospace(format!("selected cell ({}, {})", sel.world_x, sel.world_z));
-                ui.monospace(selection_summary(sel));
+                ui.monospace(selection_summary(
+                    sel,
+                    self.engine.config(),
+                    self.engine.voronoi(),
+                ));
                 if let Some(layout) = &sel.layout {
                     if !layout.floors.is_empty() {
                         let max = layout.floors.len() - 1;
@@ -366,7 +485,30 @@ impl eframe::App for App {
                         for lx in 0..cs {
                             let idx = (ly * cs + lx) as usize;
                             let cell = chunk.get_cell(idx);
-                            let rgb = colour_cell(&cell, &self.mode, self.engine.config());
+                            let world_x = i64::from(start_cx + cx) * i64::from(cs) + i64::from(lx);
+                            let world_z = i64::from(start_cy + cy) * i64::from(cs) + i64::from(ly);
+                            let mut rgb = if self.mode == "massing" && cell.height > 0.0 {
+                                massing_role_colour(
+                                    &cell,
+                                    self.engine.config(),
+                                    self.engine.voronoi(),
+                                    world_x,
+                                    world_z,
+                                )
+                            } else {
+                                colour_cell(&cell, &self.mode, self.engine.config())
+                            };
+                            // Flow avenues read apart from the lattice grid.
+                            if (self.mode == "hybrid" || self.mode == "walk")
+                                && cell.flags.contains(CellFlags::IS_ARTERIAL)
+                                && self.engine.voronoi().flow_arterial_at(
+                                    world_x as f64,
+                                    world_z as f64,
+                                    self.engine.config().flow_half_width,
+                                )
+                            {
+                                rgb = FLOW_RGB;
+                            }
                             let x = origin.x + (cx * cs + lx) as f32 * cell_px;
                             let y = origin.y + (cy * cs + ly) as f32 * cell_px;
                             let r = egui::Rect::from_min_size(

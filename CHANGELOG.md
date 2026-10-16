@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Visualizers cover the current framework** (examples only, no library
+  change):
+  - `viz --mode massing`: M17 split-grammar readout — podium edges amber,
+    tower cores in their brightened zone hue, crowned cores gold (unstepped
+    rules fall back to hybrid); paved cells keep the hierarchy colours.
+  - Flow avenues (M16) draw teal apart from lattice arterials in `viz`
+    hybrid/walk and the `interactive` explorer.
+  - `viz`/`interactive` colour through `config.blended_zone_params` and the
+    configured hues (were using the legacy blend + compiled-in hues).
+  - `viz --inspect` report and the interactive selection panel gained the
+    M17 massing readout (rule + ring + podium top + podium/crowned/core
+    role); interactive ASCII maps show furnished rooms uppercase (M15) and
+    the mode toggle covers hybrid/affinity/walk/massing.
+  - `walkability` prints M17 massing role shares (podium/tower/crowned/flat
+    of built cells) after the junction census; gate unchanged.
 - **Satellite budget/plan (pending)**: new `docs/satellites.md` with realistic
   budgets for the two recommended non-fork satellites — WASM component
   (5–6 pd) and streaming server, Rust-axum first (5.5–7.5 pd, Go port +3–4) —

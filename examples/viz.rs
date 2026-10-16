@@ -13,12 +13,18 @@
 //! - **Hybrid mode (default)**: each cell is tinted by its district's zone
 //!   colour, then brightened toward white by building height (tall = bright,
 //!   so the skyline reads instantly). Paved cells draw the ground-plane
-//!   hierarchy instead (arterial / street / sidewalk / plaza).
+//!   hierarchy instead (arterial / street / sidewalk / plaza). Flow avenues
+//!   (M16 desire paths) draw teal so grown boulevards read apart from the
+//!   lattice grid.
 //! - **Affinity mode** (`--mode affinity`): shows the *dominant* zone per
 //!   cell as a flat district map, ignoring height.
 //! - **Walk mode** (`--mode walk`): the pedestrian's map — paved hierarchy in
 //!   high-contrast tones, parks vivid green, buildings as dark masses so the
-//!   walkable ground reads first.
+//!   walkable ground reads first (flow avenues stay teal).
+//! - **Massing mode** (`--mode massing`): the split-grammar readout (M17) —
+//!   podium edges amber, tower cores in their brightened zone hue, crowned
+//!   cores gold; unstepped rules fall back to hybrid. Paved cells keep the
+//!   hierarchy colours for orientation.
 //!
 //! Two files are always written:
 //! - `.ppm` — P6 binary PPM, written by hand (zero dependencies).
@@ -40,7 +46,7 @@
 //! - `--center-cy <i32>`     chunk row at the grid centre (default 0)
 //! - `--extent <u32>`        chunks per side (default 16; 16 → 512×512 px)
 //! - `--chunk-size <u16>`    cells per chunk side (default 32)
-//! - `--mode <hybrid|affinity|walk>` colouring (default hybrid)
+//! - `--mode <hybrid|affinity|walk|massing>` colouring (default hybrid)
 //! - `--out <path>`          output base path (default `out`)
 //! - `--inspect <wx,wz>`     print the interior report for the cell at absolute
 //!   world coordinates `(wx,wz)` after rendering (see `examples/cli_demo.rs`)
@@ -53,6 +59,8 @@ use urbix::config::WorldConfig;
 use urbix::data::{Cell, CellFlags, ZONE_COUNT};
 use urbix::interior::generate_layout_with_ground;
 use urbix::layout::{Floor, Tile};
+use urbix::lot::{block_loc, lot_offset, lot_rect, lot_slot};
+use urbix::massing::{is_flat, lot_crowns, massing_ring};
 use urbix::region::VoronoiDiagram;
 
 /// Base hue (RGB before height brightening) for each district.
@@ -79,6 +87,13 @@ const PLAZA_RGB: [u8; 3] = [216, 200, 160];
 const WALK_PARK_RGB: [u8; 3] = [64, 170, 80];
 /// Walk-mode building mass: dark silhouette so the ground plane leads.
 const WALK_BUILDING_RGB: [u8; 3] = [28, 32, 44];
+/// Flow-avenue tint (Milestone 16): grown boulevards read apart from the
+/// lattice arterials in hybrid/walk modes.
+const FLOW_RGB: [u8; 3] = [52, 186, 174];
+/// Massing-mode podium edge (Milestone 17): street-wall ring cells.
+const PODIUM_RGB: [u8; 3] = [206, 134, 44];
+/// Massing-mode crowned core: lots whose crown roll hit, inner cells only.
+const CROWN_RGB: [u8; 3] = [255, 210, 90];
 
 /// Parse a `--key value` argument list into a simple string map.
 fn parse_args() -> Vec<(String, String)> {
@@ -102,9 +117,11 @@ fn get<'a>(args: &'a [(String, String)], key: &str) -> Option<&'a str> {
         .map(|(_, v)| v.as_str())
 }
 
-/// Compute the blended `ZoneParams` for a cell from its affinity vector.
-fn zone_params_of(cell: &Cell) -> urbix::zones::ZoneParams {
-    urbix::zones::zone_params(&cell.zone_affinity)
+/// Compute the blended `ZoneParams` for a cell from its affinity vector,
+/// through the config (heights/density blend; block size snaps from the
+/// dominant zone — the same resolution generation uses).
+fn zone_params_of(cell: &Cell, config: &WorldConfig) -> urbix::zones::ZoneParams {
+    config.blended_zone_params(&cell.zone_affinity)
 }
 
 /// The dominant zone index for a cell (argmax over affinity).
@@ -126,8 +143,9 @@ fn dominant_zone(cell: &Cell) -> usize {
 /// sidewalk, street) and skip building/grading logic. In affinity mode the
 /// flat dominant-zone hue is returned. Walk mode mutes buildings to dark
 /// masses and pops parks so the pedestrian network reads first; hybrid mode
-/// brightens the zone hue by building height.
-fn colour_cell(cell: &Cell, mode: &str) -> [u8; 3] {
+/// brightens the zone hue by height. Massing mode is resolved by the caller
+/// (see `massing_role_colour`); this function covers the shared ground.
+fn colour_cell(cell: &Cell, mode: &str, config: &WorldConfig) -> [u8; 3] {
     // Paved hierarchy first (plaza keeps IS_STREET, so test it first).
     if cell.flags.contains(CellFlags::IS_PLAZA) {
         return PLAZA_RGB;
@@ -151,7 +169,12 @@ fn colour_cell(cell: &Cell, mode: &str) -> [u8; 3] {
     }
 
     let zone = dominant_zone(cell);
-    let hue = ZONE_HUES[zone];
+    // Prefer the config's hues (modular customization); fallback to compiled-in.
+    let hue = config
+        .zone_hues
+        .get(zone)
+        .copied()
+        .unwrap_or(ZONE_HUES[zone]);
 
     if mode == "affinity" {
         return hue;
@@ -169,7 +192,12 @@ fn colour_cell(cell: &Cell, mode: &str) -> [u8; 3] {
     // Hybrid: brighten the zone hue by height so the skyline reads. Normalize
     // against the blended zone max height so each district's range fills the
     // full brightness band. Guard the degenerate max==0 case.
-    let params = zone_params_of(cell);
+    hybrid_brighten(cell, hue, config)
+}
+
+/// Brighten a zone hue toward white by building height (hybrid core).
+fn hybrid_brighten(cell: &Cell, hue: [u8; 3], config: &WorldConfig) -> [u8; 3] {
+    let params = zone_params_of(cell, config);
     let scale = if params.height_max > f32::EPSILON {
         (cell.height / params.height_max).clamp(0.0, 1.0)
     } else {
@@ -181,6 +209,43 @@ fn colour_cell(cell: &Cell, mode: &str) -> [u8; 3] {
         to_u8(hue[1], scale),
         to_u8(hue[2], scale),
     ]
+}
+
+/// Massing-mode colour for a built cell (Milestone 17): podium edge, tower
+/// core, or crowned core — recomputed through the same public helpers
+/// generation uses, so the map shows exactly what the steps did. Unstepped
+/// rules (flat tables) fall back to the hybrid brightening.
+fn massing_role_colour(
+    cell: &Cell,
+    config: &WorldConfig,
+    voronoi: &VoronoiDiagram,
+    world_x: i64,
+    world_z: i64,
+) -> [u8; 3] {
+    let zone = dominant_zone(cell);
+    let mp = &config.massing[zone];
+    let hue = config
+        .zone_hues
+        .get(zone)
+        .copied()
+        .unwrap_or(ZONE_HUES[zone]);
+    if is_flat(mp) {
+        return hybrid_brighten(cell, hue, config);
+    }
+    let params = config.blended_zone_params(&cell.zone_affinity);
+    let frame = voronoi.district_frame_for(world_x as f64, world_z as f64);
+    let block = block_loc(world_x, world_z, params.block_size, &frame);
+    let rect = lot_rect(&block, params.block_size, config.seed);
+    let off = lot_offset(&block, params.block_size, config.seed);
+    let ring = massing_ring(rect, off);
+    if ring < mp.tower_inset {
+        return PODIUM_RGB;
+    }
+    let slot = lot_slot(&block, params.block_size, config.seed);
+    if lot_crowns(slot.lot_id, mp, config.seed) {
+        return CROWN_RGB;
+    }
+    hybrid_brighten(cell, hue, config)
 }
 
 /// Render a grid of chunks into a flat RGB pixel buffer (one pixel per cell).
@@ -212,10 +277,26 @@ fn render(
                 for x in 0..n {
                     let cell = chunk.get_cell(index);
                     index += 1;
+                    let wx = i64::from(start_cx + cx as i32) * i64::from(n) + i64::from(x);
+                    let wz = i64::from(start_cy + cy as i32) * i64::from(n) + i64::from(y);
                     let px = cx * u32::from(config.chunk_size) + x as u32;
                     let py = cy * u32::from(config.chunk_size) + y as u32;
                     let dst = ((py * grid_w + px) * 3) as usize;
-                    let rgb = colour_cell(&cell, mode);
+                    let mut rgb = if mode == "massing" && cell.height > 0.0 {
+                        massing_role_colour(&cell, config, voronoi, wx, wz)
+                    } else {
+                        colour_cell(&cell, mode, config)
+                    };
+                    // Flow avenues (Milestone 16) read apart from the lattice
+                    // grid in hybrid/walk: grown boulevards draw teal. The
+                    // query is world-space and chunk-consistent, like the
+                    // pipeline's own check.
+                    if (mode == "hybrid" || mode == "walk")
+                        && cell.flags.contains(CellFlags::IS_ARTERIAL)
+                        && voronoi.flow_arterial_at(wx as f64, wz as f64, config.flow_half_width)
+                    {
+                        rgb = FLOW_RGB;
+                    }
                     pixels[dst] = rgb[0];
                     pixels[dst + 1] = rgb[1];
                     pixels[dst + 2] = rgb[2];
@@ -345,6 +426,42 @@ pub fn interior_report(
         ));
     }
 
+    // Massing readout (Milestone 17): the split-grammar rule for the cell's
+    // dominant zone plus this cell's role in it (podium edge / tower core /
+    // crowned), recomputed through the same public helpers generation uses.
+    {
+        use urbix::lot::{block_loc, lot_offset, lot_rect, lot_slot};
+        use urbix::massing::{lot_crowns, massing_ring, podium_top};
+        let params = config.blended_zone_params(&cell.zone_affinity);
+        let frame = voronoi.district_frame_for(world_x as f64, world_z as f64);
+        let block = block_loc(world_x, world_z, params.block_size, &frame);
+        let slot = lot_slot(&block, params.block_size, config.seed);
+        let rect = lot_rect(&block, params.block_size, config.seed);
+        let off = lot_offset(&block, params.block_size, config.seed);
+        let mp = &config.massing[ctx.zone as usize];
+        let ring = massing_ring(rect, off);
+        let roof = ["flat", "pitched", "sawtooth"]
+            .get(usize::from(mp.roof_mode))
+            .copied()
+            .unwrap_or("unknown");
+        let role = if ring < mp.tower_inset {
+            "podium edge"
+        } else if lot_crowns(slot.lot_id, mp, config.seed) {
+            "crowned core"
+        } else {
+            "tower core"
+        };
+        out.push_str(&format!(
+            "massing: {:?} podium {} floors/inset {} {} roof crown {:.0}% — cell ring {ring} (podium top {:.1} m), {role}\n",
+            ctx.zone,
+            mp.podium_floors,
+            mp.tower_inset,
+            roof,
+            mp.crown_share * 100.0,
+            podium_top(mp, config.interior_floor_height)
+        ));
+    }
+
     let layout = {
         let ground =
             urbix::interior::resolve_ground_override(&ctx, &bp, &config.interior_blueprints);
@@ -437,6 +554,7 @@ fn main() -> ExitCode {
     let mode = match get(&args, "mode") {
         Some("affinity") => "affinity",
         Some("walk") => "walk",
+        Some("massing") => "massing",
         _ => "hybrid",
     };
     let out_base = get(&args, "out").unwrap_or("out").to_string();

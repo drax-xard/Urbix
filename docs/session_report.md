@@ -333,3 +333,27 @@ real finds en route, both fixed with regression tests:
   (only CORE/WET excluded) — fixed with the `MASS_*` excludes. Boost
   placement made mode-aware (`steps_live`) so flat == legacy bit-exactly.
   `cli_demo` gained a per-cell massing line (no lot-stats section existed).
+
+## Session 5 — visualizers catch up to the framework (2026-10-16)
+
+`viz` + `interactive` + `walkability` predated M13–M17 in places. Updated,
+no library changes:
+
+* `viz --mode massing`: podium amber / tower-core hybrid-bright / crowned
+  gold (unstepped rules fall back to hybrid); paved keep hierarchy colours.
+  Verified by pixel census at 69420/8 (10k podium, 7.8k crown).
+* Flow avenues draw teal apart from lattice arterials (`viz` hybrid/walk,
+  `interactive` all ground modes). Verified off-center at the path-2
+  midpoint (984 teal px) — the locked 69420/8 window has no flow avenues,
+  which is why the center renders show none.
+* `viz`/`interactive` colour through `config.blended_zone_params` + config
+  hues (were using the legacy blend + compiled-in hues; pixel-identical on
+  defaults, correct on custom files).
+* `viz --inspect` and the interactive selection panel gained the M17
+  massing readout (same block as `cli_demo`, kept in sync by hand per the
+  M11 duplication precedent); interactive ASCII maps show furnished rooms
+  uppercase (M15); mode toggle covers hybrid/affinity/walk/massing.
+* `walkability` prints massing role shares (podium 29.4 / tower 47.8 /
+  crowned 22.8 / flat 0.0 at 69420/8); gate unchanged.
+* `interactive` compiles (eframe) but was not run — no display in this
+  environment; needs a human run-through.

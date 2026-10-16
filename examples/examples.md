@@ -40,19 +40,25 @@ Flags (simple `--key value` parser, no `--help`):
 ## `viz` — 2D city visualizer → images
 
 Generates an `extent × extent` grid of chunks and writes `.ppm` + `.png`
-files (one pixel per cell). Three colouring modes:
+files (one pixel per cell). Four colouring modes:
 
 - **hybrid (default)** — zone colour, brightened by building height (tall =
   bright skyline); paved hierarchy drawn as roads (arterials brighter,
-  sidewalks pale, plazas warm)
+  sidewalks pale, plazas warm); M16 flow avenues draw teal apart from the
+  lattice grid
 - **affinity** — flat per-cell dominant-zone map
 - **walk** — pedestrian map: paved hierarchy in high contrast, parks vivid
-  green, buildings as dark masses so the walkable ground reads first
+  green, buildings as dark masses so the walkable ground reads first (flow
+  avenues stay teal)
+- **massing** — M17 split-grammar readout: podium edges amber, tower cores in
+  their brightened zone hue, crowned cores gold (unstepped rules fall back to
+  hybrid); paved cells keep the hierarchy colours for orientation
 
 ```sh
 cargo run --release --example viz                       # default seed 0, extent 16 → out-*.png
 cargo run --release --example viz -- --seed 445566 --extent 32 --mode affinity
 cargo run --release --example viz -- --seed 445566 --extent 16 --mode walk
+cargo run --release --example viz -- --seed 69420 --extent 8 --mode massing
 cargo run --release --example viz -- --seed 445566 --inspect 120,400   # + interior report for world cell (120,400)
 ```
 
@@ -62,17 +68,19 @@ Flags:
 - `--center-cx <i32>` / `--center-cy <i32>` — chunk at the grid centre (default 0)
 - `--extent <u32>` — chunks per side (default 16; 16 → 512×512 px)
 - `--chunk-size <u16>` — cells per chunk side (default 32)
-- `--mode <hybrid|affinity|walk>` — colouring (default hybrid)
+- `--mode <hybrid|affinity|walk|massing>` — colouring (default hybrid)
 - `--out <path>` — output base path (default `out`)
 - `--inspect <wx,wz>` — print the interior report for the cell at absolute
-  world coordinates `(wx,wz)` after rendering (same output as `cli_demo`)
+  world coordinates `(wx,wz)` after rendering (same output as `cli_demo`,
+  including the M17 massing readout)
 
 ## `walkability` — walkability metrics (headless acceptance)
 
 Drives the public pipeline over an `extent × extent` grid and prints
 ground-plane statistics (scale canon: 1 cell = 4 m): paved shares, plaza
 counts, mean uninterrupted street-wall length, junction census, tall-cell
-density per km², and the ranked flow desire paths behind the arterial share
+density per km², the M17 massing role shares (podium/tower/crowned/flat of
+built cells), and the ranked flow desire paths behind the arterial share
 (M16). Exits 1 on degenerate fabric, so CI can gate on it.
 
 ```sh
@@ -100,15 +108,17 @@ No flags: seeds and windows are fixed so the gate is deterministic.
 
 An egui/eframe window that pans/zooms over the infinite world, proving bounded
 LRU streaming (`generated`/`cache` HUD), and lets you **click a cell** to see
-its interior beside the map: zone, per-storey room/corridor stats, a storey
-slider, and a live ASCII map of the chosen floor.
+its interior beside the map: zone, massing role (M17), per-storey
+room/corridor stats, a storey slider, and a live ASCII map of the chosen
+floor (furnished rooms uppercase, M15).
 
 ```sh
 cargo run --release --example interactive
 ```
 
-Controls: WASD/Arrows pan, wheel zooms, extent/zoom sliders, hybrid/affinity
-toggle, click a lot to inspect, "clear selection ✕" to dismiss.
+Controls: WASD/Arrows pan, wheel zooms, extent/zoom sliders,
+hybrid/affinity/walk/massing toggle (flow avenues draw teal), click a lot to
+inspect, "clear selection ✕" to dismiss.
 
 ## `basic_usage.c` — the C FFI entry point
 

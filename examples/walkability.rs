@@ -1,11 +1,13 @@
 //! # walkability.rs — walkability metrics for the generated city
 //!
-//! A headless acceptance check for Milestones 11–12 (plus 16 flow avenues):
-//! generates an `extent × extent` grid of chunks and reports ground-plane
-//! statistics — paved shares (streets, arterials, sidewalks, plazas,
-//! greenways), plaza counts, mean uninterrupted street-wall length, junction
-//! mix, tall-cell density per km² (scale canon: 1 cell = 4 m, so one cell is
-//! 16 m²), and the ranked desire paths behind the arterial share.
+//! A headless acceptance check for Milestones 11–12 (plus 16 flow avenues,
+//! plus the 17 massing census): generates an `extent × extent` grid of chunks
+//! and reports ground-plane statistics — paved shares (streets, arterials,
+//! sidewalks, plazas, greenways), plaza counts, mean uninterrupted street-wall
+//! length, junction mix, tall-cell density per km² (scale canon: 1 cell = 4 m,
+//! so one cell is 16 m²), the massing role shares behind the skyline
+//! (podium/tower/crowned/flat), and the ranked desire paths behind the
+//! arterial share.
 //!
 //! ## Usage
 //!
@@ -30,8 +32,22 @@ use std::process::ExitCode;
 use urbix::chunk::generate_chunk;
 use urbix::config::WorldConfig;
 use urbix::data::CellFlags;
-use urbix::lot::block_loc;
+use urbix::lot::{block_loc, lot_offset, lot_rect, lot_slot};
+use urbix::massing::{is_flat, lot_crowns, massing_ring};
 use urbix::region::VoronoiDiagram;
+
+/// The dominant zone index for a cell (argmax over affinity).
+fn dominant_zone(affinity: &[f32; urbix::data::ZONE_COUNT]) -> usize {
+    let mut best = 0usize;
+    let mut best_w = -1.0f32;
+    for (i, w) in affinity.iter().enumerate() {
+        if *w > best_w {
+            best = i;
+            best_w = *w;
+        }
+    }
+    best
+}
 
 /// Parse a `--key value` argument list into a simple string map.
 fn parse_args() -> Vec<(String, String)> {
@@ -107,6 +123,12 @@ fn main() -> ExitCode {
     let mut built = 0u64;
     let mut landmark_tall = 0u64;
     let mut junctions = 0u64;
+    // Massing role census (Milestone 17): how built cells split across
+    // podium edges, tower cores, crowned cores, and unstepped (flat) rules.
+    let mut massing_podium = 0u64;
+    let mut massing_tower = 0u64;
+    let mut massing_crowned = 0u64;
+    let mut massing_flat = 0u64;
     // Longest built run per grid row, for the street-wall continuity mean.
     // Rows are tracked in absolute world-z bands across the whole extent.
     let mut row_run = 0u64;
@@ -141,6 +163,12 @@ fn main() -> ExitCode {
                     let mut run = row_run;
 
                     let f = cell.flags;
+                    // Lot geometry from the same framed pipeline generation
+                    // uses: feeds the junction census and the massing census
+                    // below, so metrics agree with the generator exactly.
+                    let params = config.blended_zone_params(&cell.zone_affinity);
+                    let frame = voronoi.district_frame_for(wx as f64, wz as f64);
+                    let block = block_loc(wx, wz, params.block_size, &frame);
                     if f.contains(CellFlags::IS_STREET) {
                         street += 1;
                         run = 0;
@@ -167,9 +195,27 @@ fn main() -> ExitCode {
                         built += 1;
                         run += 1;
                         // Landmark proxy: clearly above its blended band.
-                        let band = config.blended_zone_params(&cell.zone_affinity);
-                        if cell.height > band.height_max * 1.3 {
+                        if cell.height > params.height_max * 1.3 {
                             landmark_tall += 1;
+                        }
+                        // Massing role: which step shaped this cell.
+                        let zone = dominant_zone(&cell.zone_affinity);
+                        let mp = &config.massing[zone];
+                        if is_flat(mp) {
+                            massing_flat += 1;
+                        } else {
+                            let rect = lot_rect(&block, params.block_size, config.seed);
+                            let off = lot_offset(&block, params.block_size, config.seed);
+                            if massing_ring(rect, off) < mp.tower_inset {
+                                massing_podium += 1;
+                            } else {
+                                let slot = lot_slot(&block, params.block_size, config.seed);
+                                if lot_crowns(slot.lot_id, mp, config.seed) {
+                                    massing_crowned += 1;
+                                } else {
+                                    massing_tower += 1;
+                                }
+                            }
                         }
                     } else if !f.contains(CellFlags::IS_PARK) {
                         run = 0;
@@ -182,10 +228,7 @@ fn main() -> ExitCode {
                     // Junction census in the district frame: intersections
                     // (both axes on the boundary) split 4-way vs T by whether
                     // all four arms read as street in the same frame.
-                    let params = config.blended_zone_params(&cell.zone_affinity);
-                    let frame = voronoi.district_frame_for(wx as f64, wz as f64);
-                    let loc = block_loc(wx, wz, params.block_size, &frame);
-                    if loc.rx == 0 && loc.rz == 0 {
+                    if block.rx == 0 && block.rz == 0 {
                         junctions += 1;
                     }
                 }
@@ -226,6 +269,14 @@ fn main() -> ExitCode {
     println!(
         "  junctions: {junctions} intersections ({:.1}/km2)",
         junctions as f64 / area_km2.max(1e-9)
+    );
+    let built_share = |v: u64| v as f64 * 100.0 / built.max(1) as f64;
+    println!(
+        "  massing: podium {:.1}%  tower {:.1}%  crowned {:.1}%  flat {:.1}% of built cells",
+        built_share(massing_podium),
+        built_share(massing_tower),
+        built_share(massing_crowned),
+        built_share(massing_flat)
     );
 
     // Acceptance gate: a healthy fabric always has streets, sidewalks, and
