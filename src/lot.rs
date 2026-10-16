@@ -308,6 +308,66 @@ pub fn lot_rect(loc: &BlockLoc, block_size: u8, seed: u64) -> (u8, u8) {
     (w as u8, d as u8)
 }
 
+/// This cell's offset inside its own lot rectangle, in cells.
+///
+/// Returns `(ox, oz)`: the cell's position within its lot pack cell — the
+/// per-cell input to `massing::massing_for`. The origin follows the same
+/// span convention as [`lot_rect`] (`ix * buildable / nx`), so offsets
+/// always satisfy `ox < w`, `oz < d` for the rect above. Single-lot blocks
+/// measure from the buildable interior (past the street row at offset 0).
+///
+/// Note: the M11 packer aliases on occasional pack boundaries —
+/// [`lot_slot`] assigns cells by `ix = rel * n / buildable` while
+/// [`lot_rect`] sizes spans as `(ix+1) * buildable / nx - ix * buildable /
+/// nx`, and the two partitions disagree by one cell at rare boundaries
+/// (e.g. a 10-cell run split 3 ways). The offset is clamped into the rect
+/// there, so aliased cells read as edge ring. This is deterministic and
+/// seamless (both sides are pure world-coordinate functions), and
+/// [`lot_rect`] itself is deliberately untouched: changing it would move
+/// slenderness caps and interior footprints, breaking byte-compatibility
+/// with pre-M17 output.
+///
+/// ## Example
+///
+/// ```
+/// use urbix::lot::{DistrictFrame, block_loc, lot_offset, lot_rect, lot_slot};
+/// let frame = DistrictFrame::identity();
+/// let loc = block_loc(3, 3, 11, &frame);
+/// let (w, d) = lot_rect(&loc, 11, 445566);
+/// let (ox, oz) = lot_offset(&loc, 11, 445566);
+/// assert!(ox < w && oz < d);
+/// // Same lot, same rect — but the offset moves with the cell.
+/// let loc2 = block_loc(4, 3, 11, &frame);
+/// if lot_slot(&loc, 11, 445566).lot_id == lot_slot(&loc2, 11, 445566).lot_id {
+///     assert_eq!(lot_rect(&loc2, 11, 445566), (w, d));
+///     assert_eq!(lot_offset(&loc2, 11, 445566).1, oz);
+/// }
+/// ```
+#[must_use]
+pub fn lot_offset(loc: &BlockLoc, block_size: u8, seed: u64) -> (u8, u8) {
+    let b = i64::from(block_size.max(1));
+    if b <= 5 {
+        // Single-lot block spanning the whole interior: offset past the
+        // street row, clamped so street cells (rx 0) stay in range.
+        let max_o = (b - 1).max(1) - 1;
+        let ox = (loc.rx - 1).clamp(0, max_o);
+        let oz = (loc.rz - 1).clamp(0, max_o);
+        return (ox as u8, oz as u8);
+    }
+    let buildable = b - 1;
+    let (nx, nz, ix, iz) = pack_indices(loc, buildable, seed);
+    // In-pack position minus the lot's span origin (the same expression
+    // `lot_rect` sizes spans from), clamped into the rect for the rare
+    // pack-boundary alias cells described above.
+    let rel_x = (loc.rx - 1).clamp(0, buildable - 1);
+    let rel_z = (loc.rz - 1).clamp(0, buildable - 1);
+    let (w, d) = lot_rect(loc, block_size, seed);
+    let ox = (rel_x - ix * buildable / i64::from(nx)).clamp(0, i64::from(w) - 1);
+    let oz = (rel_z - iz * buildable / i64::from(nz)).clamp(0, i64::from(d) - 1);
+    debug_assert!(ox < i64::from(w) && oz < i64::from(d));
+    (ox as u8, oz as u8)
+}
+
 /// Per-block correlated draw in `[0, 1)`.
 ///
 /// Used for density clumping (a whole lot lives or dies together) and
@@ -411,5 +471,57 @@ mod tests {
         let t = block_noise(2, -5, 445566);
         assert!((0.0..1.0).contains(&t));
         assert_eq!(t, block_noise(2, -5, 445566));
+    }
+
+    #[test]
+    fn lot_offset_stays_inside_rect() {
+        // Every cell's offset fits its own rect, across block sizes, seeds,
+        // and signs (offsets feed massing ring math, which must never wrap).
+        let f = DistrictFrame::identity();
+        for b in [1u8, 4, 6, 9, 11, 14, 18] {
+            for seed in [7, 42, 69420] {
+                for x in -20..40 {
+                    for z in -20..40 {
+                        let loc = block_loc(x, z, b, &f);
+                        let (w, d) = lot_rect(&loc, b, seed);
+                        let (ox, oz) = lot_offset(&loc, b, seed);
+                        assert!(
+                            ox < w && oz < d,
+                            "b={b} seed={seed} ({x},{z}): off=({ox},{oz}) rect=({w},{d})"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn lot_offset_moves_with_cell_inside_lot() {
+        // Same-lot neighbours share the rect while offsets step monotonically
+        // with the cell. Alias-clamped boundary cells (see `lot_offset`) may
+        // repeat a step, so assert non-decreasing everywhere plus at least
+        // one strict step somewhere.
+        let f = DistrictFrame::identity();
+        let mut pairs = 0;
+        let mut strict = 0;
+        for x in 1..30 {
+            for z in 1..30 {
+                let a = block_loc(x, z, 11, &f);
+                let b = block_loc(x + 1, z, 11, &f);
+                if lot_slot(&a, 11, 42).lot_id != lot_slot(&b, 11, 42).lot_id {
+                    continue;
+                }
+                assert_eq!(lot_rect(&a, 11, 42), lot_rect(&b, 11, 42));
+                let (ax, az) = lot_offset(&a, 11, 42);
+                let (bx, bz) = lot_offset(&b, 11, 42);
+                assert!(bx >= ax && bz == az, "offset moved backwards");
+                if bx > ax {
+                    strict += 1;
+                }
+                pairs += 1;
+            }
+        }
+        assert!(pairs > 0, "no same-lot x-pairs found");
+        assert!(strict > 0, "offsets never step with the cell");
     }
 }

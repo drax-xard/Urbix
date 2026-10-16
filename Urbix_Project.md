@@ -680,7 +680,7 @@ non-regression; bench delta ~0% (budget was 1.3×).
 `interiors_gate` green; MINOR bump to `0.19.0` (`WorldConfig` grows; `Cell` /
 `ZoneParams` frozen) — met.
 
-### Milestone 17 — Grammar massing (split-grammar buildings, G0) — ⬜ PENDING
+### Milestone 17 — Grammar massing (split-grammar buildings, G0) — ✅ DONE (released in 0.20.0)
 
 **Goal:** lots stop extruding as flat rectangles; per-zone split-grammar
 massing (podium/tower, pitched houses, sawtooth sheds, crown caps) compresses

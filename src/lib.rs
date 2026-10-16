@@ -21,6 +21,7 @@
 //! - `chunk`   — orchestration of per-chunk cell generation.
 //! - `street`  — street grid and block subdivision.
 //! - `lot`     — district frames, block lattice, and lot subdivision (M11).
+//! - `massing` — split-grammar building massing: podiums, roofs, crowns (M17).
 //! - `building`— building footprint, height, and palette assignment.
 //! - `interior`— interior id computation and the (stub) interior hook surface.
 //! - `cache`   — the LRU chunk cache with distance-based eviction.
@@ -51,6 +52,7 @@ pub mod hash;
 pub mod interior;
 pub mod layout;
 pub mod lot;
+pub mod massing;
 pub mod region;
 pub mod street;
 pub mod zones;

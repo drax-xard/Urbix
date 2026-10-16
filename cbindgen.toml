@@ -59,8 +59,17 @@ exclude = [
     "GREENWAY",
     "FLOW_POP",
     "FLOW_JOBS",
+    "LAYOUT_PICK",
+    "LAYOUT_FLOOR",
+    "LAYOUT_ROOM",
+    "LAYOUT_ROOM_SIZE",
+    "LAYOUT_DOOR",
+    "LAYOUT_FURNITURE",
     "LAYOUT_CORE",
-    "LAYOUT_WET",]
+    "LAYOUT_WET",
+    "MASS_PODIUM",
+    "MASS_CROWN",
+    "MASS_ROOF",]
 
 # Rename Rust names to the Urbix-prefixed names used in §2.3.
 [export.rename]

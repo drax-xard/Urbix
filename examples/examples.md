@@ -21,7 +21,8 @@ debug builds.
 Drives the Milestone-9 bridge (`chunk::interior_context_for` → context,
 `WorldConfig::blueprint_for` → rule table, `interior::generate_layout` →
 mini-world) and prints a wall-of-text report for one lot: the `InteriorContext`,
-the `Blueprint`, and every storey's tile grid with a legend.
+the `Blueprint`, the Milestone-17 massing readout (rule + the cell's
+podium/crowned/core role), and every storey's tile grid with a legend.
 
 ```sh
 cargo run --release --example cli_demo                 # inspect the tallest built cell in chunk (0,0)

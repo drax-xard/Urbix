@@ -101,6 +101,14 @@ pub mod domain {
     pub const FLOW_POP: u8 = 60;
     /// Site workplace draw for the flow economy (see `region.rs`).
     pub const FLOW_JOBS: u8 = 61;
+
+    /// Per-lot podium articulation draw, reserved for G2 (see `massing.rs`).
+    /// Declared now so the value is stable; G0 massing never hashes it.
+    pub const MASS_PODIUM: u8 = 62;
+    /// Per-lot crown-cap roll for split-grammar massing (see `massing.rs`).
+    pub const MASS_CROWN: u8 = 63;
+    /// Per-lot sawtooth-bay phase for split-grammar massing (see `massing.rs`).
+    pub const MASS_ROOF: u8 = 64;
 }
 
 /// Hash a coordinate pair under a seed and domain into a `u64`.

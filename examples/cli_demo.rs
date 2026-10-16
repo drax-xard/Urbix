@@ -195,6 +195,42 @@ pub fn interior_report(
         ));
     }
 
+    // Massing readout (Milestone 17): the split-grammar rule for the cell's
+    // dominant zone plus this cell's role in it (podium edge / tower core /
+    // crowned), recomputed through the same public helpers generation uses.
+    {
+        use urbix::lot::{block_loc, lot_offset, lot_rect, lot_slot};
+        use urbix::massing::{lot_crowns, massing_ring, podium_top};
+        let params = config.blended_zone_params(&cell.zone_affinity);
+        let frame = voronoi.district_frame_for(world_x as f64, world_z as f64);
+        let block = block_loc(world_x, world_z, params.block_size, &frame);
+        let slot = lot_slot(&block, params.block_size, config.seed);
+        let rect = lot_rect(&block, params.block_size, config.seed);
+        let off = lot_offset(&block, params.block_size, config.seed);
+        let mp = &config.massing[ctx.zone as usize];
+        let ring = massing_ring(rect, off);
+        let roof = ["flat", "pitched", "sawtooth"]
+            .get(usize::from(mp.roof_mode))
+            .copied()
+            .unwrap_or("unknown");
+        let role = if ring < mp.tower_inset {
+            "podium edge"
+        } else if lot_crowns(slot.lot_id, mp, config.seed) {
+            "crowned core"
+        } else {
+            "tower core"
+        };
+        out.push_str(&format!(
+            "massing: {:?} podium {} floors/inset {} {} roof crown {:.0}% — cell ring {ring} (podium top {:.1} m), {role}\n",
+            ctx.zone,
+            mp.podium_floors,
+            mp.tower_inset,
+            roof,
+            mp.crown_share * 100.0,
+            podium_top(mp, config.interior_floor_height)
+        ));
+    }
+
     let layout = {
         let ground =
             urbix::interior::resolve_ground_override(&ctx, &bp, &config.interior_blueprints);

@@ -14,6 +14,14 @@
   "interior_max_floors": 64,
   "flow_path_count": 8,
   "flow_half_width": 1.0,
+  "massing_mode": 1,
+  "massing": [
+    { "podium_floors": 3, "tower_inset": 1, "setback_every": 0, "roof_mode": 0, "crown_share": 0.3 },
+    { "podium_floors": 0, "tower_inset": 0, "setback_every": 0, "roof_mode": 1, "crown_share": 0.0 },
+    { "podium_floors": 2, "tower_inset": 1, "setback_every": 0, "roof_mode": 0, "crown_share": 0.15 },
+    { "podium_floors": 0, "tower_inset": 0, "setback_every": 0, "roof_mode": 2, "crown_share": 0.0 },
+    { "podium_floors": 0, "tower_inset": 0, "setback_every": 0, "roof_mode": 0, "crown_share": 0.0 }
+  ],
   "zones": [
     {
       "height_min": 24.0,

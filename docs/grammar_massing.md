@@ -1,7 +1,9 @@
 # Grammar Massing — Split-Grammar Buildings (Milestone 17, G0)
 
-Status: ⬜ **PENDING** (plan only, no code). Parent: `Urbix_Project.md` §7 M17,
-`docs/thought_experiment.md` §2.7 (G0 row).
+Status: ✅ **DONE** (released in 0.20.0). This document was the build
+specification; the implementation follows it as built. Parent:
+`Urbix_Project.md` §7 M17, `docs/thought_experiment.md` §2.7 (G0 row).
+Notes on as-built deviations are marked [AS-BUILT] inline and in §9.
 
 This document is the buildable specification for the G0 slice of the
 WFC + L-system hybrid: **split-grammar building massing with learned streets
@@ -265,3 +267,43 @@ consume `MassingParams`, not the reverse.
 * Fabric spec: `docs/believable_city.md` (§2 scale, slenderness).
 * Flow avenues (composes): `docs/grown_streets.md` (M16).
 * Origin: `docs/thought_experiment.md` §2.7.
+
+## 9. As-built notes (0.20.0)
+
+* [AS-BUILT] Boost placement is mode-aware, not unconditional: landmark
+  (×1.5) and tower-park (×1.35) boosts fold pre-step only when steps are
+  live (`steps_live` = grammar on + the cell's dominant-zone row non-flat).
+  Legacy output (`massing_mode = 0`, or a flat rule table in any mode) keeps
+  the exact pre-17 post-boost path, so flat output is byte-identical in every
+  mode — stronger than specced (the spec put all boosts pre-step, which would
+  have re-associated the legacy jitter math). Tower-park stubs (fixed 8 m)
+  keep the legacy post boosts in both modes since fate was empty.
+* [AS-BUILT] `massing.rs` also exposes `massing_ring` / `podium_top` /
+  `lot_crowns` helpers (pure, unit-tested against the steps) so examples
+  recompute exactly what generation uses. `cli_demo` prints a per-cell
+  massing readout (rule + ring + podium top + podium/crowned/core role)
+  instead of the specced chunk-wide lot shares — the demo is a single-cell
+  inspector with no lot-stats section to extend.
+* [AS-BUILT] `MASS_PODIUM` is declared and header-excluded but unhashed in
+  G0 (the podium cap is an exact `podium_floors × floor_height` step);
+  per-lot podium articulation waits for G2 with `setback_every`. No
+  `cbindgen.toml` `include` change was needed: `MassingParams` is emitted
+  automatically as a `WorldConfig` dependency (verified in the header diff).
+* [AS-BUILT] Two unplanned but required wire-hygiene fixes ride along (both
+  found while proving byte-identity): `set_cell` wrote whole `Cell` structs,
+  leaking 4 bytes of uninitialized implicit padding into every cell's wire
+  bytes across processes — now field-at-offset writes (the M3 header fix
+  applied to cells) with a poison-and-check regression test; and
+  `LAYOUT_PICK`–`LAYOUT_FURNITURE` were never header-excluded (leaked
+  `#define`s since M9) — removed with the new `MASS_*` excludes.
+* [AS-BUILT] `lot::lot_offset` exposed a latent M11 packer aliasing: the
+  `lot_slot` cell partition and the `lot_rect` span formula disagree by one
+  cell at rare pack boundaries (proven: 10-cell run split 3 ways). Offsets
+  clamp into the rect there (aliased cells read as edge ring —
+  deterministic and seamless); `lot_rect` itself is deliberately untouched
+  so slenderness caps and interior footprints stay byte-compatible.
+* [AS-BUILT] Validation at seed 69420 / extent 8 (the session's locked pair):
+  `walkability` + `interiors_gate` green, bench delta inside 1.1×, `viz`
+  overhead + `walk` eyeballed. Single-storey interpretation locked:
+  `H <= podium_top` returns `H` before roof/crown (sub-podium stubs never
+  crown; tiny pitched houses under one cell stay flat).

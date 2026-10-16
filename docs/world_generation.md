@@ -101,12 +101,19 @@ cy, &config, &voronoi) -> ChunkBuffer` walks `local_x/y` in row-major order:
    full query on 4-neighbours, flow avenues included via `abuts_street`)
    becomes `IS_SIDEWALK` — paved, no-build.
 7. Lots: `lot::block_loc` + `lot::lot_slot` split the block interior into a
-   2-D pack of up to 9 lots (`domain::LOT_SPLIT`).
-   `building::assign_building` derives one height/palette per lot
-   (block-noise clumping, CBD boost, corner bonus, landmark 1.5×) with ±10%
-   per-cell jitter (`domain::LOT_HEIGHT`). Special blocks rewrite the
-   program: civic `Plaza` squares, `Market` shed rows (≤ 10 u), `TowerPark`
-   single towers (×1.35) in green blocks (`domain::SPECIAL`).
+    2-D pack of up to 9 lots (`domain::LOT_SPLIT`).
+    `building::assign_building` derives one height/palette per lot
+    (block-noise clumping, CBD boost, corner bonus, landmark 1.5×) with ±10%
+    per-cell jitter (`domain::LOT_HEIGHT`). Special blocks rewrite the
+    program: civic `Plaza` squares, `Market` shed rows (≤ 10 u), `TowerPark`
+    single towers (×1.35) in green blocks (`domain::SPECIAL`).
+    Split-grammar massing (M17, `src/massing.rs`): landmark/tower-park boosts
+    multiply `H` first, then each cell steps through podium cap (edge rings
+    at `podium_floors × interior_floor_height`), roof peak (pitched ridge /
+    sawtooth bays), and crown (`MASS_CROWN` roll under `crown_share`) before
+    jitter and the band/slenderness clamps. Rules snap from the dominant
+    zone; `massing_mode = 0` (or a flat table) reproduces the legacy flat
+    extrude byte-identically.
 8. If `height > 0`, `interior_id = interior_id_for_lot(block, slot, seed)`
    (`src/chunk.rs:225`, `domain::INTERIOR`) — one key per lot, shared by
    every cell in it.
@@ -117,7 +124,10 @@ hashed 15% of Residential blocks (courtyard gardens). Paved cells
 
 Cells are packed into `ChunkBuffer` (`src/data.rs:146`): header fields written
 at `offset_of!` offsets into a zeroed `Vec<u8>` so implicit padding stays `0`
-and deterministic.
+and deterministic. `set_cell` writes the same way — field by field, never a
+whole struct — so wire bytes never carry uninitialized stack memory (the
+padding leak this rule closes keeps every output byte deterministic across
+processes).
 
 ## 4. Cache & Engine (`src/cache.rs`, `src/engine.rs`)
 

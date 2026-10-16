@@ -27,6 +27,7 @@
 
 use crate::hash::domain;
 use crate::hash::{hash_coords, hash_unit};
+use crate::massing::{massing_for, MassingParams};
 use crate::zones::ZoneParams;
 
 /// Assign a building's height and palette to a cell within a lot.
@@ -41,11 +42,24 @@ use crate::zones::ZoneParams;
 ///   roll falls short stay empty together (clumped vacancy).
 /// - `cbd_boost`: `region::VoronoiDiagram::cbd_factor` at the cell; peaks the
 ///   downtown core and tapers outward.
+/// - `height_boost`: combined landmark / special-block pre-step multiplier
+///   (`1.0` = none). Applied to `H` *before* massing steps so boosted towers
+///   keep their podium + crown, just taller (`chunk.rs` computes it; with
+///   massing off it stays `1.0` and the legacy post boosts run instead).
 /// - `cell_jitter`: pass the cell's world coords for the ±10% per-cell life;
 ///   pass `None` in tests to assert exact lot uniformity.
 /// - `lot_footprint`: the lot's `(width, depth)` in cells from
 ///   `lot::lot_rect` — bounds the slenderness clamp (see
-///   [`slenderness_cap`]).
+///   [`slenderness_cap`]) and sizes the massing steps.
+/// - `lot_offset`: the cell's `(ox, oz)` position inside its lot from
+///   `lot::lot_offset` — drives the massing ring/roof math. Ignored when
+///   `massing` is `None`.
+/// - `massing`: split-grammar rules for the dominant zone, plus the floor
+///   height that converts podium floors to metres. `None` keeps the legacy
+///   flat extrude (M17 `massing_mode = 0`); `Some` with a flat table is
+///   bit-identical to `None` (see `massing::is_flat`).
+/// - `floor_height`: metres per storey (`WorldConfig::interior_floor_height`);
+///   only read when `massing` is `Some`.
 ///
 /// ## Example
 ///
@@ -54,7 +68,7 @@ use crate::zones::ZoneParams;
 /// use urbix::zones::{ZoneType, zone_defaults};
 ///
 /// let params = zone_defaults(ZoneType::Downtown);
-/// let (h, _p) = assign_building(0x9e37_79b9_7f4a_7c15, true, 0.9, 1.2, Some((3, 3)), (5, 5), &params, 445566);
+/// let (h, _p) = assign_building(0x9e37_79b9_7f4a_7c15, true, 0.9, 1.2, 1.0, Some((3, 3)), (5, 5), (2, 2), None, 4.0, &params, 445566);
 /// if h > 0.0 {
 ///     assert!((params.height_min..=params.height_max * 1.5).contains(&h));
 /// }
@@ -66,8 +80,12 @@ pub fn assign_building(
     corner: bool,
     block_clump: f32,
     cbd_boost: f32,
+    height_boost: f32,
     cell_jitter: Option<(i64, i64)>,
     lot_footprint: (u8, u8),
+    lot_offset: (u8, u8),
+    massing: Option<&MassingParams>,
+    floor_height: f32,
     params: &ZoneParams,
     seed: u64,
 ) -> (f32, u8) {
@@ -94,6 +112,23 @@ pub fn assign_building(
     // Corner lots anchor the intersection: +20%.
     if corner {
         height *= 1.2;
+    }
+    // Landmark / special-block pre-step boost (Milestone 17): boosted towers
+    // step from a taller H, so the podium ring and crown survive the boost.
+    // `1.0` is the exact identity (IEEE), keeping the legacy path untouched.
+    height *= height_boost;
+    // Split-grammar massing (Milestone 17): podium/roof/crown steps per cell.
+    // Skipped entirely for `None` (legacy mode); flat tables are the identity.
+    if let Some(mp) = massing {
+        height = massing_for(
+            lot_id,
+            lot_footprint,
+            lot_offset,
+            height,
+            mp,
+            seed,
+            floor_height,
+        );
     }
     // Per-cell life: ±10% deterministic jitter around the lot height.
     if let Some((cx, cy)) = cell_jitter {
@@ -160,13 +195,65 @@ mod tests {
     fn building_is_deterministic() {
         let params = zone_defaults(ZoneType::Downtown);
         let (lot, corner) = lot_of(3, 3, 445566);
-        let a = assign_building(lot, corner, 0.9, 1.0, Some((3, 3)), (5, 5), &params, 445566);
-        let b = assign_building(lot, corner, 0.9, 1.0, Some((3, 3)), (5, 5), &params, 445566);
+        let a = assign_building(
+            lot,
+            corner,
+            0.9,
+            1.0,
+            1.0,
+            Some((3, 3)),
+            (5, 5),
+            (1, 1),
+            None,
+            4.0,
+            &params,
+            445566,
+        );
+        let b = assign_building(
+            lot,
+            corner,
+            0.9,
+            1.0,
+            1.0,
+            Some((3, 3)),
+            (5, 5),
+            (1, 1),
+            None,
+            4.0,
+            &params,
+            445566,
+        );
         assert_eq!(a, b);
         let (lot2, corner2) = lot_of(-7, 5, 99);
         assert_eq!(
-            assign_building(lot2, corner2, 0.5, 1.0, Some((-7, 5)), (5, 5), &params, 99),
-            assign_building(lot2, corner2, 0.5, 1.0, Some((-7, 5)), (5, 5), &params, 99)
+            assign_building(
+                lot2,
+                corner2,
+                0.5,
+                1.0,
+                1.0,
+                Some((-7, 5)),
+                (5, 5),
+                (0, 0),
+                None,
+                4.0,
+                &params,
+                99
+            ),
+            assign_building(
+                lot2,
+                corner2,
+                0.5,
+                1.0,
+                1.0,
+                Some((-7, 5)),
+                (5, 5),
+                (0, 0),
+                None,
+                4.0,
+                &params,
+                99
+            )
         );
     }
 
@@ -206,13 +293,27 @@ mod tests {
             }
         }
         let ((ax, ay, sa), (bx, by, sb)) = pair.expect("no same-lot pair found");
+        let off_a = crate::lot::lot_offset(
+            &block_loc(ax, ay, params.block_size, &frame),
+            params.block_size,
+            42,
+        );
+        let off_b = crate::lot::lot_offset(
+            &block_loc(bx, by, params.block_size, &frame),
+            params.block_size,
+            42,
+        );
         let (ha, pa) = assign_building(
             sa.lot_id,
             sa.corner,
             0.9,
             1.0,
+            1.0,
             Some((ax, ay)),
             (5, 5),
+            off_a,
+            None,
+            4.0,
             &params,
             42,
         );
@@ -221,8 +322,12 @@ mod tests {
             sb.corner,
             0.9,
             1.0,
+            1.0,
             Some((bx, by)),
             (5, 5),
+            off_b,
+            None,
+            4.0,
             &params,
             42,
         );
@@ -248,13 +353,18 @@ mod tests {
                 let slot = lot_slot(&loc, params.block_size, 42);
                 let clump = crate::lot::block_noise(loc.bx, loc.bz, 42);
                 let rect = crate::lot::lot_rect(&loc, params.block_size, 42);
+                let off = crate::lot::lot_offset(&loc, params.block_size, 42);
                 let (h, _) = assign_building(
                     slot.lot_id,
                     slot.corner,
                     clump,
                     1.0,
+                    1.0,
                     Some((x, y)),
                     rect,
+                    off,
+                    None,
+                    4.0,
                     &params,
                     42,
                 );
@@ -285,13 +395,18 @@ mod tests {
                 let slot = lot_slot(&loc, params.block_size, 7);
                 let clump = crate::lot::block_noise(loc.bx, loc.bz, 7);
                 let rect = crate::lot::lot_rect(&loc, params.block_size, 7);
+                let off = crate::lot::lot_offset(&loc, params.block_size, 7);
                 let (h, _) = assign_building(
                     slot.lot_id,
                     slot.corner,
                     clump,
                     1.0,
+                    1.0,
                     Some((x, y)),
                     rect,
+                    off,
+                    None,
+                    4.0,
                     &params,
                     7,
                 );
@@ -313,8 +428,20 @@ mod tests {
         for x in 0..50 {
             for y in 0..50 {
                 let (lot, corner) = lot_of(x, y, 123);
-                let (_, p) =
-                    assign_building(lot, corner, 0.9, 1.0, Some((x, y)), (5, 5), &params, 123);
+                let (_, p) = assign_building(
+                    lot,
+                    corner,
+                    0.9,
+                    1.0,
+                    1.0,
+                    Some((x, y)),
+                    (5, 5),
+                    (0, 0),
+                    None,
+                    4.0,
+                    &params,
+                    123,
+                );
                 assert!((p as u64) < n, "palette {p} out of range");
             }
         }
@@ -331,7 +458,20 @@ mod tests {
             arterial_every: 0,
             slenderness_max: 0,
         };
-        let (h, p) = assign_building(1, false, 1.0, 1.0, Some((1, 1)), (4, 4), &params, 1);
+        let (h, p) = assign_building(
+            1,
+            false,
+            1.0,
+            1.0,
+            1.0,
+            Some((1, 1)),
+            (4, 4),
+            (0, 0),
+            None,
+            4.0,
+            &params,
+            1,
+        );
         assert!(!h.is_nan());
         assert_eq!(p, 0);
     }
@@ -353,7 +493,10 @@ mod tests {
     #[test]
     fn narrow_lot_heights_respect_slenderness() {
         // Sweep downtown lots: every built height stays under its own
-        // footprint cap, even with maxed bonuses.
+        // footprint cap, even with maxed bonuses — including the M17
+        // landmark/tower-park pre-step boost (1.5 × 1.35), which the steps
+        // must absorb before the clamp.
+        use crate::massing::massing_defaults;
         let params = zone_defaults(ZoneType::Downtown);
         let frame = DistrictFrame::identity();
         let mut capped = 0;
@@ -363,27 +506,213 @@ mod tests {
                 let loc = block_loc(x, y, params.block_size, &frame);
                 let slot = lot_slot(&loc, params.block_size, 42);
                 let rect = crate::lot::lot_rect(&loc, params.block_size, 42);
-                let (h, _) = assign_building(
-                    slot.lot_id,
-                    true, // corner bonus on, worst case
-                    1.0,  // max block clump
-                    1.5,  // max CBD boost
-                    Some((x, y)),
-                    rect,
-                    &params,
-                    42,
-                );
-                if h > 0.0 {
-                    built += 1;
-                    let cap = slenderness_cap(&params, rect.0, rect.1);
-                    assert!(h <= cap + 1e-3, "h={h} over cap={cap} rect={rect:?}");
-                    if h >= cap - 1e-3 {
-                        capped += 1;
+                let off = crate::lot::lot_offset(&loc, params.block_size, 42);
+                for boost in [1.0, 1.5 * 1.35] {
+                    let (h, _) = assign_building(
+                        slot.lot_id,
+                        true, // corner bonus on, worst case
+                        1.0,  // max block clump
+                        1.5,  // max CBD boost
+                        boost,
+                        Some((x, y)),
+                        rect,
+                        off,
+                        Some(&massing_defaults(ZoneType::Downtown)),
+                        4.0,
+                        &params,
+                        42,
+                    );
+                    if h > 0.0 {
+                        built += 1;
+                        let cap = slenderness_cap(&params, rect.0, rect.1);
+                        assert!(h <= cap + 1e-3, "h={h} over cap={cap} rect={rect:?}");
+                        if h >= cap - 1e-3 {
+                            capped += 1;
+                        }
                     }
                 }
             }
         }
         assert!(built > 0, "no built lots sampled");
         assert!(capped > 0, "clamp never engaged — is it wired?");
+    }
+
+    #[test]
+    fn none_and_flat_some_agree_exactly() {
+        // Plumbing transparency: `None` (legacy mode) and `Some` with a flat
+        // table take the same code path — the gateway the chunk-level
+        // `massing_mode = 0` byte-equality test rests on.
+        use crate::massing::MassingParams;
+        let flat = MassingParams {
+            podium_floors: 0,
+            tower_inset: 0,
+            setback_every: 0,
+            roof_mode: 0,
+            crown_share: 0.0,
+        };
+        let params = zone_defaults(ZoneType::Downtown);
+        let frame = DistrictFrame::identity();
+        for x in 1..40 {
+            for y in 1..40 {
+                let loc = block_loc(x, y, params.block_size, &frame);
+                let slot = lot_slot(&loc, params.block_size, 42);
+                let clump = crate::lot::block_noise(loc.bx, loc.bz, 42);
+                let rect = crate::lot::lot_rect(&loc, params.block_size, 42);
+                let off = crate::lot::lot_offset(&loc, params.block_size, 42);
+                let a = assign_building(
+                    slot.lot_id,
+                    slot.corner,
+                    clump,
+                    1.0,
+                    1.0,
+                    Some((x, y)),
+                    rect,
+                    off,
+                    None,
+                    4.0,
+                    &params,
+                    42,
+                );
+                let b = assign_building(
+                    slot.lot_id,
+                    slot.corner,
+                    clump,
+                    1.0,
+                    1.0,
+                    Some((x, y)),
+                    rect,
+                    off,
+                    Some(&flat),
+                    4.0,
+                    &params,
+                    42,
+                );
+                assert_eq!(a, b, "legacy path diverges at ({x}, {y})");
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_path_ignores_offset_and_floor_height() {
+        // With `None` the new inputs are dead: varying them changes nothing,
+        // so stale callers cannot perturb legacy output.
+        let params = zone_defaults(ZoneType::Commercial);
+        let (lot, corner) = lot_of(11, 11, 7);
+        let a = assign_building(
+            lot,
+            corner,
+            0.9,
+            1.0,
+            1.0,
+            Some((11, 11)),
+            (6, 6),
+            (0, 0),
+            None,
+            4.0,
+            &params,
+            7,
+        );
+        let b = assign_building(
+            lot,
+            corner,
+            0.9,
+            1.0,
+            1.0,
+            Some((11, 11)),
+            (6, 6),
+            (5, 5),
+            None,
+            99.0,
+            &params,
+            7,
+        );
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn pre_step_boost_keeps_podium() {
+        // Boosts multiply H *before* steps: the edge ring still caps at the
+        // podium while the core grows with the boost (spec: boosted towers
+        // keep podium + crown, just taller). Fixed-band zone params make H
+        // exact (46 m: clears the 12 m podium, clears every clamp).
+        use crate::massing::{massing_defaults, MassingParams};
+        let no_crown = MassingParams {
+            crown_share: 0.0,
+            ..massing_defaults(ZoneType::Downtown)
+        };
+        let params = ZoneParams {
+            height_min: 40.0,
+            height_max: 40.0,
+            density: 1.0,
+            block_size: 11,
+            palette_count: 6,
+            arterial_every: 4,
+            slenderness_max: 5,
+        };
+        let lot = 12345u64;
+        let edge_plain = assign_building(
+            lot,
+            false,
+            0.0,
+            1.0,
+            1.0,
+            None,
+            (7, 7),
+            (0, 3),
+            Some(&no_crown),
+            4.0,
+            &params,
+            69420,
+        );
+        let core_plain = assign_building(
+            lot,
+            false,
+            0.0,
+            1.0,
+            1.0,
+            None,
+            (7, 7),
+            (3, 3),
+            Some(&no_crown),
+            4.0,
+            &params,
+            69420,
+        );
+        let edge_boost = assign_building(
+            lot,
+            false,
+            0.0,
+            1.0,
+            1.5,
+            None,
+            (7, 7),
+            (0, 3),
+            Some(&no_crown),
+            4.0,
+            &params,
+            69420,
+        );
+        let core_boost = assign_building(
+            lot,
+            false,
+            0.0,
+            1.0,
+            1.5,
+            None,
+            (7, 7),
+            (3, 3),
+            Some(&no_crown),
+            4.0,
+            &params,
+            69420,
+        );
+        // H = 40 × 0.85 (min clump) = 34: clears the 12 m podium and every
+        // clamp (1.6× cap is 65, slenderness 140), so the boost ratio reads
+        // exactly. (`min` returns the cap operand bit-exactly; the core
+        // needs an epsilon since 0.85 is not exact binary.)
+        assert_eq!(edge_plain.0, 12.0);
+        assert_eq!(edge_boost.0, 12.0);
+        assert!((core_plain.0 - 34.0).abs() < 1e-3);
+        assert!((core_boost.0 / core_plain.0 - 1.5).abs() < 1e-5);
     }
 }

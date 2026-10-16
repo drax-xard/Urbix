@@ -102,6 +102,16 @@ void urbix_set_chunk_size(UrbixEngine* e, uint16_t size);
 Both are null-safe; `set_chunk_size(0)` at the C boundary is deliberately a
 no-op to avoid unwinding into the caller (`src/ffi.rs:181`).
 
+`WorldConfig` (tunable generation parameters) crosses the same way, by value
+(`urbix_engine_create_with_config`, `urbix_set_config`, `urbix_default_config`
+— null/invalid inputs are safe no-ops that never unwind). It grows
+append-only: M16 appended `flow_path_count`/`flow_half_width`, M17 appends
+`massing_mode` (`0` = legacy flat extrude, `1` = grammar) plus the per-zone
+`MassingParams` table (`podium_floors`, `tower_inset`, `setback_every`
+reserved, `roof_mode`, `crown_share`; see `docs/grammar_massing.md`). C
+consumers recompile the header on MINOR bumps (`0.20.0`); the wire (`Cell`
+40 B, header 32 B) is frozen.
+
 ## Threading & Versioning
 
 * Engine handle is **not** thread-safe; access from one thread or behind your

@@ -18,7 +18,9 @@
 //!    become plazas.
 //! 4. Non-street cells abutting a street become the 1-cell sidewalk ring.
 //! 5. Remaining cells resolve to a lot (`lot.rs`); `building.rs` assigns one
-//!    height/palette per lot with CBD, corner, and landmark shaping.
+//!    height/palette per lot with CBD, corner, and landmark shaping, then
+//!    carves split-grammar massing steps (podium/roof/crown, snapped from
+//!    the dominant zone; `massing_mode = 0` keeps the legacy flat extrude).
 //! 6. Package the result into the `repr(C)` cell record (`data.rs`) with a
 //!    lot-keyed `InteriorId`.
 //!
@@ -200,16 +202,59 @@ pub fn generate_chunk(
                 let clump = block_noise(block.bx, block.bz, seed);
                 let boost = voronoi.cbd_factor(world_x as f64, world_z as f64);
                 let rect = crate::lot::lot_rect(&block, params.block_size, seed);
+                let offset = crate::lot::lot_offset(&block, params.block_size, seed);
+                // Split-grammar massing (Milestone 17): rules snap from the
+                // dominant zone like the other lot-scale policies (block
+                // size, arterial spacing, slenderness) — never blended.
+                // `massing_mode = 0` passes `None`, keeping the legacy flat
+                // extrude byte-identically (see the gateway test below).
+                let massing = if config.massing_mode == 0 {
+                    None
+                } else {
+                    Some(&config.massing[zone as usize])
+                };
+                // Landmark / tower-park pre-step boost (Milestone 17): with
+                // live steps, boosts multiply H *before* the steps so boosted
+                // towers keep their podium + crown, just taller. With legacy
+                // output (mode 0, or a flat rule table — see
+                // `massing::is_flat`) the multiplier stays 1.0 (the exact
+                // IEEE identity) and the legacy post boosts below run instead,
+                // keeping flat output byte-identical in every mode.
+                let steps_live = massing.is_some_and(|m| !crate::massing::is_flat(m));
+                let landmark_boost = if is_landmark(slot.lot_id, zone, seed) {
+                    1.5
+                } else {
+                    1.0
+                };
+                let tower_boost =
+                    if special == SpecialKind::TowerPark && slot.slot == slot.count / 2 {
+                        1.35
+                    } else {
+                        1.0
+                    };
+                let pre_boost = if steps_live {
+                    landmark_boost * tower_boost
+                } else {
+                    1.0
+                };
                 let (mut height, mut palette) = building::assign_building(
                     slot.lot_id,
                     slot.corner,
                     clump,
                     boost,
+                    pre_boost,
                     Some((world_x, world_z)),
                     rect,
+                    offset,
+                    massing,
+                    config.interior_floor_height,
                     &params,
                     seed,
                 );
+                // Tracks whether the landmark boost already folded in
+                // pre-step (built lots with live steps). Stubs and legacy
+                // output still take it below.
+                let mut landmark_folded = steps_live;
                 match special {
                     // Market sheds: every lot builds low and tight.
                     SpecialKind::Market => {
@@ -225,9 +270,18 @@ pub fn generate_chunk(
                     }
                     SpecialKind::TowerPark => {
                         if height <= 0.0 {
+                            // Empty middle lot: fixed stub. Fate was empty so
+                            // the pre-step boosts never ran — apply today's
+                            // post boosts so stubs match legacy treatment in
+                            // both modes.
                             height = 8.0;
+                            height = (height * tower_boost).min(params.height_max * 1.6 + 1.0);
+                            landmark_folded = false;
+                        } else if !steps_live {
+                            height = (height * tower_boost).min(params.height_max * 1.6 + 1.0);
                         }
-                        height = (height * 1.35).min(params.height_max * 1.6 + 1.0);
+                        // Built lots with live steps already carry the tower
+                        // boost pre-step.
                     }
                     SpecialKind::Plaza | SpecialKind::None => {}
                 }
@@ -235,8 +289,8 @@ pub fn generate_chunk(
                 // ~1.5× — the wayfinding towers above the street wall.
                 // Market sheds stay low (no landmark boost).
                 let landmark_ok = special == SpecialKind::None || special == SpecialKind::TowerPark;
-                if height > 0.0 && landmark_ok && is_landmark(slot.lot_id, zone, seed) {
-                    height = (height * 1.5).min(params.height_max * 1.6 + 1.0);
+                if height > 0.0 && landmark_ok && landmark_boost > 1.0 && !landmark_folded {
+                    height = (height * landmark_boost).min(params.height_max * 1.6 + 1.0);
                 }
                 // Post-boost slenderness: landmark and tower-park bonuses
                 // bypass assign_building's clamp, so re-apply the same
@@ -1297,5 +1351,96 @@ mod tests {
             }
         }
         assert!(found > 0, "no flow-only sidewalk ring sampled");
+    }
+
+    // --- Milestone 17: split-grammar massing in the chunk pipeline ---
+
+    /// All-zero massing table: every row flat (see `massing::is_flat`).
+    fn flat_massing_table() -> [crate::massing::MassingParams; crate::zones::ZONE_COUNT] {
+        [crate::massing::MassingParams {
+            podium_floors: 0,
+            tower_inset: 0,
+            setback_every: 0,
+            roof_mode: 0,
+            crown_share: 0.0,
+        }; crate::zones::ZONE_COUNT]
+    }
+
+    #[test]
+    fn massing_mode_zero_matches_flat_table() {
+        // Gateway test: `massing_mode = 0` reproduces the flat-table output
+        // byte-identically — flat rules are the identity at the building
+        // level and take the legacy boost path at the chunk level, so the
+        // two configs must agree on every byte. Sampled over seeds (the
+        // validation seed included), chunk positions, and signs.
+        for seed in [0u64, 42, 445566, 69420] {
+            let legacy_cfg = WorldConfig {
+                seed,
+                massing_mode: 0,
+                ..Default::default()
+            };
+            let flat_cfg = WorldConfig {
+                seed,
+                massing_mode: 1,
+                massing: flat_massing_table(),
+                ..Default::default()
+            };
+            assert!(legacy_cfg.is_valid());
+            assert!(flat_cfg.is_valid());
+            let voronoi = VoronoiDiagram::generate_with_config(&legacy_cfg);
+            for (cx, cy) in [(0, 0), (2, -3), (-5, 4), (17, 9)] {
+                let legacy_buf = generate_chunk(cx, cy, &legacy_cfg, &voronoi);
+                let flat_buf = generate_chunk(cx, cy, &flat_cfg, &voronoi);
+                assert_eq!(
+                    legacy_buf.as_bytes(),
+                    flat_buf.as_bytes(),
+                    "mode 0 diverges from flat table at seed {seed} chunk ({cx},{cy})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn massing_moves_heights_not_flags() {
+        // Heights-only invariant: default grammar changes some building
+        // heights but no flags, palettes, or interior keys (pavement,
+        // programs, and room lookups are untouched by massing).
+        let mut height_diffs = 0;
+        for seed in [0u64, 1, 2, 3, 7, 42, 69420] {
+            let legacy_cfg = WorldConfig {
+                seed,
+                massing_mode: 0,
+                ..Default::default()
+            };
+            let grammar_cfg = WorldConfig {
+                seed,
+                ..Default::default()
+            };
+            let voronoi = VoronoiDiagram::generate_with_config(&legacy_cfg);
+            for (cx, cy) in [(0, 0), (-2, 1)] {
+                let legacy_buf = generate_chunk(cx, cy, &legacy_cfg, &voronoi);
+                let grammar_buf = generate_chunk(cx, cy, &grammar_cfg, &voronoi);
+                assert_eq!(legacy_buf.cell_count(), grammar_buf.cell_count());
+                for i in 0..legacy_buf.cell_count() {
+                    let a = legacy_buf.get_cell(i);
+                    let b = grammar_buf.get_cell(i);
+                    assert_eq!(
+                        (a.flags, a.palette_id, a.interior_id),
+                        (b.flags, b.palette_id, b.interior_id),
+                        "seed {seed} chunk ({cx},{cy}) cell {i}: massing moved non-height data"
+                    );
+                    if a.height != b.height {
+                        height_diffs += 1;
+                        // Steps never invent or erase buildings, and never
+                        // push past the band envelope the clamps enforce.
+                        assert_eq!(a.height > 0.0, b.height > 0.0);
+                    }
+                }
+            }
+        }
+        assert!(
+            height_diffs > 0,
+            "grammar changed no heights — is it wired?"
+        );
     }
 }

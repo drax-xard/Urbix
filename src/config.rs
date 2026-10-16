@@ -31,6 +31,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::data::InteriorId;
 use crate::layout::{blueprint_defaults, default_blueprints, Blueprint, InteriorContext};
+use crate::massing::{default_massing, MassingParams};
 use crate::zones::{ZoneParams, ZoneType, ZONE_COUNT};
 
 /// Serde `default` fn for [`WorldConfig::interior_floor_height`].
@@ -61,6 +62,18 @@ pub const fn default_flow_path_count() -> u8 {
 #[must_use]
 pub const fn default_flow_half_width() -> f32 {
     1.0
+}
+
+/// Serde `default` fn for [`WorldConfig::massing_mode`].
+#[must_use]
+pub const fn default_massing_mode() -> u8 {
+    1
+}
+
+/// Serde `default` fn for [`WorldConfig::massing`].
+#[must_use]
+pub fn default_massing_table() -> [MassingParams; ZONE_COUNT] {
+    default_massing()
 }
 
 /// Default hues used by `examples/viz.rs` / `interactive.rs` (promoted to config
@@ -138,6 +151,16 @@ pub struct WorldConfig {
     /// avenue, matching lattice arterials and diagonal boulevards.
     #[serde(default = "default_flow_half_width")]
     pub flow_half_width: f32,
+    /// Split-grammar massing switch (Milestone 17, see
+    /// `docs/grammar_massing.md`). `1` shapes lots into podiums, pitched /
+    /// sawtooth roofs, and crowns; `0` keeps the legacy flat extrude
+    /// byte-identically (the escape hatch + test anchor).
+    #[serde(default = "default_massing_mode")]
+    pub massing_mode: u8,
+    /// Per-zone split-grammar massing rules (Milestone 17). Snapped from the
+    /// dominant zone like the other lot-scale policies, never blended.
+    #[serde(default = "default_massing_table")]
+    pub massing: [MassingParams; ZONE_COUNT],
 }
 
 impl Default for WorldConfig {
@@ -206,6 +229,8 @@ impl Default for WorldConfig {
             interior_blueprints: crate::layout::default_blueprints(),
             flow_path_count: default_flow_path_count(),
             flow_half_width: default_flow_half_width(),
+            massing_mode: default_massing_mode(),
+            massing: default_massing_table(),
         }
     }
 }
@@ -293,6 +318,22 @@ impl WorldConfig {
         }
         if !(0.5..=2.0).contains(&self.flow_half_width) {
             return false;
+        }
+        // Split-grammar massing (Milestone 17): mode switch + per-row rules.
+        // `setback_every` is reserved (G2) but still range-checked so files
+        // stay forward-compatible without accepting garbage.
+        if self.massing_mode > 1 {
+            return false;
+        }
+        for m in &self.massing {
+            if !(0.0..=1.0).contains(&m.crown_share)
+                || m.roof_mode > 2
+                || m.podium_floors > 32
+                || m.tower_inset > 8
+                || m.setback_every > 32
+            {
+                return false;
+            }
         }
         for bp in &self.interior_blueprints {
             if bp.core_size == 0 {
@@ -487,6 +528,8 @@ impl WorldConfig {
 #[cfg(test)]
 mod tests {
     use super::{default_flow_half_width, default_flow_path_count, WorldConfig};
+    use super::{default_massing_mode, default_massing_table};
+    use crate::massing::MassingParams;
 
     #[test]
     fn default_is_valid() {
@@ -712,5 +755,72 @@ mod tests {
         let parsed_json = WorldConfig::from_json_str(&stripped_json).unwrap();
         assert!(parsed_json.is_valid());
         assert_eq!(parsed_json.flow_path_count, default_flow_path_count());
+    }
+
+    #[test]
+    fn rejects_bad_massing_knobs() {
+        // Mode switch is binary; rows are range-checked per the G0 spec
+        // (crown share, roof mode, podium/inset/reserved caps).
+        assert!(!WorldConfig {
+            massing_mode: 2,
+            ..Default::default()
+        }
+        .is_valid());
+        let mut bad_share = WorldConfig::default();
+        bad_share.massing[0].crown_share = 1.5;
+        assert!(!bad_share.is_valid());
+        let mut bad_roof = WorldConfig::default();
+        bad_roof.massing[1].roof_mode = 3;
+        assert!(!bad_roof.is_valid());
+        let mut bad_podium = WorldConfig::default();
+        bad_podium.massing[2].podium_floors = 33;
+        assert!(!bad_podium.is_valid());
+        let mut bad_inset = WorldConfig::default();
+        bad_inset.massing[3].tower_inset = 9;
+        assert!(!bad_inset.is_valid());
+        // Band edges stay valid: legacy mode, full crowns, maxed rules.
+        let mut table = default_massing_table();
+        table[0] = MassingParams {
+            podium_floors: 32,
+            tower_inset: 8,
+            setback_every: 32,
+            roof_mode: 2,
+            crown_share: 1.0,
+        };
+        let edge = WorldConfig {
+            massing_mode: 0,
+            massing: table,
+            ..Default::default()
+        };
+        assert!(edge.is_valid());
+        assert!(WorldConfig::default().is_valid());
+    }
+
+    #[test]
+    fn pre_massing_files_without_new_fields_still_parse() {
+        // Simulate a pre-M17 file by dropping the massing keys from a current
+        // default serialization (via Value round-trip, since the table is a
+        // TOML array-of-tables): parsing must succeed, stay valid, and fall
+        // back to the M17 defaults (mode 1, spec table).
+        let full = toml::to_string(&WorldConfig::default()).unwrap();
+        let mut value: toml::Value = toml::from_str(&full).unwrap();
+        let table = value.as_table_mut().expect("config serializes as a table");
+        assert!(table.remove("massing_mode").is_some(), "key drifted?");
+        assert!(table.remove("massing").is_some(), "key drifted?");
+        let parsed = WorldConfig::from_toml_str(&toml::to_string(&value).unwrap()).unwrap();
+        assert!(parsed.is_valid());
+        assert_eq!(parsed.massing_mode, default_massing_mode());
+        assert_eq!(parsed.massing, default_massing_table());
+        let json = serde_json::to_string(&WorldConfig::default()).unwrap();
+        let mut jvalue: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let obj = jvalue
+            .as_object_mut()
+            .expect("config serializes as an object");
+        assert!(obj.remove("massing_mode").is_some(), "key drifted?");
+        assert!(obj.remove("massing").is_some(), "key drifted?");
+        let parsed_json = WorldConfig::from_json_str(&jvalue.to_string()).unwrap();
+        assert!(parsed_json.is_valid());
+        assert_eq!(parsed_json.massing_mode, default_massing_mode());
+        assert_eq!(parsed_json.massing, default_massing_table());
     }
 }

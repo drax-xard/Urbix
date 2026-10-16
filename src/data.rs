@@ -351,11 +351,39 @@ impl ChunkBuffer {
             "buffer is shorter than its header claims (off {off}, len {})",
             self.data.len()
         );
-        // SAFETY: bounds checked above; written unaligned so it is valid for
-        // any allocation alignment. `Cell` is POD and contains no references,
-        // so copying its bytes is safe.
+        // SAFETY: bounds checked above; every field is written unaligned at
+        // its exact `offset_of!` position so the write stays valid for any
+        // allocation alignment. Fields are written one by one — never the
+        // whole struct — so the buffer's zeroed implicit alignment padding
+        // (between `flags` and `interior_id`) is left untouched. Copying a
+        // whole `Cell` here would leak uninitialized stack memory into the
+        // wire bytes (same class as the M3 header-padding fix); wire output
+        // must be a pure function of generation inputs for cross-process
+        // byte-identity to hold.
         unsafe {
-            std::ptr::write_unaligned(self.data.as_mut_ptr().add(off) as *mut Cell, cell);
+            let base = self.data.as_mut_ptr().add(off);
+            std::ptr::write_unaligned(
+                base.add(offset_of!(Cell, height)).cast::<f32>(),
+                cell.height,
+            );
+            std::ptr::write_unaligned(
+                base.add(offset_of!(Cell, zone_affinity))
+                    .cast::<[f32; ZONE_COUNT]>(),
+                cell.zone_affinity,
+            );
+            std::ptr::write_unaligned(
+                base.add(offset_of!(Cell, palette_id)).cast::<u8>(),
+                cell.palette_id,
+            );
+            std::ptr::write_unaligned(
+                base.add(offset_of!(Cell, flags)).cast::<CellFlags>(),
+                cell.flags,
+            );
+            std::ptr::write_unaligned(base.add(offset_of!(Cell, _pad)).cast::<u16>(), cell._pad);
+            std::ptr::write_unaligned(
+                base.add(offset_of!(Cell, interior_id)).cast::<InteriorId>(),
+                cell.interior_id,
+            );
         }
     }
 
@@ -475,5 +503,50 @@ mod tests {
         let cell = reclaimed.get_cell(0);
         assert_eq!(cell.zone_affinity, [0.0f32; ZONE_COUNT]);
         assert_eq!(cell.height, 0.0);
+    }
+
+    #[test]
+    fn set_cell_leaves_padding_zeroed() {
+        // Wire determinism: the implicit alignment padding between `flags`
+        // and `interior_id` must read back zero after `set_cell`. Poison the
+        // whole struct (padding included) with 0xFF, then set only the named
+        // fields: a whole-struct copy would leak the poison into the buffer
+        // (uninitialized stack memory in cross-process bytes), while
+        // field-at-offset writes leave the zeroed padding untouched.
+        let mut buf = ChunkBuffer::new(ChunkId::new(0, 0), 2, 42);
+        for i in 0..buf.cell_count() {
+            // SAFETY: `Cell` is plain data (floats, ints, flags); holding
+            // 0xFF patterns is valid, and every named field is overwritten
+            // below before the value is used.
+            let mut cell: Cell = unsafe { std::mem::zeroed() };
+            unsafe {
+                std::ptr::write_bytes(
+                    (&mut cell as *mut Cell).cast::<u8>(),
+                    0xFF,
+                    size_of::<Cell>(),
+                );
+            }
+            cell.height = 1.5;
+            cell.zone_affinity = [0.5; ZONE_COUNT];
+            cell.palette_id = 2;
+            cell.flags = CellFlags::IS_STREET;
+            cell._pad = 0;
+            cell.interior_id = 7;
+            buf.set_cell(i, cell);
+        }
+        for i in 0..buf.cell_count() {
+            let pad_off =
+                size_of::<ChunkHeader>() + i * size_of::<Cell>() + offset_of!(Cell, interior_id)
+                    - 4;
+            assert_eq!(
+                &buf.as_bytes()[pad_off..pad_off + 4],
+                &[0, 0, 0, 0],
+                "cell {i} padding leaked stack memory"
+            );
+            // Named fields still round-trip through the poison.
+            let back = buf.get_cell(i);
+            assert_eq!(back.height, 1.5);
+            assert_eq!(back.interior_id, 7);
+        }
     }
 }

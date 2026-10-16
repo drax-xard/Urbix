@@ -39,6 +39,49 @@ interior_max_floors = 64
 flow_path_count = 8
 flow_half_width = 1.0
 
+# Split-grammar massing (Milestone 17): per-zone podium/roof/crown steps over
+# the flat lot extrude. massing_mode = 0 disables the grammar (legacy extrude
+# exactly). Provide all 5 rows in ZoneType order when specified
+# (Downtown, Residential, Commercial, Industrial, Park); omit for defaults.
+# roof_mode: 0 flat, 1 pitched (ridge along the long axis), 2 sawtooth.
+# setback_every is reserved (G2) — validated, unwired.
+massing_mode = 1
+
+[[massing]] # Downtown: tower-on-podium, occasional crown
+podium_floors = 3
+tower_inset = 1
+setback_every = 0
+roof_mode = 0
+crown_share = 0.3
+
+[[massing]] # Residential: house with ridge roof
+podium_floors = 0
+tower_inset = 0
+setback_every = 0
+roof_mode = 1
+crown_share = 0.0
+
+[[massing]] # Commercial: shopfront base + short tower
+podium_floors = 2
+tower_inset = 1
+setback_every = 0
+roof_mode = 0
+crown_share = 0.15
+
+[[massing]] # Industrial: shed bays with skylight rhythm
+podium_floors = 0
+tower_inset = 0
+setback_every = 0
+roof_mode = 2
+crown_share = 0.0
+
+[[massing]] # Park: flat shed (unchanged)
+podium_floors = 0
+tower_inset = 0
+setback_every = 0
+roof_mode = 0
+crown_share = 0.0
+
 # Scale canon (Milestone 11): 1 cell = 4 m. Block sizes are in cells;
 # multiply by 4 for metres. `arterial_every` K makes every K-th street a
 # 2-cell arterial avenue (0 disables arterials).

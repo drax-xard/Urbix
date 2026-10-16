@@ -7,14 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- **Degenerate-span NaN guard** (post-0.19.0 audit): the flow-economy gravity
-  falloff floors its knee at `1e-9`, so a zero span passed directly to
-  `generate_with_config` (rejected by `is_valid`, but constructible by API
-  consumers) can no longer poison path weights with NaN. Covered by a
-  finiteness regression test; all-normal configs are unaffected.
-
 ### Added
 
 - **Satellite budget/plan (pending)**: new `docs/satellites.md` with realistic
@@ -22,17 +14,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (5–6 pd) and streaming server, Rust-axum first (5.5–7.5 pd, Go port +3–4) —
   including work breakdowns, acceptance criteria, risks, and decision gates.
   No code changes.
-- **Milestone 17 plan (pending)**: new `docs/grammar_massing.md` buildable spec
-  for G0 split-grammar massing (podium/tower, pitched/sawtooth roofs, crowns
-  as per-cell height steps; `massing_mode = 0` reproduces legacy;
-  `Cell`/`ZoneParams` frozen, `WorldConfig` grows → `0.20.0` on build).
-  `Urbix_Project.md` gains M17 ⬜. No code changes.
 - **Thought-experiment doc**: new `docs/thought_experiment.md` capturing
   alternative language / framework / paradigm rebuilds (Zig, Odin, Go+gRPC,
   BEAM, Taichi/Mojo, GPU-native, DB/SQL, USD/glTF, WASM Component Model,
   node-graph DSL, agent sim, WFC+L-systems, 4D time, LLM/MCP, Merkle-city)
   plus goal-by-goal upgrades and top-3 prototypes. Non-normative, no code
   changes.
+
+## [0.20.0] — 2026-10-16
+
+### Added
+
+- **Grammar massing** (Milestone 17 — split-grammar buildings, G0; spec in
+  `docs/grammar_massing.md`, now marked done with as-built notes):
+  - New `src/massing.rs`: `MassingParams` per-zone table (`repr(C)`, serde,
+    defaults: Downtown 3/1/0/flat/0.30, Commercial 2/1/0/flat/0.15,
+    Residential pitched, Industrial sawtooth, Park flat), pure `massing_for`
+    step fn (podium cap → roof peak → crown), `is_flat()` legacy check, plus
+    `massing_ring` / `podium_top` / `lot_crowns` helpers so examples recompute
+    exactly what generation uses.
+  - `src/building.rs`: `assign_building` threads lot rect + cell offset and a
+    landmark/special pre-step boost through the steps (podium survives the
+    boost), then the existing jitter and band/slenderness clamps last.
+  - `src/chunk.rs`: threads the already-computed `lot_rect` + new
+    `lot::lot_offset`, snaps rules from the dominant zone, folds landmark
+    (×1.5) and tower-park (×1.35) boosts pre-step only when steps are live —
+    `massing_mode = 0` and flat tables share the legacy post-boost path, so
+    flat output is byte-identical in every mode (gateway-tested).
+  - `src/lot.rs`: new `lot_offset` helper (offsets always inside the rect;
+    clamps the rare M11 pack-boundary alias cells, with the aliasing
+    documented and `lot_rect` deliberately untouched for byte-compat).
+  - Config (`src/config.rs`): `massing_mode` (default 1, `0` = legacy) +
+    `massing: [MassingParams; 5]` appended to `WorldConfig`, serde-defaulted
+    (strip-and-reparse compat proven for TOML+JSON), guarded by `is_valid`;
+    `urbix.toml/json.example` updated; `cli_demo` prints a per-cell massing
+    readout (rule + ring + podium top + podium/crowned/core role).
+  - `include/urbix.h` regenerated (`MassingParams` picked up automatically as
+    a `WorldConfig` dependency; new `MASS_*` domains excluded).
+  - Tests: 12 massing unit tests (legacy identity, podium ordering, stub
+    no-op, crown share, ridge/eaves, sawtooth period, reserved no-op, geometry
+    safety), building wiring + pre-step + slenderness-under-boost tests,
+    chunk gateway (`mode 0` vs flat table byte-equality) + heights-only
+    (flags/palette/interiors untouched) tests, config compat + rejections.
+  - Gates: `walkability` + `interiors_gate` green at seed 69420/extent 8
+    (street 20.1%, arterial 8.8%, sidewalk 24.4%, street-wall mean 16.7
+    cells — all at the 0.19.0 baseline, massing is heights-only), single-chunk
+    bench 657 µs (~+4% vs the 0.19.0 ~630 µs baseline, inside the 1.1×
+    budget).
+
+### Fixed
+
+- **Cell padding leak** (`src/data.rs`): `set_cell` wrote whole `Cell`
+  structs with `write_unaligned`, copying 4 bytes of uninitialized implicit
+  padding (between `flags` and `interior_id`) into the wire buffer — wire
+  bytes varied with stack state across processes. It now writes field by
+  field at `offset_of!` positions (the M3 header fix applied to cells),
+  leaving zeroed padding untouched. Covered by a poison-and-check regression
+  test (proven to fail on the old copy); example-file vs CLI-default outputs
+  are now byte-identical.
+- **Header domain leak** (`cbindgen.toml`): `LAYOUT_PICK`–`LAYOUT_FURNITURE`
+  were never excluded and leaked as `#define`s into `include/urbix.h`; added
+  alongside the new `MASS_PODIUM`/`MASS_CROWN`/`MASS_ROOF` excludes.
+- **Degenerate-span NaN guard** (post-0.19.0 audit): the flow-economy gravity
+  falloff floors its knee at `1e-9`, so a zero span passed directly to
+  `generate_with_config` (rejected by `is_valid`, but constructible by API
+  consumers) can no longer poison path weights with NaN. Covered by a
+  finiteness regression test; all-normal configs are unaffected.
+
+### Changed
+
+- Default seeds regenerate with stepped masses (expected MINOR break, same
+  precedent as M11/M12/M16; `massing_mode = 0` restores legacy exactly).
+- `Urbix_Project.md` M17 ✅, `README.md` status row.
 
 ## [0.19.0] — 2026-09-25
 
