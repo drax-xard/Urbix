@@ -261,58 +261,18 @@ All requested, built, verified, committed locally; user pushes.
 
 ## Session 4 — M17 grammar massing build (0.19.0 → 0.20.0, DONE)
 
-> TEMPORARY working reference for the active build (user-approved
-> 2026-10-16). Remove or collapse to a timeline entry once M17 lands.
-> Locked decisions: full M17 (not a tune-up), spec defaults unchanged,
-> validation seed **69420** / extent 8. Spec: `docs/grammar_massing.md`.
+Built 2026-10-16 as `872fc94` (+ `2e09026` audit fix); `Cargo.toml`
+`0.20.0`; M17 ✅ DONE (`docs/grammar_massing.md` + §9 as-built notes).
+Built in order 17.1 (`massing.rs` types + pure fn) → 17.2 (`building.rs`
+wiring + legacy gate) → 17.3 (`chunk.rs` threading + chunk tests) → 17.4
+(config/FFI/examples/docs/release); `Cell`/`ZoneParams` frozen, no
+`region.rs`/`street.rs`/interior/flag changes. Suite green: 191 lib +
+integration + 41 doctests; clippy/fmt clean; doc warnings at base 5.
+Gates at seed 69420/extent 8: `walkability` (20.1/8.8/24.4, wall 16.7) +
+`interiors_gate` green; single-chunk bench 657 µs (~+4% vs 0.19.0, inside
+the 1.1× budget).
 
-Plan (grounded against the tree; all refs verified 2026-10-16):
-
-1. **17.1 — `src/massing.rs` (new) + `lib.rs` re-export.**
-   `MassingParams { podium_floors, tower_inset, setback_every, roof_mode: u8;
-   crown_share: f32 }` (`repr(C)`, serde, per-zone defaults: Downtown
-   3/1/0/flat/0.30, Commercial 2/1/0/flat/0.15, Residential pitched,
-   Industrial sawtooth, Park flat-zero). Pure `massing_for(lot_id, rect,
-   offset, H, params, seed, floor_h)` + `is_flat()`. Integer-only
-   ring/ridge/band math; crown roll on `MASS_CROWN`; `H <= podium_top`
-   no-op. Tests: determinism, podium<tower, single-storey unaffected,
-   crown share + edge-never-crowned, pitched ridge>eaves + symmetry,
-   sawtooth period 3 + cross-chunk phase (same-lot scan, seed-agnostic),
-   `setback_every` reserved no-op.
-2. **17.2 — `src/building.rs` wiring + legacy gate.**
-   Thread rect+offset into `assign_building` (`src/building.rs:64-73`;
-   fate roll still first, palette untouched). Steps slot after corner,
-   before jitter → caps last (spec ordering; current code jitters before
-   clamping at `:99-111`). `cell_jitter=None` exact-step tests +
-   `massing_mode = 0` legacy reproduction.
-3. **17.3 — `src/chunk.rs` threading + caps.**
-   Pass `rect` (`chunk.rs:202`) + lot-local `(ox,oz)` at `:202-212`;
-   post-boost re-clamp (`:241-246`) unchanged via shared
-   `slenderness_cap()`; flags/plaza/sidewalk/lot pipeline untouched;
-   `interior_context_for` keeps full pack rect (G0 approximation).
-   Tests: `massing_mode = 0` `as_bytes` byte-equality on sampled grid
-   incl. negatives; slenderness holds; street-wall vs 17.0-cell baseline.
-4. **17.4 — config/FFI/examples/docs/release.**
-   `config.rs`: append `massing_mode` (default 1, `<= 1`) +
-   `massing: [MassingParams; 5]` after `flow_half_width:140`, serde
-   defaults + `is_valid` + strip-and-reparse + rejections. `hash.rs`:
-   `MASS_* = 62/63/64` (61 is top used). `cbindgen.toml`: `MassingParams`
-   to `include`, 3 domains to `exclude`; `build.rs` fallback + asserts;
-   regen `include/urbix.h`. Example files gain `massing_*` lines;
-   `cli_demo` podium/tower/crown shares; `world_generation.md` §3,
-   `api.md` Configuration, `Urbix_Project.md` M17 ✅, README rows,
-   `CHANGELOG.md` `[0.20.0]`, `Cargo.toml` bump (MINOR, wire frozen).
-5. **Gates:** `cargo build --all-targets`, `test`, `clippy`, `fmt`;
-   release `viz` (walk + overhead) and `walkability` + `interiors_gate`
-   at seed 69420/extent 8; bench delta < 1.1×; `cargo doc` warnings vs
-   base 5. SDK re-vendor explicitly deferred to next SDK release.
-
-Grounding notes: `lot_id` (`lot.rs:244`) stable cross-chunk → phase/rolls
-align at borders; `ZoneParams` 16 B / `Cell` 40 B frozen; no
-`region.rs`/`street.rs`/interior changes; no new flags.
-
-Built 2026-10-16 (all green, gates pass — see CHANGELOG `0.20.0`). Two
-real finds en route, both fixed with regression tests:
+Finds en route, all fixed with regression tests:
 
 * **Cell padding leak** (`src/data.rs`): `set_cell` wrote whole structs,
   leaking 4 uninit implicit-padding bytes into wire output across processes
@@ -357,3 +317,34 @@ no library changes:
   crowned 22.8 / flat 0.0 at 69420/8); gate unchanged.
 * `interactive` compiles (eframe) but was not run — no display in this
   environment; needs a human run-through.
+
+## Next session — open threads (as of 2026-10-16)
+
+* `main` at `592371d`; `Cargo.toml` `0.20.0`; M17 ✅ DONE (audited);
+  visualizers support the current framework. Suite green: 191 lib +
+  integration + 41 doctests; clippy/fmt clean; doc warnings at base 5.
+  All work committed locally; user pushes (passphrase SSH key).
+* Needs a human: run `interactive` once (new walk/massing modes, flow
+  tint, selection massing line, furnished glyphs); eyeball
+  `/tmp/v_hybrid|affinity|walk|massing.ppm`-equivalents at seed 69420/8
+  plus a flow-avenue area (e.g. `--center-cx 24 --center-cy -138`, path-2
+  midpoint) and the `/tmp/smoke` walk output.
+* Finetuning entry points (user explicitly wants to finetune later):
+  per-zone `massing` rows via `--config` (no recompile), `walkability`'s
+  new massing-share line as the metric, `viz --mode massing` as the eye.
+* Deferred, unchanged: SDK re-vendor to 0.20.0 before any SDK work
+  (`sdk/include/urbix.h`, macOS libs/tarball, doc version bumps, then
+  `build.sh` + `test.sh`); satellites WASM/server (decision gates in
+  `docs/satellites.md`); L0 value re-tag + L2 footfall; G1 WFC fabrics +
+  G2 grammar↔interior bridge (needs M17 — now landed, specs not started);
+  terrain/water (§8.4), road-graph (§8.3), time/weather (§8.5), mutable
+  overlays (§8.6); perpendicular snapping for seam-stub T-junctions
+  (offered, unconfirmed); viewer realism leftovers (retail fronts,
+  chunk-border mass seams, far-distance window fade).
+* Conventions that bit this session (remember next time): example-file
+  TOML takes one key per line (`;` only appears inside comments); `min()`
+  caps mask boost bugs — write discriminating-gate tests, not just
+  fixture-count tests; content renders of `viz` need pixel-census proof
+  since images can't be eyeballed in this environment (flow tint at the
+  locked center window is correctly zero — avenues don't cross it);
+  `cargo test` in debug is fast enough for 200-seed chunk sweeps.
