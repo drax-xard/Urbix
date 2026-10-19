@@ -119,7 +119,7 @@ pub const fn default_arterial_every() -> u8 {
 /// files without the field keep parsing (they get the chunky-mid-rise cap).
 #[must_use]
 pub const fn default_slenderness_max() -> u8 {
-    5
+    4
 }
 
 /// Default parameters for a single [`ZoneType`].
@@ -141,7 +141,7 @@ pub fn zone_defaults(zone: ZoneType) -> ZoneParams {
             block_size: 11,
             palette_count: 6,
             arterial_every: 4,
-            slenderness_max: 5,
+            slenderness_max: 4,
         },
         ZoneType::Residential => ZoneParams {
             height_min: 4.0,
@@ -150,7 +150,7 @@ pub fn zone_defaults(zone: ZoneType) -> ZoneParams {
             block_size: 10,
             palette_count: 5,
             arterial_every: 5,
-            slenderness_max: 5,
+            slenderness_max: 4,
         },
         ZoneType::Commercial => ZoneParams {
             height_min: 10.0,
@@ -159,7 +159,7 @@ pub fn zone_defaults(zone: ZoneType) -> ZoneParams {
             block_size: 9,
             palette_count: 7,
             arterial_every: 4,
-            slenderness_max: 5,
+            slenderness_max: 4,
         },
         ZoneType::Industrial => ZoneParams {
             height_min: 6.0,
@@ -168,7 +168,7 @@ pub fn zone_defaults(zone: ZoneType) -> ZoneParams {
             block_size: 14,
             palette_count: 4,
             arterial_every: 6,
-            slenderness_max: 5,
+            slenderness_max: 4,
         },
         ZoneType::Park => ZoneParams {
             height_min: 0.0,
@@ -177,7 +177,7 @@ pub fn zone_defaults(zone: ZoneType) -> ZoneParams {
             block_size: 18,
             palette_count: 3,
             arterial_every: 0,
-            slenderness_max: 5,
+            slenderness_max: 4,
         },
     }
 }

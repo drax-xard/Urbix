@@ -1,4 +1,4 @@
-# Urbix Engine — C API Reference (v0.18.0)
+# Urbix Engine — C API Reference (v0.20.1)
 
 This is the authoritative reference for calling the Urbix procedural city
 engine from C (or any language with C interop: C++, Rust, C#, Unity, Godot,
@@ -24,6 +24,13 @@ Urbix is a **deterministic, infinite procedural city generator**. Given a
   plus — since 0.15.0 — **per-room records** (rect, kind, apartment unit,
   area, via `urbix_generate_interior_rooms`).
 
+Since 0.19.0 the street grid also contains **flow arterials** (desire-path
+avenues grown from a site-graph traffic simulation on top of the lattice);
+they arrive as ordinary `CellFlags_IS_ARTERIAL` cells. Since 0.20.0 lots are
+shaped by **split-grammar massing**: podium bases, pitched/sawtooth roofs, and
+crown caps compress into per-cell height steps, so `height` already reflects
+the stepped mass (there is no extra FFI call).
+
 The same `seed` always produces the *identical* city. Chunks are generated
 **on demand** and LRU-cached, so memory stays bounded as you fly through an
 infinite world. Scale canon: **1 cell = 4 m** (so a default 32-cell chunk
@@ -48,7 +55,7 @@ same layout — swap `sdk/lib` + `sdk/include` to retarget):
 | `sdk/lib/liburbix.dylib` (`.so` on Linux, `.dll` on Windows) | dynamic library | You want to hot-swap or link at runtime |
 | `sdk/include/urbix.h` | C header | Everything here is declared in it |
 
-The archive `sdk/urbix-0.15.0-<target>.tar.gz` (+ `.sha256`) is the exact CI
+The archive `sdk/urbix-0.20.1-<target>.tar.gz` (+ `.sha256`) is the exact CI
 release artifact (matches `.github/workflows/release.yml`) with the same
 layout.
 
@@ -119,6 +126,14 @@ typedef struct Blueprint {
     uint8_t furn_density;    /* M15: second-furniture-piece probability 0..100 */
 } Blueprint;
 
+typedef struct MassingParams {
+    uint8_t podium_floors;  /* full-footprint base height in floors (0 = no podium) */
+    uint8_t tower_inset;    /* edge rings from the lot border capped to the podium (0 = flat) */
+    uint8_t setback_every;  /* reserved for G2 step-backs; accepted + validated, ignored */
+    uint8_t roof_mode;      /* 0 flat, 1 pitched (ridge on long axis), 2 sawtooth (x bays) */
+    float   crown_share;    /* share of lots earning a crown cap on inner cells (0..1) */
+} MassingParams;
+
 typedef struct WorldConfig {
     uint64_t seed;
     uint16_t chunk_size;            /* cells per side, e.g. 32 */
@@ -135,8 +150,26 @@ typedef struct WorldConfig {
     float    interior_floor_height;          /* M9: world units per storey (default 4.0) */
     uint8_t  interior_max_floors;            /* M9: floor cap (default 64) */
     Blueprint interior_blueprints[ZONE_COUNT]; /* M9 rule tables, extended M13-M15 */
+    uint8_t  flow_path_count;                /* M16: desire-path avenues kept (default 8; 0 = legacy) */
+    float    flow_half_width;                /* M16: flow avenue half-width in cells (default 1.0) */
+    uint8_t  massing_mode;                   /* M17: 1 = split-grammar massing, 0 = legacy flat extrude */
+    MassingParams massing[ZONE_COUNT];       /* M17: per-zone podium/roof/crown rules */
 } WorldConfig;
 ```
+
+Massing defaults (rows indexed by the zone table above):
+
+| Zone | podium_floors | tower_inset | roof_mode | crown_share |
+|---|---|---|---|---|
+| Downtown | 3 | 1 | 0 (flat) | 0.30 |
+| Residential | 0 | 0 | 1 (pitched) | 0.00 |
+| Commercial | 2 | 1 | 0 (flat) | 0.15 |
+| Industrial | 0 | 0 | 2 (sawtooth) | 0.00 |
+| Park | 0 | 0 | 0 (flat) | 0.00 |
+
+All-zero rules (or `massing_mode = 0`) reproduce the pre-0.20 flat extrude
+byte-for-byte. `flow_path_count = 0` likewise reproduces the pre-0.19 street
+lattice.
 
 To build a config from C, see §9. The struct is `#[repr(C)]` and its layout is
 fixed for this version. New fields are always serde-defaulted, so old
@@ -514,26 +547,37 @@ cfg.shepard_epsilon       = 1e-8;
 cfg.zone_weights[0] = 0.25f; cfg.zone_weights[1] = 0.30f;
 cfg.zone_weights[2] = 0.20f; cfg.zone_weights[3] = 0.15f;
 cfg.zone_weights[4] = 0.10f;
-/* zones: height_min, height_max, density, block_size, palette_count, arterial_every */
-cfg.zones[0] = (ZoneParams){ 24.0f, 110.0f, 0.95f, 11, 6, 4 }; /* Downtown */
-cfg.zones[1] = (ZoneParams){  4.0f,  14.0f, 0.80f, 10, 5, 5 }; /* Residential */
-cfg.zones[2] = (ZoneParams){ 10.0f,  45.0f, 0.90f,  9, 7, 4 }; /* Commercial */
-cfg.zones[3] = (ZoneParams){  6.0f,  20.0f, 0.70f, 14, 4, 6 }; /* Industrial */
-cfg.zones[4] = (ZoneParams){  0.0f,   2.0f, 0.10f, 18, 3, 0 }; /* Park (no arterials) */
+/* zones: height_min, height_max, density, block_size, palette_count,
+   arterial_every, slenderness_max */
+cfg.zones[0] = (ZoneParams){ 24.0f, 110.0f, 0.95f, 11, 6, 4, 4 }; /* Downtown */
+cfg.zones[1] = (ZoneParams){  4.0f,  14.0f, 0.80f, 10, 5, 5, 4 }; /* Residential */
+cfg.zones[2] = (ZoneParams){ 10.0f,  45.0f, 0.90f,  9, 7, 4, 4 }; /* Commercial */
+cfg.zones[3] = (ZoneParams){  6.0f,  20.0f, 0.70f, 14, 4, 6, 4 }; /* Industrial */
+cfg.zones[4] = (ZoneParams){  0.0f,   2.0f, 0.10f, 18, 3, 0, 4 }; /* Park (no arterials) */
 /* zone_hues from DEFAULT_ZONE_HUES */
 cfg.interior_width_range[0]  = 6;  cfg.interior_width_range[1]  = 14;
 cfg.interior_height_range[0] = 6;  cfg.interior_height_range[1] = 14;
 cfg.interior_floor_height = 4.0f;
 cfg.interior_max_floors  = 64;
 /* interior_blueprints: leave zeroed for engine defaults, or fill per zone */
+cfg.flow_path_count = 8;        /* 0 = legacy lattice */
+cfg.flow_half_width = 1.0f;     /* 2-cell avenues */
+cfg.massing_mode    = 1;        /* 0 = legacy flat extrude */
+/* massing: leave zeroed for legacy, or set per zone, e.g. Downtown: */
+cfg.massing[0] = (MassingParams){ 3, 1, 0, 0, 0.30f };
 
 UrbixEngine *e = urbix_engine_create_with_config(&cfg);
 ```
 
 `urbix_engine_create_with_config` returns NULL if the config is invalid
 (bad ranges, zone weights not summing ~1.0, `arterial_every > 16`,
-`furn_density > 100`, etc.), so validating via the C API means checking for
-a non-NULL result.
+`slenderness_max > 12`, `flow_path_count > 16`, `flow_half_width` outside
+`0.5..=2.0`, `massing_mode > 1`, `furn_density > 100`, etc.), so validating
+via the C API means checking for a non-NULL result.
+
+> **Massing**: leave `massing[]` zeroed to keep the legacy flat extrude (even
+> with `massing_mode = 1`), or start from `urbix_default_config()` to get the
+> per-zone defaults in the table above. Roof `height` arrives already stepped.
 
 > **Defaults**: if you only want a different seed, use
 > `urbix_engine_create(seed)` — it uses the same defaults as the table above

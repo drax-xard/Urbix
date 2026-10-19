@@ -103,6 +103,12 @@ pub fn assign_building(
         seed,
         domain::LOT_HEIGHT,
     );
+    // Right-skew the draw (`t²`) so most lots sit low in the band and tall
+    // towers stay rare — a uniform draw puts the median at the band midpoint,
+    // which reads as a district of high-rises. The low end is untouched
+    // (a `t` of 0 still maps to `height_min`), the top stays reachable but
+    // needs a `t` near 1.
+    let t = t * t;
     let mut height = params.height_min + t * (params.height_max - params.height_min);
     // Block-scale variation: ±15% so neighbouring lots differ in rhythm.
     height *= 0.85 + block_clump * 0.30;
@@ -135,13 +141,13 @@ pub fn assign_building(
         height *= 0.9 + j * 0.2;
     }
     // Clamp into a sane envelope: never below 0, never absurdly above the
-    // band (bonuses stack at most ~1.5 × 1.2 × 1.1 ≈ 2×; clamp at 1.6× max
+    // band (bonuses stack at most ~1.3 × 1.2 × 1.1 ≈ 1.7×; clamp at 1.3× max
     // to keep outliers believable while preserving landmark variance).
     // Then the slenderness cap: no lot outgrows its own footprint, so the
     // skyline reads as broad masses instead of spikes.
     let height = height
         .max(0.0)
-        .min(params.height_max * 1.6 + 1.0)
+        .min(params.height_max * 1.3 + 1.0)
         .min(slenderness_cap(params, lot_footprint.0, lot_footprint.1));
 
     // Palette: one per lot.
@@ -165,8 +171,8 @@ pub fn assign_building(
 /// use urbix::building::slenderness_cap;
 /// use urbix::zones::{ZoneType, zone_defaults};
 ///
-/// let params = zone_defaults(ZoneType::Downtown); // slenderness_max 5
-/// assert_eq!(slenderness_cap(&params, 5, 5), 100.0);
+/// let params = zone_defaults(ZoneType::Downtown); // slenderness_max 4
+/// assert_eq!(slenderness_cap(&params, 5, 5), 80.0);
 /// ```
 #[must_use]
 pub fn slenderness_cap(params: &ZoneParams, lot_w: u8, lot_d: u8) -> f32 {
@@ -369,7 +375,7 @@ mod tests {
                 );
                 if h > 0.0 {
                     built += 1;
-                    assert!(h <= params.height_max * 1.6 + 1.0, "h={h} escapes envelope");
+                    assert!(h <= params.height_max * 1.3 + 1.0, "h={h} escapes envelope");
                 } else {
                     assert_eq!(h, 0.0);
                 }
@@ -477,10 +483,10 @@ mod tests {
 
     #[test]
     fn slenderness_cap_caps_narrow_lots() {
-        // Downtown band (24-110 m) on a 2-cell-wide lot: 5 × 2 × 4 = 40 m lid.
+        // Downtown band (24-110 m) on a 2-cell-wide lot: 4 × 2 × 4 = 32 m lid.
         let params = zone_defaults(ZoneType::Downtown);
-        assert_eq!(slenderness_cap(&params, 2, 6), 40.0);
-        assert_eq!(slenderness_cap(&params, 5, 5), 100.0);
+        assert_eq!(slenderness_cap(&params, 2, 6), 32.0);
+        assert_eq!(slenderness_cap(&params, 5, 5), 80.0);
         // Disabled policy never caps.
         let off = ZoneParams {
             slenderness_max: 0,

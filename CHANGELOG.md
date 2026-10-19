@@ -36,6 +36,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plus goal-by-goal upgrades and top-3 prototypes. Non-normative, no code
   changes.
 
+## [0.20.1] — 2026-10-19
+
+### Changed
+
+- **Skyline tuning** (`src/building.rs`, `src/region.rs`, `src/zones.rs`,
+  `src/config.rs`; no wire/FFI change — `Cell` and `ZoneParams` are frozen):
+  - The per-lot band draw is now right-skewed (`t²`) instead of uniform, so
+    the median lot sits low in its zone band and tall towers become rare
+    rather than half the district. Sampled (1.17M built cells): overall
+    median 34.3 m → 23.8 m, downtown median 51.7 m → 33.2 m (13 → 9 floors),
+    residential 21.4 m → 16.0 m, commercial 41.7 m → 27.1 m.
+  - Outlier clamp tightened from `height_max × 1.6 + 1` to `× 1.3 + 1`
+    (`building.rs` + the three `chunk.rs` special-boost sites): downtown max
+    177 m → 144 m (44 → 36 floors), commercial 124 → 101 m.
+  - `cbd_factor` peak lowered 1.5 → 1.3 (Lorentzian numerator 0.5 → 0.3), so
+    the CBD core peaks less aggressively over an already tall band.
+  - Default `slenderness_max` lowered 5 → 4 across zones (serde default
+    included): a 5-cell lot caps at 80 m instead of 100 m.
+  - Combined: downtown p90 100 m → 80 m, >80 m share 28% → 5%. Deterministic
+    output changes; the `walkability` gate stays green at seed 69420 extent 8
+    (street 20.1%, arterial 8.8%, sidewalk 24.4%, street-wall mean 16.7
+    cells — all at the 0.20.0 baseline; only heights moved).
+- **3D-explorer SDK refresh (`3d-explorer-sdk/`, 0.18.0 → 0.20.1)**:
+  - Re-vendored `sdk/include/urbix.h`, `sdk/lib/liburbix.{a,dylib}`, and the
+    `urbix-0.20.1-macos-aarch64.tar.gz` release artifact (+ `.sha256`);
+    Linux/Windows tarballs keep shipping from CI (`release.yml`) with the
+    same layout.
+  - `docs/api.md` updated for 0.20.1: `MassingParams` + the M17 massing fields
+    and defaults, M16 `flow_path_count`/`flow_half_width`, the flow-arterial
+    and split-grammar behaviour notes, and the corrected `ZoneParams`
+    initializer (`slenderness_max` default now 4).
+  - `README.md` version/provenance/tarball references bumped; new paragraph
+    explains how flow avenues and massing appear in the existing chunk
+    payload (flags + height, no extra FFI calls).
+  - `server/serve.c` reports `"sdk":"0.20.1"`; `server/test.sh` asserts it.
+    `build.sh` and all three examples link and run against the new pair.
+
+### Fixed
+
+- **Explorer facade windows no longer float** (`3d-explorer-sdk/server/www/app.js`):
+  the 5 cm-offset instanced window boxes (readable as separate slabs at close
+  range) are replaced by a procedural window grid painted inside the building
+  material via `onBeforeCompile` (one shared Lambert program). Windows are
+  flush with the facade, derive their grid from the instance's face UVs and
+  size, keep the deterministic warm-lit scatter (plus a small emissive glow),
+  and fade with `fwidth()` once the grid drops below screen resolution instead
+  of the old `polygonOffset` streak workaround. Removes the per-chunk 9k-panel
+  budget/fallback and its extra draw call.
+- **Explorer buildings no longer render as one-cell needles**
+  (`3d-explorer-sdk/server/www/app.js`): `mergeMasses` swapped its greedy
+  row/column expansion (a ±12% tolerance that the engine's ±10% per-cell
+  jitter routinely exceeded) for a 4-neighbour flood fill with a
+  `max(2 m, 25%)` tolerance to the cluster max, bounding-boxed at the cluster
+  height. A sample of 303k cells: masses with a side ≤2 cells 95.5% → 63.3%,
+  needles (height/width >6) 52.3% → 15.7%, median aspect 6.4 → 3.1. Real
+  massing steps stay separate (podium ring vs tower core), so lots now read
+  as articulated masses instead of spikes.
+
 ## [0.20.0] — 2026-10-16
 
 ### Added

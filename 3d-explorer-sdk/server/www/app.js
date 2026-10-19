@@ -119,6 +119,96 @@ scene.add(sunGlow);
 /* Shared unit box — one geometry for all instanced buildings (never disposed). */
 const UNIT_BOX = new THREE.BoxGeometry(1, 1, 1);
 
+/* Facade windows, drawn procedurally into the building material.
+ *
+ * Older builds floated a thin window box 5 cm off every facade; up close you
+ * saw its sides and the gap. Instead the window grid is painted in the
+ * fragment shader, flush with the wall, so it is crisp at any distance and
+ * costs no extra geometry or draw calls.
+ *
+ * Each merged mass is an instanced unit box, so the shader recovers the mass
+ * dimensions from the instance matrix and the face orientation from the
+ * object-space normal:
+ *   - columns: one per cell (1 world unit) along the face's horizontal axis;
+ *   - rows:    one per storey (4 world units == 4 m) up the face;
+ *   - top metre and masses under ~8 m stay bare (sheds/houses/crowns);
+ *   - lit rooms scatter deterministically from the mass origin + cell index.
+ * When the grid drops below screen resolution it fades out via fwidth(), which
+ * removes the far-distance moiré the old offset panels fought with
+ * polygonOffset. */
+function facadeMaterial() {
+  const mat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+  /* fwidth() needs the derivatives extension on WebGL1; a no-op on WebGL2. */
+  mat.extensions = { derivatives: true };
+  /* Every facade material is identical, so share one compiled program. */
+  mat.customProgramCacheKey = () => "urbix-facade-v1";
+  mat.onBeforeCompile = (shader) => {
+    const varyings = `
+      varying vec2 vFacadeUv;
+      varying vec3 vFacadeScale;
+      varying vec3 vFacadeNormal;
+      varying vec3 vFacadeOrigin;`;
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", `#include <common>${varyings}`)
+      .replace(
+        "#include <begin_vertex>",
+        `#include <begin_vertex>
+        vFacadeUv = uv;
+        vFacadeNormal = normal;
+        #ifdef USE_INSTANCING
+          vFacadeScale = vec3(
+            length(instanceMatrix[0].xyz),
+            length(instanceMatrix[1].xyz),
+            length(instanceMatrix[2].xyz));
+          vFacadeOrigin = (modelMatrix * instanceMatrix[3]).xyz;
+        #else
+          vFacadeScale = vec3(1.0);
+          vFacadeOrigin = vec3(0.0);
+        #endif`
+      );
+    shader.fragmentShader = shader.fragmentShader
+      .replace("#include <common>", `#include <common>${varyings}`)
+      .replace(
+        "#include <color_fragment>",
+        `#include <color_fragment>
+        /* Walls only (skip the roof/underside), and only tall masses. */
+        if (abs(vFacadeNormal.y) < 0.5) {
+          float horiz = (abs(vFacadeNormal.x) > 0.5) ? vFacadeScale.z : vFacadeScale.x;
+          float vert = vFacadeScale.y;
+          float tall = smoothstep(6.0, 8.0, vert);
+          if (tall > 0.001) {
+            float u = vFacadeUv.x * horiz;   /* cells along the face */
+            float v = vFacadeUv.y * vert;    /* metres up the face */
+            /* Fade once a window period falls under ~3 px (no moiré). */
+            float lodFade = 1.0
+              - smoothstep(0.25, 0.75, max(fwidth(u), fwidth(v) * 0.25));
+            float cu = floor(u);
+            float rv = floor(v / 4.0);
+            vec2 f = vec2(fract(u), fract(v / 4.0));
+            float wx = smoothstep(0.22, 0.28, f.x)
+              * (1.0 - smoothstep(0.72, 0.78, f.x));
+            float wy = smoothstep(0.42, 0.47, f.y)
+              * (1.0 - smoothstep(0.86, 0.91, f.y));
+            float top = 1.0 - smoothstep(vert - 1.0, vert - 0.5, v); /* bare top */
+            float win = wx * wy * top * tall * lodFade;
+            if (win > 0.001) {
+              float lit = abs(fract(sin(dot(
+                vec3(vFacadeOrigin.x + cu, vFacadeOrigin.z, rv),
+                vec3(12.9898, 78.233, 37.719))) * 43758.5453));
+              float isLit = (lit < 0.22) ? 1.0 : 0.0;
+              /* sRGB glass/lit pre-converted to the linear working space. */
+              vec3 wc = mix(vec3(0.018, 0.031, 0.048),
+                            vec3(1.0, 0.789, 0.352), isLit);
+              diffuseColor.rgb = mix(diffuseColor.rgb, wc, win);
+              totalEmissiveRadiance += vec3(1.0, 0.789, 0.352) * (win * isLit) * 0.5;
+            }
+          }
+        }`
+      );
+  };
+  return mat;
+}
+
 const controls = new OrbitControls(camera, canvas);
 controls.target.set(16, 0, 16);
 controls.enableDamping = true;
@@ -268,11 +358,21 @@ function loadSquare(cx, cy, r) {
 /* Merge adjacent built cells into single building masses.
  *
  * The engine varies height ±10% per cell inside a lot, so drawing one box
- * per cell renders every lot as a bed of needles. Cells that touch, share
- * zone/palette, and sit within 12% (min 2 m) of the seed height merge into
- * one rect box at the group max — the street wall reads as continuous
- * masses with occasional setback steps instead of spikes. Purely a render
- * choice; the data is untouched. */
+ * per cell renders every lot as a bed of needles. A lot's cells also share
+ * one zone/palette and (apart from massing steps) one height, so a
+ * connected flood fill that accepts same-zone/palette neighbours within a
+ * tolerance of the cluster max recovers the lot: the street wall reads as
+ * continuous masses with occasional setback steps instead of spikes.
+ *
+ * The tolerance is relative (25%) plus a 2 m floor, wide enough to absorb
+ * the ±10% per-cell jitter (two jittered cells differ by at most ~22% of
+ * the taller) yet tight enough that real massing steps — a 12 m podium
+ * ring against a 100 m core — stay separate masses. Bounding-box rects at
+ * the cluster max keep the instance count low; purely a render choice, the
+ * data is untouched. */
+const MASS_NEIGHBORS = [
+  [1, 0], [-1, 0], [0, 1], [0, -1],
+];
 function mergeMasses(cells) {
   const byKey = new Map();   /* "x,z" -> cell */
   for (const cell of cells) byKey.set(cell.x + "," + cell.z, cell);
@@ -280,35 +380,31 @@ function mergeMasses(cells) {
   for (const seed of cells) {
     const sk = seed.x + "," + seed.z;
     if (!byKey.has(sk)) continue;   /* already absorbed */
-    const tol = Math.max(2, seed.h * 0.12);
-    const same = (cell) =>
-      cell.zone === seed.zone && cell.pal === seed.pal &&
-      Math.abs(cell.h - seed.h) <= tol;
-    /* Expand right along the seed row. */
+    byKey.delete(sk);
+    let x0 = seed.x;
     let x1 = seed.x;
-    for (;;) {
-      const n = byKey.get((x1 + 1) + "," + seed.z);
-      if (!n || !same(n)) break;
-      x1++;
-    }
-    /* Expand downward while every column of the span matches. */
+    let z0 = seed.z;
     let z1 = seed.z;
-    outer: for (;;) {
-      const nz = z1 + 1;
-      for (let x = seed.x; x <= x1; x++) {
-        const n = byKey.get(x + "," + nz);
-        if (!n || !same(n)) break outer;
+    let h = seed.h;
+    const stack = [seed];
+    while (stack.length) {
+      const cur = stack.pop();
+      x0 = Math.min(x0, cur.x);
+      x1 = Math.max(x1, cur.x);
+      z0 = Math.min(z0, cur.z);
+      z1 = Math.max(z1, cur.z);
+      h = Math.max(h, cur.h);
+      const tol = Math.max(2, h * 0.25);
+      for (const [dx, dz] of MASS_NEIGHBORS) {
+        const k = (cur.x + dx) + "," + (cur.z + dz);
+        const n = byKey.get(k);
+        if (!n || n.zone !== seed.zone || n.pal !== seed.pal) continue;
+        if (Math.abs(n.h - h) > tol) continue;
+        byKey.delete(k);
+        stack.push(n);
       }
-      z1 = nz;
     }
-    let h = 0;
-    for (let z = seed.z; z <= z1; z++)
-      for (let x = seed.x; x <= x1; x++) {
-        const n = byKey.get(x + "," + z);
-        h = Math.max(h, n.h);
-        byKey.delete(x + "," + z);
-      }
-    masses.push({ x0: seed.x, z0: seed.z, x1, z1, h, zone: seed.zone, pal: seed.pal });
+    masses.push({ x0, z0, x1, z1, h, zone: seed.zone, pal: seed.pal });
   }
   return masses;
 }
@@ -328,11 +424,7 @@ function spawnChunk(c) {
   let pave = null;
 
   if (masses.length > 0) {
-    mesh = new THREE.InstancedMesh(
-      UNIT_BOX,
-      new THREE.MeshLambertMaterial({ color: 0xffffff }),
-      masses.length
-    );
+    mesh = new THREE.InstancedMesh(UNIT_BOX, facadeMaterial(), masses.length);
     roof = new THREE.InstancedMesh(
       UNIT_BOX,
       new THREE.MeshLambertMaterial({ color: 0xffffff }),
@@ -399,89 +491,9 @@ function spawnChunk(c) {
     group.add(pave);
   }
 
-  /* Facade windows: one panel per cell per storey on all four faces, so
-   * tall masses read at human scale. Unlit glass with a sparse deterministic
-   * scattering of warm lit rooms. Over a per-chunk budget we fall back to
-   * every second storey rather than dropping facades. */
-  let win = null;
-  if (masses.length > 0) {
-    const WIN_ROW = 4.0;    /* one row per storey (vertical units are metres) */
-    const WIN_COL = 1.0;    /* one column per cell along each face */
-    let rowStep = 1;
-    let panels = collectWindows(masses, WIN_ROW, WIN_COL, rowStep);
-    if (panels.length > 9000) {
-      rowStep = 2;
-      panels = collectWindows(masses, WIN_ROW, WIN_COL, rowStep);
-    }
-    if (panels.length > 0) {
-      win = new THREE.InstancedMesh(
-        UNIT_BOX,
-        /* polygonOffset pulls panels decisively in front of the facade:
-           at 300+ m the 0.05 gap is below depth-buffer precision and the
-           panels otherwise z-fight into streaks. */
-        new THREE.MeshBasicMaterial({
-          color: 0xffffff, polygonOffset: true,
-          polygonOffsetFactor: -2, polygonOffsetUnits: -2,
-        }),
-        panels.length
-      );
-      const m = new THREE.Matrix4();
-      const p = new THREE.Vector3();
-      const s = new THREE.Vector3();
-      const e = new THREE.Euler();
-      const q = new THREE.Quaternion();
-      const GLASS = new THREE.Color(0x24313e);
-      const LIT = new THREE.Color(0xffd9a0);
-      panels.forEach((it, i) => {
-        p.set(it.x, it.y, it.z);
-        e.set(0, it.ry, 0);
-        q.setFromEuler(e);
-        if (it.ry !== 0) s.set(0.06, 1.8, 0.55);
-        else s.set(0.55, 1.8, 0.06);
-        win.setMatrixAt(i, m.compose(p, q, s));
-        /* Deterministic lit scattering from position hash. */
-        const hh = Math.abs(Math.sin(it.x * 12.9898 + it.z * 78.233 + it.y * 37.719) * 43758.5453) % 1;
-        win.setColorAt(i, hh < 0.22 ? LIT : GLASS);
-      });
-      win.instanceMatrix.needsUpdate = true;
-      if (win.instanceColor) win.instanceColor.needsUpdate = true;
-      group.add(win);
-    }
-  }
-
   group.userData = { cx: c.cx, cy: c.cy };
-  chunks.set(key, { group, data, mesh, roof, pave, paveKinds, win, cx: c.cx, cy: c.cy });
+  chunks.set(key, { group, data, mesh, roof, pave, paveKinds, cx: c.cx, cy: c.cy });
   scene.add(group);
-}
-
-/* Window panel placements for merged masses: {x, y, z, ry} with ry = 0 on
- * ±z faces and PI/2 on ±x faces. Rows run ground-up per storey; the top
- * metre is left bare so crowns read as roofs, and masses under 8 m (sheds,
- * houses) stay unglazed. */
-function collectWindows(masses, rowH, colW, rowStep) {
-  const out = [];
-  for (const mass of masses) {
-    if (mass.h < 8) continue;
-    const w = mass.x1 - mass.x0 + 1;
-    const d = mass.z1 - mass.z0 + 1;
-    const cx = mass.x0 + w / 2;
-    const cz = mass.z0 + d / 2;
-    let row = 0;
-    for (let y = 2.6; y < mass.h - 1; y += rowH, row++) {
-      if (row % rowStep !== 0) continue;
-      for (let ix = 0; ix < w; ix += colW) {
-        const px = mass.x0 + ix + colW / 2;
-        out.push({ x: px, y, z: cz - d / 2 - 0.05, ry: 0 });
-        out.push({ x: px, y, z: cz + d / 2 + 0.05, ry: 0 });
-      }
-      for (let iz = 0; iz < d; iz += colW) {
-        const pz = mass.z0 + iz + colW / 2;
-        out.push({ x: cx - w / 2 - 0.05, y, z: pz, ry: Math.PI / 2 });
-        out.push({ x: cx + w / 2 + 0.05, y, z: pz, ry: Math.PI / 2 });
-      }
-    }
-  }
-  return out;
 }
 
 /* Re-tint every loaded chunk in place for the walkability overlay (V). */
@@ -526,7 +538,7 @@ function updateStream() {
     if (d > STREAM_RADIUS) {
       scene.remove(entry.group);
       pickMeshes = pickMeshes.filter((m) => m !== entry.mesh && m !== entry.roof);
-      for (const em of [entry.mesh, entry.roof, entry.pave, entry.win])
+      for (const em of [entry.mesh, entry.roof, entry.pave])
         if (em && em.material) em.material.dispose();   /* UNIT_BOX geometry is shared, keep it */
       chunks.delete(key);
     }

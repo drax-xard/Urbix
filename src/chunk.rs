@@ -265,10 +265,10 @@ pub fn generate_chunk(
                             // post boosts so stubs match legacy treatment in
                             // both modes.
                             height = 8.0;
-                            height = (height * tower_boost).min(params.height_max * 1.6 + 1.0);
+                            height = (height * tower_boost).min(params.height_max * 1.3 + 1.0);
                             landmark_folded = false;
                         } else if !steps_live {
-                            height = (height * tower_boost).min(params.height_max * 1.6 + 1.0);
+                            height = (height * tower_boost).min(params.height_max * 1.3 + 1.0);
                         }
                         // Built lots with live steps already carry the tower
                         // boost pre-step.
@@ -280,7 +280,7 @@ pub fn generate_chunk(
                 // Market sheds stay low (their boost is 1.0; see
                 // `lot_boosts`).
                 if height > 0.0 && landmark_boost > 1.0 && !landmark_folded {
-                    height = (height * landmark_boost).min(params.height_max * 1.6 + 1.0);
+                    height = (height * landmark_boost).min(params.height_max * 1.3 + 1.0);
                 }
                 // Post-boost slenderness: landmark and tower-park bonuses
                 // bypass assign_building's clamp, so re-apply the same

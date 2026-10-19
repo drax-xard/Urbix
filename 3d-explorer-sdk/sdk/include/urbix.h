@@ -12,36 +12,6 @@
 #include <stdlib.h>
 
 /**
- * Interior layout blueprint selection (see `layout.rs` / `InteriorContext`).
- */
-#define LAYOUT_PICK 40
-
-/**
- * Interior per-floor layout variation (see `layout.rs`).
- */
-#define LAYOUT_FLOOR 41
-
-/**
- * Interior room-kind selection (see `layout.rs`).
- */
-#define LAYOUT_ROOM 42
-
-/**
- * Interior room size (width/depth) draw (see `layout.rs`).
- */
-#define LAYOUT_ROOM_SIZE 43
-
-/**
- * Interior door placement (see `layout.rs`).
- */
-#define LAYOUT_DOOR 44
-
-/**
- * Interior furniture slot density (see `layout.rs`).
- */
-#define LAYOUT_FURNITURE 45
-
-/**
  * Maximum room templates a single zone [`Blueprint`] can hold.
  *
  * The blueprint is a fixed-size `#[repr(C)]` record so it can live inside
@@ -413,6 +383,39 @@ typedef struct Blueprint {
 } Blueprint;
 
 /**
+ * Per-zone split-grammar massing rules (Milestone 17, G0).
+ *
+ * A plain `#[repr(C)]`, `Serialize`/`Deserialize` row tuned per zone via
+ * `WorldConfig` (same compromise `Blueprint` made in M9: five scalars, not
+ * rule trees). All zeros (or `massing_mode = 0` at the config level)
+ * reproduces the legacy flat extrude exactly — see [`is_flat`].
+ */
+typedef struct MassingParams {
+    /**
+     * Full-footprint base height in floors (`0` = no podium split).
+     */
+    uint8_t podium_floors;
+    /**
+     * Edge rings from the lot border capped to the podium (`0` = flat).
+     */
+    uint8_t tower_inset;
+    /**
+     * Upper-mass step-back rhythm. **Reserved in G0**: accepted, validated,
+     * and ignored — it wires in G2, when per-floor massing exists.
+     */
+    uint8_t setback_every;
+    /**
+     * Roof shape: `0` flat, `1` pitched (ridge along the long axis),
+     * `2` sawtooth (bays along x). Unknown values read as flat.
+     */
+    uint8_t roof_mode;
+    /**
+     * Share of lots earning a crown cap on inner cells (`0..=1`).
+     */
+    float crown_share;
+} MassingParams;
+
+/**
  * A `#[repr(C)]` snapshot of every tunable that shapes world generation.
  *
  * The struct holds only plain integer/float data so it is trivially
@@ -505,6 +508,29 @@ typedef struct WorldConfig {
      * Per-zone interior layout rule tables (Milestone 9 blueprint schema).
      */
     struct Blueprint interior_blueprints[ZONE_COUNT];
+    /**
+     * Desire-path avenues kept from the flow ranking (Milestone 16, see
+     * `docs/grown_streets.md`). `0` disables flow arterials entirely, which
+     * reproduces the pre-16 lattice byte-identically.
+     */
+    uint8_t flow_path_count;
+    /**
+     * Flow avenue half-width in cells (Milestone 16). `1.0` paves a 2-cell
+     * avenue, matching lattice arterials and diagonal boulevards.
+     */
+    float flow_half_width;
+    /**
+     * Split-grammar massing switch (Milestone 17, see
+     * `docs/grammar_massing.md`). `1` shapes lots into podiums, pitched /
+     * sawtooth roofs, and crowns; `0` keeps the legacy flat extrude
+     * byte-identically (the escape hatch + test anchor).
+     */
+    uint8_t massing_mode;
+    /**
+     * Per-zone split-grammar massing rules (Milestone 17). Snapped from the
+     * dominant zone like the other lot-scale policies, never blended.
+     */
+    struct MassingParams massing[ZONE_COUNT];
 } WorldConfig;
 
 /**

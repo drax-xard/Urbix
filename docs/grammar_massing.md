@@ -59,7 +59,7 @@ Non-goals for M17:
 lot (id, rect w×d, corner, block_clump, cbd_boost — as today)
   │
   ▼
-base height H = existing pipeline (zone band → clump → cbd → corner → 1.6× clamp)
+base height H = existing pipeline (zone band → clump → cbd → corner → 1.3× clamp)
   │                                  (unchanged code path, then steps below)
   ▼
 massing_for(lot_id, rect, cell_offset, H, massing_params, seed):
@@ -115,7 +115,7 @@ as reserved, test that nonzero parses and validates but does not alter output
 * **Crown** (`crown_share > 0`): lot-level roll on `domain::MASS_CROWN`
   (`hash < crown_share`); winning lots scale inner cells (`ring >=
   tower_inset`) by `1.12`. Edge cells never crown (caps stay street-walled).
-* **Ordering:** podium → roof → crown → jitter → `min(1.6× band clamp,
+* **Ordering:** podium → roof → crown → jitter → `min(1.3× band clamp,
   slenderness_cap)` — caps apply last through the shared
   `slenderness_cap()` helper at both call sites (existing two-site
   discipline: `building.rs` + `chunk.rs` post-boost re-clamp).

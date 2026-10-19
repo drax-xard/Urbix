@@ -182,7 +182,7 @@ impl Default for WorldConfig {
                     block_size: 11,
                     palette_count: 6,
                     arterial_every: 4,
-                    slenderness_max: 5,
+                    slenderness_max: 4,
                 },
                 ZoneParams {
                     height_min: 4.0,
@@ -191,7 +191,7 @@ impl Default for WorldConfig {
                     block_size: 10,
                     palette_count: 5,
                     arterial_every: 5,
-                    slenderness_max: 5,
+                    slenderness_max: 4,
                 },
                 ZoneParams {
                     height_min: 10.0,
@@ -200,7 +200,7 @@ impl Default for WorldConfig {
                     block_size: 9,
                     palette_count: 7,
                     arterial_every: 4,
-                    slenderness_max: 5,
+                    slenderness_max: 4,
                 },
                 ZoneParams {
                     height_min: 6.0,
@@ -209,7 +209,7 @@ impl Default for WorldConfig {
                     block_size: 14,
                     palette_count: 4,
                     arterial_every: 6,
-                    slenderness_max: 5,
+                    slenderness_max: 4,
                 },
                 ZoneParams {
                     height_min: 0.0,
@@ -218,7 +218,7 @@ impl Default for WorldConfig {
                     block_size: 18,
                     palette_count: 3,
                     arterial_every: 0,
-                    slenderness_max: 5,
+                    slenderness_max: 4,
                 },
             ],
             zone_hues: DEFAULT_ZONE_HUES,

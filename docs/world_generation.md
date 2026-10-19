@@ -60,7 +60,7 @@ Diagnostics covered in `src/region.rs` tests: determinism, near-1.0 at a site,
 unit-sum, and bisector-sweep continuity — plus the Milestone 11 district
 rules: CBD anchor (site nearest the origin is Downtown), adjacency buffer
 (Industrial re-tagged Commercial when its nearest neighbour is Residential),
-quantized district frames, and the `1.0–1.5` CBD peak factor. Milestone 12
+quantized district frames, and the `1.0–1.3` CBD peak factor. Milestone 12
 adds two global diagonal boulevards per diagram (an X pair 90° apart, defined
 in world coordinates so they cross chunks and districts seamlessly).
 Milestone 16 adds a site-graph flow economy plus desire paths, computed once
@@ -103,7 +103,8 @@ cy, &config, &voronoi) -> ChunkBuffer` walks `local_x/y` in row-major order:
 7. Lots: `lot::block_loc` + `lot::lot_slot` split the block interior into a
     2-D pack of up to 9 lots (`domain::LOT_SPLIT`).
     `building::assign_building` derives one height/palette per lot
-    (block-noise clumping, CBD boost, corner bonus, landmark 1.5×) with ±10%
+    (block-noise clumping, CBD boost, corner bonus, landmark 1.5×) with a
+    right-skewed band draw (most lots low, towers rare), ±10%
     per-cell jitter (`domain::LOT_HEIGHT`). Special blocks rewrite the
     program: civic `Plaza` squares, `Market` shed rows (≤ 10 u), `TowerPark`
     single towers (×1.35) in green blocks (`domain::SPECIAL`).

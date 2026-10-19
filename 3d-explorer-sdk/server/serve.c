@@ -276,7 +276,7 @@ static void serve_file(int fd, const char *web_dir, const char *path) {
 /* ---- JSON endpoints ---- */
 static void json_config(Jbuf *b, uint64_t seed, uint16_t chunk_size,
                         uint32_t draw_distance) {
-    jprintf(b, "{\"version\":1,\"sdk\":\"0.18.0\",\"seed\":%llu",
+    jprintf(b, "{\"version\":1,\"sdk\":\"0.20.1\",\"seed\":%llu",
             (unsigned long long)seed);
     jprintf(b, ",\"chunk_size\":%u,\"draw_distance\":%u,\"floor_height\":%.1f,\"cell_meters\":4",
             chunk_size, draw_distance, DEFAULT_FLOOR_H);

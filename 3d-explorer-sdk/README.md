@@ -25,11 +25,11 @@ deterministic city in chunks; you render it.
     ├── lib/
     │   ├── liburbix.a        <-- static library
     │   └── liburbix.dylib    <-- dynamic library
-    └── urbix-0.18.0-macos-aarch64.tar.gz   <-- CI release artifact (same contents)
+    └── urbix-0.20.1-macos-aarch64.tar.gz   <-- CI release artifact (same contents)
 ```
 
 This build vendors **macOS, Apple Silicon (`aarch64`)**. Version:
-**0.18.0**. Linux (`linux-x86_64`) and Windows (`windows-x86_64`)
+**0.20.1**. Linux (`linux-x86_64`) and Windows (`windows-x86_64`)
 tarballs ship from the same GitHub Release (`release.yml`) with the same
 layout — swap `sdk/lib` + `sdk/include` to retarget this SDK.
 
@@ -72,6 +72,15 @@ can render room layouts — good enough for a fly-through demo. Since 0.15.0
 records (`UrbixRoom`: floor, rect, kind, apartment unit, area) that always
 agree with the grids. See `docs/api.md` §5.
 
+Since 0.19.0 the street lattice also carries **flow arterials** (desire-path
+avenues grown from a site-graph economy simulation), and since 0.20.0 lots
+receive **split-grammar massing** (podium bases, pitched/sawtooth roofs,
+crown caps). Both are encoded in the existing chunk payload: flow avenues set
+`CellFlags_IS_ARTERIAL`, massing compresses into the per-cell `height`, so no
+extra FFI calls are needed. Tune them through `WorldConfig` (TOML/JSON files
+or `create_with_config`); the demo server's `--config` file covers the
+zone/height knobs used by its A/B experiments.
+
 ## Compiling your C integration
 
 ```sh
@@ -92,7 +101,7 @@ cc -I sdk/include your_system.c sdk/lib/urbix.lib \
 (If linking the `.dylib`/`.so`, use `-L sdk/lib -lurbix` and ensure the
 shared lib is findable at runtime via `DYLD_LIBRARY_PATH`/`LD_LIBRARY_PATH`
 or `install_name_tool`. The `urbix-*.tar.gz` artifacts in GitHub Releases
-carry the same layout per target — see `sdk/urbix-0.18.0-*.tar.gz`.)
+carry the same layout per target — see `sdk/urbix-0.20.1-*.tar.gz`.)
 
 ## Chunk buffer memory — read this carefully
 
@@ -143,9 +152,9 @@ teleport the orbit target to a world cell. The page pulls `/api/chunks`
 (one batch per frame around the camera) and `/api/interior` + `/api/rooms`
 on entry, so memory stays bounded; the HUD shows frame time and fetch stats.
 Exteriors render the full street hierarchy (arterials, sidewalks, plazas,
-greenways), merged building masses with per-storey facade windows (sparse
-warm lit rooms included, for human scale), and interiors show furniture,
-window glazing, and room/unit stats.
+greenways), merged building masses with shader-painted per-storey facade
+windows (flush with the wall, sparse warm lit rooms for human scale), and
+interiors show furniture, window glazing, and room/unit stats.
 
 To stop the demo, press Shift+Esc (confirm the dialog): the page asks the
 server to shut down via `/api/shutdown` and then closes itself (browsers only
@@ -164,6 +173,6 @@ it needs a localhost connection only.
 
 ## License & provenance
 
-This SDK packages `urbix` v0.18.0. See `sdk/.../LICENSE` (inside the tarball) and
+This SDK packages `urbix` v0.20.1. See `sdk/.../LICENSE` (inside the tarball) and
 the engine repo metadata. The header and libs are generated from the Urbix crate
 (`cargo build --release` regenerates `include/urbix.h` via cbindgen).

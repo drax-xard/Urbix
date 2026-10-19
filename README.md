@@ -32,7 +32,7 @@ The full design lives in [`Urbix_Project.md`](Urbix_Project.md); in short:
 ## Status
 
 Tracked milestone-by-milestone in `Urbix_Project.md` §7 (✅ done / 🔨 in
-progress / ⬜ pending). Current version: `0.20.0` (see `CHANGELOG.md`).
+progress / ⬜ pending). Current version: `0.20.1` (see `CHANGELOG.md`).
 
 | Milestone | Status |
 |---|---|
@@ -90,7 +90,9 @@ then packing the results into flat `#[repr(C)]` cell records.
   borders between districts.
 - **Wide (i64) world coordinates.** Per-cell generation and hashing operate on
   `i64` so an effectively infinite city never overflows the old `i32` range.
-  Coordinates within `i32` produce byte-identical output to earlier versions.
+  Coordinates within `i32` hash and locate identically to earlier versions;
+  the current default heights/skyline are those of the latest release (see
+  `CHANGELOG.md`).
 - **FFI-first / language-agnostic.** All public data types are `#[repr(C)]`
   and match a fixed on-wire layout (`Cell` = 40 B, header = 32 B). The C header
   (`include/urbix.h`) is auto-generated from `src/ffi.rs` via `cbindgen` in
@@ -169,7 +171,7 @@ cc /tmp/basic_usage.o -L target/release -lurbix -ldl -lm -pthread -o /tmp/basic_
 
 ## Usage
 
-The library is in early development (currently `0.20.0`); the public surface is
+The library is in early development (currently `0.20.1`); the public surface is
 `WorldEngine` in Rust and the C ABI in `include/urbix.h` (see
 `Urbix_Project.md` §2.3-2.4 for the wire format):
 

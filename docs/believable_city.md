@@ -106,7 +106,7 @@ cell → (district, block_origin, lot_id) → street? → lot values → cell ji
 * 1-cell `IS_SIDEWALK` ring inside the street edge (curb read, building face
   off asphalt).
 * Plazas: ~2% of Downtown/Commercial intersections via `PLAZA` domain hash →
-  3×3 `IS_PLAZA`, no-build. Adjacent landmark lot gets 1.5–2× height outlier
+  3×3 `IS_PLAZA`, no-build. Adjacent landmark lot gets a 1.3–1.5× height outlier
   (`LANDMARK` domain) — the Lynch node + landmark pair.
 
 ### 11.4 District v2 + skyline peak (`src/region.rs`, `src/config.rs`)

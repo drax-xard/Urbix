@@ -462,9 +462,9 @@ impl VoronoiDiagram {
     }
 
     /// Skyline peak factor at a world coordinate: `1.0` far from downtown,
-    /// rising smoothly to `1.5` atop the nearest Downtown site.
+    /// rising smoothly to `1.3` atop the nearest Downtown site.
     ///
-    /// Lorentzian falloff with a 1500-unit knee (`cbd_factor = 1 + 0.5 /
+    /// Lorentzian falloff with a 1500-unit knee (`cbd_factor = 1 + 0.3 /
     /// (1 + (d/1500)²)`). Applied to lot heights in `building.rs` via
     /// `chunk.rs` so downtown cores peak and taper instead of plateauing.
     /// Returns `1.0` when no Downtown site exists (unreachable after the CBD
@@ -487,7 +487,7 @@ impl VoronoiDiagram {
             return 1.0;
         }
         let d = best_d2.sqrt();
-        (1.0 + 0.5 / (1.0 + (d / 1500.0) * (d / 1500.0))) as f32
+        (1.0 + 0.3 / (1.0 + (d / 1500.0) * (d / 1500.0))) as f32
     }
 
     /// Query the fuzzy zone-affinity vector at an arbitrary world coordinate.
@@ -964,7 +964,7 @@ mod tests {
             .copied()
             .expect("CBD anchor guarantees a downtown site");
         let peak = d.cbd_factor(downtown.x, downtown.y);
-        assert!((peak - 1.5).abs() < 1e-6, "peak {peak}");
+        assert!((peak - 1.3).abs() < 1e-6, "peak {peak}");
         let far = d.cbd_factor(downtown.x + 20_000.0, downtown.y);
         assert!((1.0..1.05).contains(&far), "far {far}");
     }

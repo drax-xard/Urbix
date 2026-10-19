@@ -332,10 +332,8 @@ no library changes:
 * Finetuning entry points (user explicitly wants to finetune later):
   per-zone `massing` rows via `--config` (no recompile), `walkability`'s
   new massing-share line as the metric, `viz --mode massing` as the eye.
-* Deferred, unchanged: SDK re-vendor to 0.20.0 before any SDK work
-  (`sdk/include/urbix.h`, macOS libs/tarball, doc version bumps, then
-  `build.sh` + `test.sh`); satellites WASM/server (decision gates in
-  `docs/satellites.md`); L0 value re-tag + L2 footfall; G1 WFC fabrics +
+* Satellites WASM/server (decision gates in `docs/satellites.md`); L0 value
+  re-tag + L2 footfall; G1 WFC fabrics +
   G2 grammar↔interior bridge (needs M17 — now landed, specs not started);
   terrain/water (§8.4), road-graph (§8.3), time/weather (§8.5), mutable
   overlays (§8.6); perpendicular snapping for seam-stub T-junctions
@@ -348,3 +346,65 @@ no library changes:
   since images can't be eyeballed in this environment (flow tint at the
   locked center window is correctly zero — avenues don't cross it);
   `cargo test` in debug is fast enough for 200-seed chunk sweeps.
+
+## Session 6 — SDK re-vendor to 0.20.0 (2026-10-19)
+
+Closed the deferred SDK thread. No engine source changes.
+
+* Forced a release rebuild (`touch src/lib.rs && cargo build --release
+  --all-targets`) after noticing `target/release/liburbix.*` predated the M17
+  audit commit (`2e09026`) by six seconds — the re-vendored pair now provably
+  matches `main`.
+* Re-vendored `sdk/include/urbix.h` (M16 `flow_path_count`/`flow_half_width`,
+  M17 `MassingParams`/`massing_mode`; stale `LAYOUT_*` defines gone),
+  `sdk/lib/liburbix.{a,dylib}`, and rebuilt
+  `urbix-0.20.0-macos-aarch64.tar.gz` (+ `.sha256`) with the `release.yml`
+  layout; removed the 0.18.0 artifacts.
+* `docs/api.md`: 0.20.0 title, `MassingParams` + per-zone defaults table,
+  flow/massing config fields, corrected `ZoneParams` initializer (adds
+  `slenderness_max`), validation ranges. `README.md`: version/provenance/
+  tarball bumps + a paragraph on how flow and massing ride the existing chunk
+  payload. `CHANGELOG.md` Unreleased entry.
+* `server/serve.c` reports `"sdk":"0.20.0"`; `server/test.sh` asserts it.
+  Verification green: `build.sh`, all 20 `test.sh` assertions, and all three
+  examples compile + run against the vendored pair.
+
+## Session 7 — Explorer fixes + skyline tuning (2026-10-19)
+
+Follow-ups from running the 3D explorer against a real city; released as
+`0.20.1` (engine output defaults change, no wire/FFI surface change).
+
+* **Facade-window fix (`server/www/app.js`)**: the old per-chunk instanced
+  window boxes (5 cm off the wall, 6 cm thick) read as floating slabs up
+  close. Replaced with a procedural window grid in the building material
+  (`onBeforeCompile` on Lambert, shared `customProgramCacheKey`; instance
+  scale/origin recovered from `instanceMatrix`, face axis from the
+  object-space normal, one column per cell and one row per 4 m storey).
+  Deterministic lit scatter is unchanged (plus a small emissive term), and
+  `fwidth()` fades the grid below ~3 px per window so the old
+  `polygonOffset`/far-streak workaround and the 9k-panel budget are gone.
+  Verified against the vendored r160 shader text in Node (anchors, balanced
+  braces, varyings) and `node --check`; no browser here, so it still needs a
+  visual pass.
+* **Merge fix (`server/www/app.js`)**: `mergeMasses` replaced its greedy
+  row/column expansion (±12% tolerance, routinely beaten by the engine's
+  ±10% per-cell jitter) with a 4-neighbour flood fill (`max(2 m, 25%)` of the
+  cluster max, bounding-boxed at the cluster height). Sampled 303k cells:
+  masses with a side ≤2 cells 95.5% → 63.3%, needles (aspect >6) 52.3% →
+  15.7%, median aspect 6.4 → 3.1. Massing steps stay separate, so a 5×5
+  downtown lot now renders as one 12 m podium + one 3×3 core.
+* **Why buildings read too tall — measured, then fixed in the engine**: the
+  height band draw was uniform, so the median lot sat at the band midpoint
+  (downtown ~67 m pre-boost), and the `×1.6` outlier clamp / `cbd_factor`
+  peak 1.5 / `slenderness_max` 5 stacked on top. Changes: band draw
+  right-skewed (`t²`), clamp `×1.3+1`, `cbd_factor` peak 1.3, default
+  `slenderness_max` 4. Result on a 1.17M-cell sample: overall median 34.3 →
+  23.8 m, downtown 51.7 → 33.2 m (13 → 9 floors), downtown p90 100 → 80 m,
+  >80 m share 28% → 5%, max 177 → 144 m; residential median 21.4 → 16.0 m.
+* **Re-vendored SDK to 0.20.1** (header unchanged; libs + tarball rebuilt,
+  server/test version strings bumped, `docs/api.md` `slenderness_max` 4).
+  Gates green at seed 69420 extent 8: street 20.1%, arterial 8.8%, sidewalk
+  24.4%, street-wall 16.7 cells (0.20.0 baseline); `interiors_gate` OK.
+* Remaining open: human eyeball of `interactive`, the facade shader, and the
+  new merge/height tuning; satellites/WASM choices; L0/L2, G1/G2, terrain,
+  road graph, weather, overlays as listed above.
