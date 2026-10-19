@@ -5,10 +5,11 @@ Guidance for working in this repository.
 ## Project state
 
 Urbix is a deterministic, infinite procedural city engine (Rust crate).
-Generation is implemented through Milestone 15 (exterior lots, streets,
-districts, and fully finished interiors with programs, furniture, and
-queryable rooms). Source of truth for what exists is the milestone table
-in `Urbix_Project.md` §7 and the status table in `README.md` — not this
+Generation is implemented through Milestone 17 (exterior lots; lattice
+streets plus M16 flow arterials; districts; fully finished interiors with
+programs, furniture, and queryable rooms; and M17 split-grammar building
+massing). Source of truth for what exists is the milestone table in
+`Urbix_Project.md` §7 and the status table in `README.md` — not this
 file's history.
 
 ## Toolchain (important gotcha)
@@ -89,8 +90,12 @@ cargo bench --bench chunk_gen --no-run
 - **Seed-agnostic tests**: hashed axes/rotations vary per block, so scan for
   test fixtures (e.g. a same-lot pair) instead of hardcoding coordinates;
   float asserts use range-`contains`.
-- **Vendored header**: `3d-explorer-sdk/` pins its own `urbix.h` copy —
-  leave it alone unless working on the SDK.
+- **Vendored SDK copy**: `3d-explorer-sdk/sdk/` (header, libs, release
+  tarball) is re-vendored deliberately whenever an engine change moves the
+  ABI/API or the generated output — rebuild, copy the header/libs, bump the
+  version strings (`serve.c`, `server/test.sh`, `README.md`, `docs/api.md`),
+  and rebuild the tarball; the old "leave it alone" rule is retired.
+  Linux/Windows tarballs still ship from CI (`release.yml`).
 
 ## Git
 

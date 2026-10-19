@@ -712,7 +712,7 @@ mod tests {
             69420,
         );
         // H = 40 × 0.85 (min clump) = 34: clears the 12 m podium and every
-        // clamp (1.6× cap is 65, slenderness 140), so the boost ratio reads
+        // clamp (1.3× cap is 53, slenderness 140), so the boost ratio reads
         // exactly. (`min` returns the cap operand bit-exactly; the core
         // needs an epsilon since 0.85 is not exact binary.)
         assert_eq!(edge_plain.0, 12.0);

@@ -20,7 +20,7 @@
 //!
 //! `massing_for` computes podium → roof → crown only. The caller
 //! (`building.rs`) applies the ±10% `HEIGHT` jitter *after* the steps and the
-//! `1.6× band` + `slenderness_cap` clamps *last* (reused at both clamp sites),
+//! `1.3× band` + `slenderness_cap` clamps *last* (reused at both clamp sites),
 //! so life survives on every mass and no step outgrows its lot.
 //!
 //! ## G0 scope (explicitly deferred)

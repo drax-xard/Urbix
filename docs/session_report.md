@@ -1,7 +1,8 @@
-# Session report — city believability + interiors M11 → M15, then SDK + realism to 0.18.0, then M16 grown streets (0.19.0)
+# Session report — city believability + interiors M11 → M15, then SDK + realism to 0.18.0, then M16 grown streets (0.19.0), then M17 grammar massing (0.20.0), then explorer fixes + skyline tuning (0.20.1)
 
 > Working handoff note, not project documentation. Written 2026-09-16,
-> last updated after the M16 audit + doc refresh (2026-09-25).
+> last updated after the 0.20.1 explorer-fix + skyline-tuning release
+> (2026-10-19).
 
 ## Timeline (all requested, built, verified, committed locally; user pushes)
 
@@ -369,10 +370,11 @@ Closed the deferred SDK thread. No engine source changes.
   Verification green: `build.sh`, all 20 `test.sh` assertions, and all three
   examples compile + run against the vendored pair.
 
-## Session 7 — Explorer fixes + skyline tuning (2026-10-19)
+## Session 7 — Explorer fixes + skyline tuning (0.20.1, `90942f2`)
 
 Follow-ups from running the 3D explorer against a real city; released as
-`0.20.1` (engine output defaults change, no wire/FFI surface change).
+`0.20.1` (engine output defaults change, no wire/FFI surface change). One
+commit, `90942f2`, 24 files; suite/gates re-verified before and after.
 
 * **Facade-window fix (`server/www/app.js`)**: the old per-chunk instanced
   window boxes (5 cm off the wall, 6 cm thick) read as floating slabs up
@@ -401,10 +403,61 @@ Follow-ups from running the 3D explorer against a real city; released as
   `slenderness_max` 4. Result on a 1.17M-cell sample: overall median 34.3 →
   23.8 m, downtown 51.7 → 33.2 m (13 → 9 floors), downtown p90 100 → 80 m,
   >80 m share 28% → 5%, max 177 → 144 m; residential median 21.4 → 16.0 m.
-* **Re-vendored SDK to 0.20.1** (header unchanged; libs + tarball rebuilt,
-  server/test version strings bumped, `docs/api.md` `slenderness_max` 4).
-  Gates green at seed 69420 extent 8: street 20.1%, arterial 8.8%, sidewalk
-  24.4%, street-wall 16.7 cells (0.20.0 baseline); `interiors_gate` OK.
+* **Re-vendored SDK to 0.20.1** (header byte-identical; libs + tarball
+  rebuilt with the `release.yml` layout, old 0.18.0 tarball/sha removed;
+  `serve.c`/`test.sh` version strings, SDK `README.md` + `docs/api.md`
+  bumped; `api.md` `slenderness_max` 5 → 4 in all rows). Main `README.md`
+  version lines → 0.20.1, and the i64 bullet now says coordinates within
+  `i32` *hash and locate* identically rather than promising byte-identical
+  output (the tuning changes output by design). Gates green at seed 69420
+  extent 8: street 20.1%, arterial 8.8%, sidewalk 24.4%, street-wall 16.7
+  cells (0.20.0 baseline); `interiors_gate` OK; `viz` walk smoke renders;
+  all 20 `server/test.sh` assertions + all three C examples pass.
 * Remaining open: human eyeball of `interactive`, the facade shader, and the
   new merge/height tuning; satellites/WASM choices; L0/L2, G1/G2, terrain,
   road graph, weather, overlays as listed above.
+
+## Current state — 0.20.1 (2026-10-19)
+
+* `main` at `90942f2` (release 0.20.1), local only — **user pushes**.
+  `Cargo.toml` `0.20.1`. M17 ✅ DONE; visualizers support the framework;
+  SDK vendored as `urbix-0.20.1-macos-aarch64` (self-consistent, matches the
+  engine). 24 files changed in the release commit.
+* Suite green: 191 lib + integration + 41 doctests; `cargo clippy
+  --all-targets` clean; `cargo fmt --check` clean; `cargo build
+  --all-targets`; `cargo test --doc`. Spatial gates at seed 69420/extent 8:
+  `walkability` (street 20.1 / arterial 8.8 / sidewalk 24.4, street-wall
+  16.7 cells) + massing shares (podium 29.4 / tower 47.8 / crowned 22.8) —
+  unchanged vs the 0.20.0 baseline; `interiors_gate` OK; `chunk_gen` bench
+  compiles. Viewer: `node --check` + the Node shader-injection check pass.
+* `0.20.1` is a PATCH with output-default changes only: no `Cell`/
+  `ZoneParams`/`WorldConfig`/FFI/flag change, header byte-identical.
+* Docs refreshed this session: `AGENTS.md` project state → M17 + the
+  vendored-SDK rule (deliberate re-vendor, old "leave it alone" retired);
+  `src/massing.rs` / `src/building.rs` comments 1.6× → 1.3×; CHANGELOG
+  `[0.20.1]`; `docs/world_generation.md`, `grammar_massing.md`,
+  `believable_city.md`, SDK `README.md`/`docs/api.md`; this report.
+
+## Open threads (as of 2026-10-19)
+
+* **Needs a human eyeball** (no browser/GL in this environment): the
+  procedural facade shader (flush windows, `fwidth()` LOD fade), the new
+  `mergeMasses` flood fill (masses not needle-like), the retuned skyline,
+  and a run-through of `interactive` (walk/massing modes, flow tint,
+  selection massing line, furnished glyphs). Serve with `./server/serve
+  --port 8311 --seed 445566 --web server/www` and hard-refresh.
+* **Finetuning entry points** (user wants to finetune later): per-zone
+  `massing` rows and `slenderness_max` via `--config` (no recompile),
+  `walkability`'s massing-share line as the metric, `viz --mode massing`
+  as the eye. Leftover realism levers (viewer): ground-floor retail fronts,
+  chunk-border mass seams, far-distance window fade are still not done.
+* **Specs not started:** G1 WFC fabrics + G2 grammar↔interior bridge (M17
+  is landed, specs aren't); terrain/water (§8.4), road-graph (§8.3),
+  time/weather (§8.5), mutable overlays (§8.6); L0 value re-tag + L2
+  footfall (M16 avenues are locked).
+* **Satellites** (`docs/satellites.md`): build WASM/server when a consumer
+  exists — decision gates in the doc. **Perpendicular snapping** for
+  seam-stub T-junctions in the explorer: offered, unconfirmed.
+* **Pre-existing debt** (untouched): `docs/interiors.md` old line-number
+  references; `walkability` "tall cells" is a relative (>1.3× band max)
+  proxy whose count moves with the bands even as the absolute skyline drops.
