@@ -1,8 +1,8 @@
-# Session report — city believability + interiors M11 → M15, then SDK + realism to 0.18.0, then M16 grown streets (0.19.0), then M17 grammar massing (0.20.0), then explorer fixes + skyline tuning (0.20.1)
+# Session report — city believability + interiors M11 → M15, then SDK + realism to 0.18.0, then M16 grown streets (0.19.0), then M17 grammar massing (0.20.0), then explorer fixes + skyline tuning (0.20.1), then Explorer v2 standalone app
 
 > Working handoff note, not project documentation. Written 2026-09-16,
-> last updated after the 0.20.1 explorer-fix + skyline-tuning release
-> (2026-10-19).
+> last updated after building Urbix Explorer v2 (the Tauri first-person app),
+> uncommitted at session end (2026-10-19).
 
 ## Timeline (all requested, built, verified, committed locally; user pushes)
 
@@ -461,3 +461,112 @@ commit, `90942f2`, 24 files; suite/gates re-verified before and after.
 * **Pre-existing debt** (untouched): `docs/interiors.md` old line-number
   references; `walkability` "tall cells" is a relative (>1.3× band max)
   proxy whose count moves with the bands even as the absolute skyline drops.
+
+## Session 8 — Urbix Explorer v2 standalone app (2026-10-19, UNCOMMITTED)
+
+Built a standalone first-person 3D explorer as a **new independent crate**
+`explorer-v2/` (NOT a workspace member of the root `urbix` package, so the
+root build stays light). Plan doc: `docs/explorer_v2.md` (status line already
+says "planned → implemented"). Nothing here is committed yet — all files are
+untracked/modified per `git status`; **user pushes**.
+
+### What it is
+
+Tauri 2 (Rust shell + system WKWebView) wrapping the evolved Three.js viewer,
+with the backend calling the `urbix` crate **directly as a path dependency**
+(`../..`). No C server, no HTTP, no vendored SDK. Frontend is vanilla ES
+modules + vendored Three.js r160 — **no npm, no build step** (Tauri serves
+`../src` via `frontendDist`). Alternatives rejected: keep v1 C-server+browser
+(not standalone); Bevy native rewrite (too much renderer rebuild);
+macroquad/SDL2+OpenGL (loses the polished shaders).
+
+### Deliverables
+
+* `docs/explorer_v2.md` — approved plan (motivation, framework decision,
+  controls, build/run, verification, risks).
+* **Backend** `explorer-v2/src-tauri/`:
+  - `src/engine.rs` — `EngineState { engine: Option<WorldEngine>, config:
+    WorldConfig }` (derives `Default`), `SharedEngine = Mutex<EngineState>`,
+    `CommandError`, DTOs (`CellDto`, `ChunkDto`, `FloorDto`, `InteriorDto`,
+    `RoomDto`, `ConfigDto`, `SpawnDto`); 7 commands `get_config`,
+    `start_world`, `find_zone_start`, `get_chunks`, `get_interior`,
+    `get_rooms`, `get_zone`; helpers `is_walkable_ground`, `dominant_zone`,
+    `tile_byte`, `ring_cells`, `chunk_to_cells`, `resolve_zone_spawn`,
+    `scan_disk_for_zone` (`ScanParams` struct); `DISTRICT_SCAN_RADIUS = 384`.
+    7 unit tests pass (incl. `find_zone_start_resolves_every_zone_across_seeds`
+    over seeds 445566/1/69420/999).
+  - `src/main.rs` — `Mutex<EngineState>` + `generate_handler!` for all 7.
+  - `Cargo.toml` (tauri 2.12.4, serde, serde_json, urbix path `../..`),
+    `build.rs` (tauri-build), `tauri.conf.json` (`withGlobalTauri: true`,
+    window 1280×800, `frontendDist: "../src"`, CSP `default-src 'self';
+    script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;
+    connect-src 'self' ipc: http://ipc.localhost`), `capabilities/default.json`,
+    `gen_icons.py` + `icons/`.
+* **Frontend** `explorer-v2/src/`:
+  - `index.html`, `style.css`, `app.js` (module, imports
+    `./vendor/three.module.js`); `vendor/three.module.js` only (unused
+    OrbitControls removed, importmap removed to keep strict CSP with no inline
+    scripts).
+  - Menu (seed/zone/coords/START) → `start_world` (seed sent as a **string** so
+    full `u64` survives JSON IPC) → `find_zone_start` → spawn at ground level on
+    a street in the nearest matching-zone district. FPS: pointer-lock mouselook
+    (request from a user gesture), WASD + Shift, cell-based collision, eye
+    height 1.7. ENTER center-raycast against building instance meshes → enter
+    that building's ground floor via `get_interior`/`get_rooms`; ESC exits to a
+    street cell just outside the lot; R/F switch storeys. Chunk streaming
+    radius 3 via batched `get_chunks`, LRU-ish eviction on radius exit.
+    Facade shader, mass merging, paving, furniture/window/room meshes ported
+    from v1.
+* **Engine additive changes** (root crate): `CellFlags::bits()` accessor in
+  `src/data.rs`; `pub const VERSION: &str = env!("CARGO_PKG_VERSION")` in
+  `src/lib.rs`. No wire/FFI/`Cell` changes.
+* **Housekeeping**: `.gitignore` now ignores
+  `explorer-v2/src-tauri/{target/,Cargo.lock,gen/schemas/}`;
+  `CHANGELOG.md` `[Unreleased]` entry.
+
+### Verification (all green)
+
+* Root crate: `cargo build --all-targets`, `cargo test` (191 lib +
+  integration + 42 doctests), `cargo clippy --all-targets`, `cargo fmt --check`.
+* `explorer-v2/src-tauri`: `cargo build`, `cargo test` (7/7),
+  `cargo clippy --all-targets` (clean — fixed `EngineState` derive, the
+  8-arg `scan_disk_for_zone` → `ScanParams`, `contains_key`+`insert` →
+  `entry().or_insert_with`, `map_or(true, ..)` → `is_none_or`, test
+  `-1 * n` → `-(n as i32)`), `cargo fmt --check`, `cargo build --release`
+  (binary at `target/release/urbix-explorer-v2`).
+* `node --check` on `app.js` (parses as an ES module); vendored
+  `three.module.js` confirmed a real ES module (`const t="160",...`).
+
+### Not done / needs a human
+
+* **Never run the GUI** (no display here): the menu → START → walk → ENTER →
+  ESC flow, WKWebView pointer-lock, and the ported facade/interior rendering
+  all need an eyeball.
+* **No `.app` bundle**: `cargo-tauri`/`tauri` CLI not installed and
+  `/usr/bin` is not writable for a clean install — `cargo build --release`
+  yields a runnable binary (Tauri embeds `../src` at build time). To bundle:
+  `cargo install tauri-cli` then `cargo tauri build` from
+  `explorer-v2/src-tauri`.
+* **Homebrew rust `/opt/homebrew/bin/rustc` is broken** — use rustup; always
+  `. "$HOME/.cargo/env"` first (prepend `~/.cargo/bin` or run
+  `. "$HOME/.cargo/env"` in every shell). node/npm live at `~/.local/bin`.
+
+## Open threads (as of 2026-10-19, end of Session 8)
+
+* **Everything from Session 8 is uncommitted** — review `git status`, commit
+  locally (imperative subjects; user pushes).
+* **Eyeball Explorer v2**: run the release binary, verify menu/spawn/ENTER/ESC
+  and that the ported rendering matches v1; consider `interactive` + the
+  facade shader + retuned skyline (still pending from Session 7).
+* **Explorer v2 polish candidates** if wanted after the eyeball: ground-floor
+  retail fronts, chunk-border mass seams, far-distance window fade (the same
+  viewer realism levers noted in Session 7); optionally a `tauri` bundle.
+* **Engine**: `0.20.1` unchanged this session (only additive `CellFlags::bits`
+  + `urbix::VERSION`); no re-vendor triggered (no ABI/output change). If any
+  future engine change moves output/ABI, re-vendor the SDK per the AGENTS.md
+  rule.
+* **Still open from Session 7**: SDK vendored 0.20.1 self-consistent;
+  satellites/WASM gates (`docs/satellites.md`); L0/L2, G1/G2, terrain (§8.4),
+  road graph (§8.3), weather (§8.5), overlays (§8.6); perpendicular snapping
+  for seam-stub T-junctions; `docs/interiors.md` stale line refs;
+  `walkability` "tall cells" relative proxy.

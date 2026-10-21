@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Urbix Explorer</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<canvas id="gl"></canvas>
+
+<!-- Main menu: seed, zone, coordinates, START. Shown until the world loads. -->
+<div id="menu">
+  <form id="menu-form" autocomplete="off">
+    <h1>Urbix <span class="accent">Explorer</span></h1>
+    <p class="tagline">a procedural city, endlessly generated</p>
+
+    <label>
+      <span>Seed</span>
+      <input id="seed-input" type="text" inputmode="numeric" value="445566">
+    </label>
+
+    <label>
+      <span>Zone</span>
+      <select id="zone-input"></select>
+    </label>
+
+    <div class="row">
+      <label>
+        <span>Start X</span>
+        <input id="wx-input" type="text" inputmode="numeric" value="0">
+      </label>
+      <label>
+        <span>Start Z</span>
+        <input id="wz-input" type="text" inputmode="numeric" value="0">
+      </label>
+    </div>
+
+    <button id="start-btn" type="submit">START</button>
+    <div id="menu-status"></div>
+    <div id="menu-controls">
+      WASD move · mouse look (click to capture) · ENTER enter building · ESC exit
+    </div>
+  </form>
+</div>
+
+<!-- In-world HUD: title/seed line, mode hint, crosshair, popup, storey slider. -->
+<div id="hud" class="hidden">
+  <div class="hud-top">
+    <span class="title">Urbix · <span id="seed-label"></span></span>
+    <span class="hint" id="mode-hint"></span>
+  </div>
+  <div id="status"></div>
+</div>
+
+<div id="crosshair" class="hidden"></div>
+<div id="popup" class="hidden"></div>
+
+<div id="storey" class="hidden">
+  <label>storey <b id="storey-n"></b>/<span id="storey-total"></span></label>
+  <input id="storey-slider" type="range" min="0" max="0" value="0">
+</div>
+
+<div id="fade"></div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>

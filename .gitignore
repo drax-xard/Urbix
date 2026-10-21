@@ -1,6 +1,11 @@
 # Rust build artifacts
 /target
-Cargo.lock
+/Cargo.lock
+
+# Nested crate build artifacts (explorer-v2 is independent, not a workspace
+# member; its Cargo.lock is tracked because it is a binary app)
+explorer-v2/src-tauri/target/
+explorer-v2/src-tauri/gen/schemas/
 
 # Release packaging staging (CI builds artifacts under dist/)
 /dist

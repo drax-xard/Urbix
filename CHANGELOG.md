@@ -7,8 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0] — 2026-10-21
+
 ### Added
 
+- **Urbix Explorer v2** (`explorer-v2/`, independent crate, not a workspace
+  member): a standalone first-person 3D explorer — Tauri 2 shell (system
+  webview) wrapping the evolved Three.js viewer, with the `urbix` crate as a
+  path dependency (no C server, no HTTP). Main menu (seed / zone / start
+  coordinates / START) spawns the player at ground level on a street in the
+  nearest district of the chosen zone (resolved from `voronoi().sites()`,
+  not a cell scan); WASD + pointer-lock mouselook first-person controller;
+  ENTER enters the building under the crosshair (ground floor) via the
+  engine's interior layout, with per-storey navigation; chunk streaming
+  around the player. Frontend stays vanilla ES modules + vendored Three.js
+  (no npm). Engine additive changes: `CellFlags::bits()` accessor and
+  `urbix::VERSION`.
 - **Visualizers cover the current framework** (examples only, no library
   change):
   - `viz --mode massing`: M17 split-grammar readout — podium edges amber,

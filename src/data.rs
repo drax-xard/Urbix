@@ -117,6 +117,25 @@ impl CellFlags {
     pub const fn insert(self, rhs: CellFlags) -> CellFlags {
         CellFlags(self.0 | rhs.0)
     }
+
+    /// Raw bits of the flag set.
+    ///
+    /// Exposes the underlying `u8` so consumers that mirror the wire layout
+    /// (renderers, serializers, the C ABI's implied `uint8_t`) can pass the
+    /// set through without reconstructing it flag by flag. Additive and
+    /// layout-preserving.
+    ///
+    /// ## Example
+    ///
+    /// ```
+    /// use urbix::data::CellFlags;
+    /// assert_eq!(CellFlags::IS_STREET.bits(), 1);
+    /// assert_eq!(CellFlags::NONE.bits(), 0);
+    /// ```
+    #[must_use]
+    pub const fn bits(self) -> u8 {
+        self.0
+    }
 }
 
 /// A single city cell in `#[repr(C)]` layout, one per grid point.

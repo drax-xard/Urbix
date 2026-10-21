@@ -1,0 +1,30 @@
+# Explorer v2 — Tauri application shell.
+#
+# Independent crate (NOT a workspace member of the root `urbix` package) so the
+# engine's own `cargo build/test/clippy` stays light. It depends on the engine
+# as a path dependency, so it always builds against the in-repo source and can
+# never drift from the ABI the way the vendored SDK copy could.
+
+[package]
+name = "urbix-explorer-v2"
+version = "0.1.0"
+edition = "2021"
+description = "Standalone first-person 3D explorer for the Urbix procedural city engine"
+license = "MIT"
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# The engine, straight from the repo. Using the Rust API directly (rather than
+# the C ABI through plan `serve.c`) means the explorer reads real structs — no
+# manual buffer slicing and no `*_free` discipline.
+urbix = { path = "../.." }
+
+# Keep `src-tauri` from being picked up as an example/bench of the root crate.
+# (It is a separate package because it is not listed in the root workspace.)

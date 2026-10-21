@@ -1,0 +1,93 @@
+html, body {
+  margin: 0; padding: 0; overflow: hidden; background: #0e1622; height: 100%;
+}
+#gl { width: 100vw; height: 100vh; display: block; }
+
+/* ---- main menu ---- */
+#menu {
+  position: fixed; inset: 0; z-index: 20;
+  display: flex; align-items: center; justify-content: center;
+  background: radial-gradient(1200px 800px at 50% 20%, #16243a 0%, #0a0f18 70%);
+  color: #dbe6f3; font: 14px/1.5 "SF Mono", ui-monospace, Menlo, monospace;
+}
+#menu.hidden { display: none; }
+#menu-form {
+  width: 340px; padding: 26px 28px 22px;
+  background: rgba(14, 24, 38, .82);
+  border: 1px solid rgba(255, 255, 255, .10);
+  border-radius: 12px; box-shadow: 0 24px 60px rgba(0, 0, 0, .5);
+  display: flex; flex-direction: column; gap: 14px;
+}
+#menu h1 { margin: 0; font-size: 22px; letter-spacing: .02em; }
+#menu h1 .accent { color: #6ea8ff; }
+.tagline { margin: -8px 0 4px; opacity: .55; font-size: 12px; }
+#menu label { display: flex; flex-direction: column; gap: 5px; font-size: 11px; opacity: .8; }
+#menu .row { display: flex; gap: 12px; }
+#menu .row label { flex: 1; }
+#menu input, #menu select {
+  background: rgba(8, 14, 22, .9); color: #eaf2fb;
+  border: 1px solid rgba(255, 255, 255, .14); border-radius: 7px;
+  padding: 8px 10px; font: inherit; font-size: 13px;
+}
+#menu input:focus, #menu select:focus { outline: none; border-color: #6ea8ff; }
+#start-btn {
+  margin-top: 4px; padding: 11px; border: none; border-radius: 8px;
+  background: #2f6fe0; color: #fff; font: inherit; font-size: 14px;
+  font-weight: 600; letter-spacing: .08em; cursor: pointer;
+}
+#start-btn:hover { background: #3f7cf0; }
+#start-btn:disabled { opacity: .55; cursor: default; }
+#menu-status { min-height: 16px; font-size: 12px; color: #f0b46b; }
+#menu-controls { font-size: 11px; opacity: .5; line-height: 1.6; }
+
+/* ---- HUD ---- */
+#hud {
+  position: fixed; inset: 0; pointer-events: none;
+  color: #dbe6f3; font: 13px/1.5 "SF Mono", ui-monospace, Menlo, monospace;
+}
+#hud.hidden { display: none; }
+.hud-top {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+  padding: 10px 14px; background: rgba(10, 18, 30, .55); backdrop-filter: blur(2px);
+  border-bottom: 1px solid rgba(255, 255, 255, .08);
+}
+.title { font-weight: 600; letter-spacing: .01em; }
+.hint { opacity: .75; font-size: 12px; }
+
+#status, #popup {
+  position: fixed; left: 50%; transform: translateX(-50%);
+  background: rgba(10, 18, 30, .7); border: 1px solid rgba(255, 255, 255, .12);
+  padding: 6px 12px; border-radius: 6px;
+}
+#status { top: 54px; }
+#popup { top: 96px; }
+.hidden { display: none; }
+
+/* Center-screen crosshair. */
+#crosshair {
+  position: fixed; left: 50%; top: 50%; width: 18px; height: 18px;
+  transform: translate(-50%, -50%); pointer-events: none; z-index: 10;
+}
+#crosshair.hidden { display: none; }
+#crosshair::before, #crosshair::after {
+  content: ""; position: absolute; background: rgba(230, 240, 255, .85);
+  box-shadow: 0 0 3px rgba(0, 0, 0, .8);
+}
+#crosshair::before { left: 8px; top: 0; width: 2px; height: 18px; }
+#crosshair::after { top: 8px; left: 0; height: 2px; width: 18px; }
+
+#storey {
+  position: fixed; right: 14px; bottom: 14px; pointer-events: auto;
+  background: rgba(10, 18, 30, .7); border: 1px solid rgba(255, 255, 255, .12);
+  padding: 8px 12px; border-radius: 8px; text-align: right;
+  color: #dbe6f3; font: 13px/1.5 "SF Mono", ui-monospace, Menlo, monospace;
+}
+#storey-slider { width: 180px; accent-color: #6ea8ff; }
+
+/* Cross-fade overlay used entering/leaving buildings and starting the world. */
+#fade {
+  position: fixed; inset: 0; z-index: 30;
+  background: #05070c; pointer-events: none;
+  opacity: 0; transition: opacity .42s ease;
+}
+#fade.on { opacity: 1; }

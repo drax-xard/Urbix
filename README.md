@@ -32,7 +32,7 @@ The full design lives in [`Urbix_Project.md`](Urbix_Project.md); in short:
 ## Status
 
 Tracked milestone-by-milestone in `Urbix_Project.md` §7 (✅ done / 🔨 in
-progress / ⬜ pending). Current version: `0.20.1` (see `CHANGELOG.md`).
+progress / ⬜ pending). Current version: `0.21.0` (see `CHANGELOG.md`).
 
 | Milestone | Status |
 |---|---|
@@ -171,7 +171,7 @@ cc /tmp/basic_usage.o -L target/release -lurbix -ldl -lm -pthread -o /tmp/basic_
 
 ## Usage
 
-The library is in early development (currently `0.20.1`); the public surface is
+The library is in early development (currently `0.21.0`); the public surface is
 `WorldEngine` in Rust and the C ABI in `include/urbix.h` (see
 `Urbix_Project.md` §2.3-2.4 for the wire format):
 

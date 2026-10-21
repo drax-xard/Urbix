@@ -40,6 +40,12 @@
 //! Foreign-language consumers interact through the FFI functions declared
 //! in the `ffi` module and the generated `include/urbix.h` header.
 
+/// The engine crate's version string (from `Cargo.toml`).
+///
+/// Exposed so consumers (the explorer, FFI shims, tools) can report which
+/// engine build they were compiled against without re-reading the manifest.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub mod api;
 pub mod building;
 pub mod cache;
