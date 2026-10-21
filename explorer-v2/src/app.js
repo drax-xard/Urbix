@@ -32,8 +32,8 @@ const FURN_COLORS = {
   1: 0x8e5a9e, 2: 0xb07a3f, 3: 0x9aa3ab, 4: 0x4f7fa8, 5: 0x6e5a3a, 6: 0xdde6ec,
 };
 const PAVE_COLORS = {
-  arterial: 0x46536a, street: 0x272f3a, sidewalk: 0x707a88,
-  plaza: 0xc9a06a, greenway: 0x3f7d4e, park: 0x4a8f5d,
+  arterial: 0x53627a, street: 0x3d4a5e, sidewalk: 0x9fa9b6,
+  plaza: 0xd0a66e, greenway: 0x3e7a4c, park: 0x4f9160,
 };
 const MAX_FLOORS = 48;
 const TILE_COLORS = {
@@ -171,6 +171,51 @@ function facadeMaterial() {
   return mat;
 }
 
+/* Walkable ground reads as a tiled surface: a thin dark seam at every cell
+ * edge makes the pedestrian footprint explicit at a glance. */
+function paverMaterial() {
+  const mat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+  mat.customProgramCacheKey = () => "urbix-paver-v1";
+  mat.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", "#include <common>\nvarying vec2 vPaveUv;")
+      .replace("#include <begin_vertex>", "#include <begin_vertex>\nvPaveUv = uv;");
+    shader.fragmentShader = shader.fragmentShader
+      .replace("#include <common>", "#include <common>\nvarying vec2 vPaveUv;")
+      .replace(
+        "#include <color_fragment>",
+        `#include <color_fragment>
+        vec2 paveEdge = min(vPaveUv, vec2(1.0) - vPaveUv);
+        float paveLine = 1.0 - smoothstep(0.02, 0.055, min(paveEdge.x, paveEdge.y));
+        diffuseColor.rgb *= 1.0 - paveLine * 0.30;`
+      );
+  };
+  return mat;
+}
+
+/* Vacant lots: dry, patchy dirt with sparse weeds. Deliberately low and
+ * inset so it also reads as a different surface from the paved grid. */
+const vacantTex = canvasTexture(64, (g) => {
+  g.fillStyle = "#3b3429";
+  g.fillRect(0, 0, 64, 64);
+  for (let i = 0; i < 260; i++) {
+    const x = (i * 37) % 64, y = (i * 53) % 64;
+    g.fillStyle = i % 3 === 0 ? "rgba(24,21,16,.55)" : "rgba(120,105,78,.22)";
+    g.fillRect(x, y, 1 + (i % 2), 1 + ((i >> 1) % 2));
+  }
+  for (let i = 0; i < 34; i++) {
+    g.fillStyle = `rgba(91,112,64,${0.18 + (i % 3) * 0.06})`;
+    g.fillRect((i * 19) % 64, (i * 41) % 64, 2, 1);
+  }
+});
+
+/* Shared across every chunk: instance colours carry the per-building tint, so
+ * one material/program is enough and eviction never disposes it. */
+const FACADE_MATERIAL = facadeMaterial();
+const ROOF_MATERIAL = new THREE.MeshLambertMaterial({ color: 0xffffff });
+const PAVE_MATERIAL = paverMaterial();
+const VACANT_MATERIAL = new THREE.MeshLambertMaterial({ map: vacantTex });
+
 /* Ground cover: asphalt with a faint block grid + grain, tiles every 4 units. */
 const groundTex = canvasTexture(64, (g) => {
   g.fillStyle = "#141d27";
@@ -199,7 +244,7 @@ scene.add(ground);
 /* ---- engine config (from the backend) ---- */
 const CFG = {
   chunkSize: 32, zoneHues: [], zoneNames: [], floorHeight: 4.0, seed: 0,
-  sdk: "", cellMeters: 4, eyeHeight: 1.7, drawDistance: 8,
+  sdk: "", eyeHeight: 1.7,
 };
 let started = false;
 
@@ -227,19 +272,35 @@ const seedLabel = document.getElementById("seed-label");
 const modeHint = document.getElementById("mode-hint");
 const crosshair = document.getElementById("crosshair");
 const popup = document.getElementById("popup");
+const legendEl = document.getElementById("legend");
 const storeyBox = document.getElementById("storey");
 const storeySlider = document.getElementById("storey-slider");
 const fadeEl = document.getElementById("fade");
 
 /* ---- chunk streaming around the player ---- */
+/* Positive divisors only (chunk sizes). `Math.floor` already handles negative
+ * numerators; the C-style "truncate then subtract" formula would shift every
+ * negative non-multiple west/south of the origin into the previous chunk. */
 function divEuclid(n, d) {
-  const r = n % d;
-  return r >= 0 ? Math.floor(n / d) : Math.floor(n / d) - 1;
+  return Math.floor(n / d);
 }
 
 const STREAM_RADIUS = 3;
 const chunks = new Map();
+const pendingChunks = new Set();
 const pickMeshes = [];
+
+/* Remove a chunk's meshes without touching the shared geometry/materials. */
+function dropChunk(key, entry) {
+  scene.remove(entry.group);
+  for (const em of [entry.mesh, entry.roof, entry.pave, entry.vacant]) {
+    if (!em) continue;
+    const idx = pickMeshes.indexOf(em);
+    if (idx >= 0) pickMeshes.splice(idx, 1);
+    em.dispose?.();
+  }
+  chunks.delete(key);
+}
 
 function cellColor(zone, pal, h) {
   const hue = CFG.zoneHues[zone] || [150, 150, 150];
@@ -248,95 +309,190 @@ function cellColor(zone, pal, h) {
 }
 
 function paveColor(kind) {
-  return new THREE.Color(PAVE_COLORS[kind] ?? 0x272f3a);
+  return new THREE.Color(PAVE_COLORS[kind] ?? 0x3d4a5e);
 }
 
-/* Batch fetch: one invoke for the whole (2r+1)^2 square around (cx,cy). */
+function vacantColor(cx, cz) {
+  const n = Math.abs(Math.sin(cx * 12.9898 + cz * 78.233) * 43758.5453) % 1;
+  const v = 0.82 + n * 0.30;
+  return new THREE.Color(v, v * 0.97, v * 0.88);
+}
+
+/* Request only chunks we neither hold nor are already fetching. Crossing a
+ * chunk border then transfers roughly one edge instead of the whole square. */
 let fetches = 0;
-let lastBatchMs = 0;
 async function loadSquare(cx, cy, r) {
-  const t0 = performance.now();
+  const coords = [];
+  for (let dy = -r; dy <= r; dy++) {
+    for (let dx = -r; dx <= r; dx++) {
+      const ccx = cx + dx, ccy = cy + dy;
+      const key = ccx + ":" + ccy;
+      if (chunks.has(key) || pendingChunks.has(key)) continue;
+      coords.push([ccx, ccy]);
+      pendingChunks.add(key);
+    }
+  }
+  if (!coords.length) return;
   fetches++;
-  let list;
   try {
-    list = await invoke("get_chunks", { cx, cy, r });
+    const list = await invoke("get_chunks", { coords });
+    for (const c of list) spawnChunk(c);
   } catch (e) {
     statusEl.textContent = "chunk fetch failed: " + e;
-    return;
+  } finally {
+    for (const [ccx, ccy] of coords) pendingChunks.delete(ccx + ":" + ccy);
   }
-  lastBatchMs = performance.now() - t0;
-  for (const c of list) spawnChunk(c);
 }
 
-/* Merge adjacent built cells into building masses (see v1 for rationale). */
-const MASS_NEIGHBORS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-function mergeMasses(cells) {
-  const byKey = new Map();
-  for (const cell of cells) byKey.set(cell.x + "," + cell.z, cell);
-  const masses = [];
-  for (const seed of cells) {
-    const sk = seed.x + "," + seed.z;
-    if (!byKey.has(sk)) continue;
-    byKey.delete(sk);
-    let x0 = seed.x, x1 = seed.x, z0 = seed.z, z1 = seed.z, h = seed.h;
-    const stack = [seed];
-    while (stack.length) {
-      const cur = stack.pop();
-      x0 = Math.min(x0, cur.x); x1 = Math.max(x1, cur.x);
-      z0 = Math.min(z0, cur.z); z1 = Math.max(z1, cur.z);
-      h = Math.max(h, cur.h);
-      const tol = Math.max(2, h * 0.25);
-      for (const [dx, dz] of MASS_NEIGHBORS) {
-        const k = (cur.x + dx) + "," + (cur.z + dz);
-        const n = byKey.get(k);
-        if (!n || n.zone !== seed.zone || n.pal !== seed.pal) continue;
-        if (Math.abs(n.h - h) > tol) continue;
-        byKey.delete(k);
-        stack.push(n);
+/* Buildings are authored per lot: every built cell of a lot shares one exact
+ * interior key. A height-based flood fill used to split towers into separate
+ * ground-level boxes, so a 1x1 crown/core or a leftover podium cell read as a
+ * standalone 1x1 building even though the lot (and its interior) was larger.
+ *
+ * Instead, group by lot and split its heights into massing levels. Each level
+ * is drawn as a tier over every cell that reaches it, so a tower core rises
+ * from its podium rather than standing alone, and the exterior footprint
+ * matches the lot the interior belongs to. */
+function lotKey(cell) {
+  return cell.lot_key ?? String(cell.interior_id);
+}
+
+function massingLevels(cells) {
+  const sorted = [...cells].sort((a, b) => a.h - b.h);
+  const levels = [];
+  for (const cell of sorted) {
+    const last = levels[levels.length - 1];
+    if (!last || cell.h - last.top > Math.max(2, last.top * 0.25)) {
+      levels.push({ top: cell.h, cells: [cell] });
+    } else {
+      last.top = Math.max(last.top, cell.h);
+      last.cells.push(cell);
+    }
+  }
+  levels.forEach((level, i) => {
+    for (const cell of level.cells) cell.massLevel = i;
+  });
+  return levels;
+}
+
+/* Merge a same-height cell set into row runs, then coalesce identical runs
+ * down consecutive rows. Fewer instances, and no seams inside a tier. */
+function cellRects(cells) {
+  const rows = new Map();
+  for (const cell of cells) {
+    let xs = rows.get(cell.z);
+    if (!xs) rows.set(cell.z, xs = []);
+    xs.push(cell.x);
+  }
+  const out = [];
+  let open = new Map();
+  let prevZ = null;
+  for (const z of [...rows.keys()].sort((a, b) => a - b)) {
+    const xs = rows.get(z).sort((a, b) => a - b);
+    const runs = [];
+    let x0 = xs[0], x1 = xs[0];
+    for (let i = 1; i < xs.length; i++) {
+      if (xs[i] === x1 + 1) {
+        x1 = xs[i];
+      } else {
+        runs.push([x0, x1]);
+        x0 = x1 = xs[i];
       }
     }
-    masses.push({ x0, z0, x1, z1, h, zone: seed.zone, pal: seed.pal });
+    runs.push([x0, x1]);
+    const next = new Map();
+    for (const [a, b] of runs) {
+      const key = a + ":" + b;
+      let rect = prevZ === z - 1 ? open.get(key) : null;
+      if (rect) {
+        rect.z1 = z;
+      } else {
+        rect = { x0: a, z0: z, x1: b, z1: z };
+      }
+      next.set(key, rect);
+    }
+    for (const [key, rect] of open) if (!next.has(key)) out.push(rect);
+    open = next;
+    prevZ = z;
   }
-  return masses;
+  out.push(...open.values());
+  return out;
+}
+
+function lotTiers(cells) {
+  const byLot = new Map();
+  for (const cell of cells) {
+    const key = lotKey(cell);
+    let group = byLot.get(key);
+    if (!group) byLot.set(key, group = []);
+    group.push(cell);
+  }
+  const volumes = [];
+  const roofs = [];
+  for (const group of byLot.values()) {
+    const levels = massingLevels(group);
+    const topH = levels[levels.length - 1].top;
+    const { zone, pal } = group[0];
+    for (let i = 0; i < levels.length; i++) {
+      const y0 = i === 0 ? 0 : levels[i - 1].top;
+      const y1 = levels[i].top;
+      if (y1 - y0 < 0.05) continue;
+      const members = group.filter((cell) => cell.massLevel >= i);
+      for (const r of cellRects(members)) {
+        volumes.push({ ...r, y0, y1, h: topH, zone, pal });
+      }
+      const caps = group.filter((cell) => cell.massLevel === i);
+      for (const r of cellRects(caps)) {
+        roofs.push({ ...r, y: y1, h: topH, zone, pal });
+      }
+    }
+  }
+  return { volumes, roofs };
 }
 
 function spawnChunk(c) {
   const key = c.cx + ":" + c.cy;
   if (chunks.has(key)) return;
+  // A slow fetch may resolve after the player crossed a border; ignore chunks
+  // that no longer belong to the current streaming square.
+  if (lastCenter &&
+      Math.max(Math.abs(c.cx - lastCenter.cx), Math.abs(c.cy - lastCenter.cy)) > STREAM_RADIUS)
+    return;
 
   const built = c.cells.filter((cell) => cell.h > 0);
-  const masses = mergeMasses(built);
+  const tiers = lotTiers(built);
   const paved = c.cells.filter((cell) => groundKind(cell.flags, cell.h) !== null);
+  const vacant = c.cells.filter(
+    (cell) => cell.h <= 0 && groundKind(cell.flags, cell.h) === null
+  );
   const group = new THREE.Group();
-  const data = [];
-  let mesh = null, roof = null, pave = null;
+  let mesh = null, roof = null, pave = null, vacantMesh = null;
 
-  if (masses.length > 0) {
-    mesh = new THREE.InstancedMesh(UNIT_BOX, facadeMaterial(), masses.length);
-    roof = new THREE.InstancedMesh(
-      UNIT_BOX, new THREE.MeshLambertMaterial({ color: 0xffffff }), masses.length
-    );
+  if (tiers.volumes.length > 0) {
+    const { volumes, roofs } = tiers;
+    mesh = new THREE.InstancedMesh(UNIT_BOX, FACADE_MATERIAL, volumes.length);
+    roof = new THREE.InstancedMesh(UNIT_BOX, ROOF_MATERIAL, roofs.length);
     const m = new THREE.Matrix4(), q = new THREE.Quaternion();
     const p = new THREE.Vector3(), s = new THREE.Vector3();
     const WHITE = new THREE.Color(0xffffff);
-    masses.forEach((mass, i) => {
-      const h = Math.max(mass.h, 0.05);
-      const w = mass.x1 - mass.x0 + 1;
-      const d = mass.z1 - mass.z0 + 1;
-      const tint = cellColor(mass.zone, mass.pal, h);
-      p.set(mass.x0 + w / 2, h / 2, mass.z0 + d / 2);
+    volumes.forEach((vol, i) => {
+      const h = Math.max(vol.y1 - vol.y0, 0.05);
+      const w = vol.x1 - vol.x0 + 1;
+      const d = vol.z1 - vol.z0 + 1;
+      const tint = cellColor(vol.zone, vol.pal, vol.h);
+      p.set(vol.x0 + w / 2, vol.y0 + h / 2, vol.z0 + d / 2);
       s.set(w, h, d);
       mesh.setMatrixAt(i, m.compose(p, q, s));
       mesh.setColorAt(i, tint);
-      p.set(mass.x0 + w / 2, h + 0.09, mass.z0 + d / 2);
+    });
+    roofs.forEach((cap, i) => {
+      const w = cap.x1 - cap.x0 + 1;
+      const d = cap.z1 - cap.z0 + 1;
+      const tint = cellColor(cap.zone, cap.pal, cap.h);
+      p.set(cap.x0 + w / 2, cap.y + 0.09, cap.z0 + d / 2);
       s.set(Math.max(w - 0.08, 0.2), 0.18, Math.max(d - 0.08, 0.2));
       roof.setMatrixAt(i, m.compose(p, q, s));
-      roof.setColorAt(i, tint.clone().lerp(WHITE, 0.55));
-      data.push({
-        wx: mass.x0 + Math.floor(w / 2), wz: mass.z0 + Math.floor(d / 2),
-        zone: mass.zone, height: h, i, x0: mass.x0, z0: mass.z0,
-        x1: mass.x1, z1: mass.z1,
-      });
+      roof.setColorAt(i, tint.lerp(WHITE, 0.55));
     });
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
@@ -347,13 +503,11 @@ function spawnChunk(c) {
   }
 
   if (paved.length > 0) {
-    pave = new THREE.InstancedMesh(
-      UNIT_BOX, new THREE.MeshLambertMaterial({ color: 0xffffff }), paved.length
-    );
+    pave = new THREE.InstancedMesh(UNIT_BOX, PAVE_MATERIAL, paved.length);
     const m = new THREE.Matrix4(), q = new THREE.Quaternion();
     const p = new THREE.Vector3(), s = new THREE.Vector3();
     paved.forEach((cell, i) => {
-      p.set(cell.x, 0.03, cell.z);
+      p.set(cell.x + 0.5, 0.03, cell.z + 0.5);
       s.set(1, 0.06, 1);
       pave.setMatrixAt(i, m.compose(p, q, s));
       pave.setColorAt(i, paveColor(groundKind(cell.flags, cell.h)));
@@ -361,6 +515,20 @@ function spawnChunk(c) {
     pave.instanceMatrix.needsUpdate = true;
     if (pave.instanceColor) pave.instanceColor.needsUpdate = true;
     group.add(pave);
+  }
+
+  if (vacant.length > 0) {
+    vacantMesh = new THREE.InstancedMesh(UNIT_BOX, VACANT_MATERIAL, vacant.length);
+    const m = new THREE.Matrix4(), q = new THREE.Quaternion();
+    const p = new THREE.Vector3(), s = new THREE.Vector3(0.97, 0.03, 0.97);
+    vacant.forEach((cell, i) => {
+      p.set(cell.x + 0.5, 0.015, cell.z + 0.5);
+      vacantMesh.setMatrixAt(i, m.compose(p, q, s));
+      vacantMesh.setColorAt(i, vacantColor(cell.x, cell.z));
+    });
+    vacantMesh.instanceMatrix.needsUpdate = true;
+    if (vacantMesh.instanceColor) vacantMesh.instanceColor.needsUpdate = true;
+    group.add(vacantMesh);
   }
 
   // Index cells by local coords so collision can look them up cheaply.
@@ -372,7 +540,8 @@ function spawnChunk(c) {
     grid[lz * n + lx] = cell;
   }
 
-  chunks.set(key, { group, data, grid, mesh, roof, pave, cx: c.cx, cy: c.cy });
+  group.visible = mode !== "inside";
+  chunks.set(key, { group, grid, mesh, roof, pave, vacant: vacantMesh, cx: c.cx, cy: c.cy });
   scene.add(group);
 }
 
@@ -391,32 +560,32 @@ function updateStream() {
 
   loadSquare(c.cx, c.cy, STREAM_RADIUS);
 
-  for (const [key, entry] of chunks) {
+  for (const entry of chunks.values()) {
     const d = Math.max(Math.abs(entry.cx - c.cx), Math.abs(entry.cy - c.cy));
-    if (d > STREAM_RADIUS) {
-      scene.remove(entry.group);
-      for (const em of [entry.mesh, entry.roof, entry.pave]) {
-        if (!em) continue;
-        const idx = pickMeshes.indexOf(em);
-        if (idx >= 0) pickMeshes.splice(idx, 1);
-        if (em.material) em.material.dispose();
-      }
-      chunks.delete(key);
-    }
+    if (d > STREAM_RADIUS) dropChunk(entry.cx + ":" + entry.cy, entry);
   }
   refreshStatus();
+}
+
+function surfaceLabel() {
+  const cell = gridCell(Math.floor(PLAYER.pos.x), Math.floor(PLAYER.pos.z));
+  if (!cell) return "loading";
+  if (cell.h > 0) return "building";
+  return groundKind(cell.flags, cell.h) || "vacant lot";
 }
 
 function refreshStatus() {
   if (!started) return;
   const x = camera.position.x.toFixed(1);
   const z = camera.position.z.toFixed(1);
+  const surface = mode === "inside" ? "interior" : `street · ${surfaceLabel()}`;
   statusEl.textContent =
-    `${mode === "inside" ? "interior" : "street"} · (${x}, ${z}) · ` +
+    `${surface} · (${x}, ${z}) · ` +
     `${chunks.size} chunk(s) · ${frameMs.toFixed(1)}ms/frame · ${fetches} fetches`;
 }
 
 /* ---- first-person controller ---- */
+const streetReturn = new THREE.Vector3();
 const PLAYER = {
   pos: new THREE.Vector3(0, 1.7, 0),  // eye position
   vel: new THREE.Vector3(),
@@ -432,37 +601,87 @@ const MOUSE_SENS = 0.0022;
 const GRAVITY = 26;
 
 let mode = "menu";                    // menu | street | inside
-let inspecting = null;
 const interiorGroup = new THREE.Group();
 interiorGroup.visible = false;
 scene.add(interiorGroup);
 const INTERIOR_BG = new THREE.Color(0x0a0e14);
-const interior = { w: 0, dep: 0, ox: 0, oz: 0, wx: 0, wz: 0, floors: [], active: 0 };
+const interior = { w: 0, dep: 0, ox: 0, oz: 0, floors: [], active: 0 };
 let transitionBusy = false;
 
 /* Collision: exterior blocks built cells; interior uses the tile grid. */
-function blockedAt(x, z) {
-  if (mode === "inside") return !walkableInterior(interior.active, x, z);
-  const cx = Math.floor(x), cz = Math.floor(z);
+const PLAYER_RADIUS = 0.3;
+const MOVE_SUBSTEP = 0.2;
+
+function gridCell(cx, cz) {
   const key = divEuclid(cx, CFG.chunkSize) + ":" + divEuclid(cz, CFG.chunkSize);
   const entry = chunks.get(key);
-  if (!entry) return false; // unknown chunk: don't trap the player
+  if (!entry) return null;
   const n = CFG.chunkSize;
   const lx = ((cx % n) + n) % n;
   const lz = ((cz % n) + n) % n;
-  const cell = entry.grid ? entry.grid[lz * n + lx] : null;
-  if (!cell) return false;
-  return cell.h > 0; // built cells are solid at street level
+  return entry.grid ? entry.grid[lz * n + lx] : null;
 }
-/* A 4-sample radius probe so the player can't clip through corners. */
-function tryMove(dx, dz) {
-  const r = 0.32;
-  const px = PLAYER.pos.x, pz = PLAYER.pos.z;
-  if (!blockedAt(px + dx + Math.sign(dx) * r, pz + dz)) {
-    if (!blockedAt(px + dx, pz + dz + Math.sign(dz) * r)) {
-      PLAYER.pos.x += dx;
-      PLAYER.pos.z += dz;
+
+/* Walkable ground is exactly what the engine's spawn scan accepts: an
+ * unbuilt cell carrying a street/sidewalk/plaza/greenway/park flag. Vacant
+ * unflagged lots are open but not pedestrian ground. */
+function isWalkableCell(cell) {
+  return !!cell && cell.h <= 0 && groundKind(cell.flags, cell.h) !== null;
+}
+
+function cellBlocked(cx, cz) {
+  // Unknown/unloaded chunks stay solid so late geometry can never load on top
+  // of the player. The streaming radius keeps this at the visible frontier.
+  return !isWalkableCell(gridCell(cx, cz));
+}
+
+/* Square footprint test: stand only where every overlapped cell is walkable. */
+function canOccupy(x, z) {
+  if (mode === "inside") return walkableInterior(interior.active, x, z);
+  const r = PLAYER_RADIUS;
+  const x0 = Math.floor(x - r + 1e-4), x1 = Math.floor(x + r - 1e-4);
+  const z0 = Math.floor(z - r + 1e-4), z1 = Math.floor(z + r - 1e-4);
+  for (let cz = z0; cz <= z1; cz++)
+    for (let cx = x0; cx <= x1; cx++)
+      if (cellBlocked(cx, cz)) return false;
+  return true;
+}
+
+/* Safety net for stale/teleported positions (or a chunk that arrives late):
+ * snap to the nearest walkable cell centre instead of leaving the player
+ * embedded in a mass with every movement direction blocked. */
+function resolvePenetration() {
+  if (mode !== "street" || transitionBusy) return;
+  if (canOccupy(PLAYER.pos.x, PLAYER.pos.z)) return;
+  const cx = Math.floor(PLAYER.pos.x), cz = Math.floor(PLAYER.pos.z);
+  const MAX_CELLS = 24;
+  for (let r = 0; r <= MAX_CELLS; r++) {
+    for (let dz = -r; dz <= r; dz++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;
+        const x = cx + dx + 0.5, z = cz + dz + 0.5;
+        if (canOccupy(x, z)) {
+          PLAYER.pos.x = x;
+          PLAYER.pos.z = z;
+          return;
+        }
+      }
     }
+  }
+}
+
+/* Move each axis independently so a blocked component slides instead of
+ * freezing the other; substeps prevent tunnelling at sprint speed. */
+function tryMove(dx, dz) {
+  const dist = Math.hypot(dx, dz);
+  if (dist === 0) return;
+  const steps = Math.max(1, Math.ceil(dist / MOVE_SUBSTEP));
+  const sx = dx / steps, sz = dz / steps;
+  for (let i = 0; i < steps; i++) {
+    const nx = PLAYER.pos.x + sx;
+    if (canOccupy(nx, PLAYER.pos.z)) PLAYER.pos.x = nx;
+    const nz = PLAYER.pos.z + sz;
+    if (canOccupy(PLAYER.pos.x, nz)) PLAYER.pos.z = nz;
   }
 }
 
@@ -519,12 +738,11 @@ function centerBuilding() {
   raycaster.setFromCamera(CENTER, camera);
   const hits = raycaster.intersectObjects(pickMeshes, false);
   for (const hit of hits) {
-    const entry = [...chunks.values()].find(
-      (e) => e.mesh === hit.object || e.roof === hit.object
-    );
-    if (!entry) continue;
-    const cell = entry.data[hit.instanceId];
-    if (cell) return cell;
+    // Nudge just inside the surface so facade edges land on the building cell,
+    // then query that exact cell (not the merged mass centre).
+    const p = hit.point.clone().addScaledVector(raycaster.ray.direction, -0.05);
+    const cell = gridCell(Math.floor(p.x), Math.floor(p.z));
+    if (cell && cell.h > 0) return cell;
   }
   return null;
 }
@@ -532,41 +750,41 @@ function centerBuilding() {
 async function enterBuilding(cellData) {
   if (transitionBusy || mode === "inside") return;
   transitionBusy = true;
-  let d, rooms = null;
+  const wx = cellData.x, wz = cellData.z;
+  let d;
   try {
-    d = await invoke("get_interior", { wx: cellData.wx, wz: cellData.wz });
-    if (d && d.floor_count) {
-      rooms = await invoke("get_rooms", { wx: cellData.wx, wz: cellData.wz }).catch(() => null);
-    }
+    d = await invoke("get_interior", { wx: wx, wz: wz });
   } catch (e) {
     showPopup("interior lookup failed: " + e, 2500);
     transitionBusy = false;
     return;
   }
   if (!d || !d.floor_count || !d.floors.length) {
-    showPopup(`(${cellData.wx}, ${cellData.wz}) — no way inside`, 1800);
+    showPopup(`(${wx}, ${wz}) — no way inside`, 1800);
     transitionBusy = false;
     return;
   }
 
   const floors = d.floors.slice(0, MAX_FLOORS);
+  const rooms = Array.isArray(d.rooms) ? d.rooms : [];
   const w = d.footprint_w, dep = d.footprint_d;
-  const ox = cellData.wx - Math.floor(w / 2);
-  const oz = cellData.wz - Math.floor(dep / 2);
+  const ox = wx - Math.floor(w / 2);
+  const oz = wz - Math.floor(dep / 2);
   const door = findDoor(floors, w, dep);
   const pass = door || firstPassable(floors, w, dep);
   if (!pass) {
-    showPopup(`(${cellData.wx}, ${cellData.wz}) — sealed`, 1800);
+    showPopup(`(${wx}, ${wz}) — sealed`, 1800);
     transitionBusy = false;
     return;
   }
 
   if (document.pointerLockElement) document.exitPointerLock();
+  streetReturn.copy(PLAYER.pos);
   buildInteriorMesh(d, floors);
 
   const inward = door ? doorInward(door, dep)
-    : { x: Math.sign(cellData.wx - ox - pass.x - 0.5) || 1,
-        z: Math.sign(cellData.wz - oz - pass.z - 0.5) || 1 };
+    : { x: Math.sign(wx - ox - pass.x - 0.5) || 1,
+        z: Math.sign(wz - oz - pass.z - 0.5) || 1 };
   const footX = ox + pass.x + 0.5;
   const footZ = oz + pass.z + 0.5;
 
@@ -583,10 +801,10 @@ async function enterBuilding(cellData) {
   crosshair.classList.remove("hidden");
   storeyBox.classList.remove("hidden");
   refreshModeHint();
-  if (rooms && rooms.length) {
+  if (rooms.length) {
     const units = new Set(rooms.map((r) => r.unit)).size;
     showPopup(
-      `inside (${cellData.wx}, ${cellData.wz}) · ${CFG.zoneNames[d.zone] || "?"} · ` +
+      `inside (${wx}, ${wz}) · ${CFG.zoneNames[d.zone] || "?"} · ` +
       `${d.floor_count} storeys · ${rooms.length} rooms · ${units} units`, 3200
     );
   }
@@ -605,36 +823,12 @@ async function exitBuilding() {
   setExteriorVisible(true);
   mode = "street";
   storeyBox.classList.add("hidden");
-  // Nudge the player to the nearest street cell just outside the lot so they
-  // don't spawn inside the mass they entered.
-  PLAYER.anchorY = 1.7;
-  spawnOutside();
+  // Return to where the player stood before entering (always outside the mass).
+  PLAYER.pos.copy(streetReturn);
+  PLAYER.anchorY = streetReturn.y;
   refreshModeHint();
   await fade(false);
   transitionBusy = false;
-}
-
-/* Place the player on a walkable cell next to the last building's footprint. */
-function spawnOutside() {
-  const { wx, wz, w, dep, ox, oz } = interior;
-  const candidates = [];
-  for (let x = ox - 1; x <= ox + w; x++) {
-    candidates.push([x, oz - 1], [x, oz + dep]);
-  }
-  for (let z = oz - 1; z <= oz + dep; z++) {
-    candidates.push([ox - 1, z], [ox + w, z]);
-  }
-  const mid = { x: wx, z: wz };
-  candidates.sort((a, b) =>
-    (Math.abs(a[0] - mid.x) + Math.abs(a[1] - mid.z)) -
-    (Math.abs(b[0] - mid.x) + Math.abs(b[1] - mid.z)));
-  for (const [cx, cz] of candidates) {
-    if (!blockedAt(cx + 0.5, cz + 0.5)) {
-      PLAYER.pos.set(cx + 0.5, 1.7, cz + 0.5);
-      return;
-    }
-  }
-  PLAYER.pos.set(ox + w / 2, 1.7, oz - 2);
 }
 
 function findDoor(floors, w, dep) {
@@ -663,10 +857,11 @@ function doorInward(door, dep) {
 /* Interior collision (radius probe over the tile grid). */
 function walkableInterior(f, x, z) {
   const r = 0.28;
-  for (const [dx, dz] of [[0, 0], [r, 0], [-r, 0], [0, r], [0, -r]]) {
-    const t = interiorTile(f, x + dx, z + dz);
-    if (t === -1 || t === TILE.WALL || t === TILE.CORE) return false;
-  }
+  for (const dx of [-r, 0, r])
+    for (const dz of [-r, 0, r]) {
+      const t = interiorTile(f, x + dx, z + dz);
+      if (t === -1 || t === TILE.WALL || t === TILE.CORE) return false;
+    }
   return true;
 }
 function interiorTile(f, x, z) {
@@ -688,11 +883,11 @@ function windowCells(tiles, w, dep) {
 
 function clearInterior() {
   for (const child of [...interiorGroup.children]) {
+    if (child.isInstancedMesh) child.dispose();
     if (child.geometry && child.geometry !== UNIT_BOX) child.geometry.dispose();
     if (child.material) child.material.dispose();
     interiorGroup.remove(child);
   }
-  inspecting = null;
 }
 
 function buildInteriorMesh(d, floors) {
@@ -702,8 +897,7 @@ function buildInteriorMesh(d, floors) {
   const ox = d.wx - Math.floor(w / 2);
   const oz = d.wz - Math.floor(dep / 2);
   interior.w = w; interior.dep = dep; interior.ox = ox; interior.oz = oz;
-  interior.wx = d.wx; interior.wz = d.wz; interior.floors = floors;
-  inspecting = interior;
+  interior.floors = floors;
 
   const WALL_C = new THREE.Color(0xa9b2bc);
   const CORE_C = new THREE.Color(0x272d36);
@@ -725,18 +919,19 @@ function buildInteriorMesh(d, floors) {
       }
     }
   }
-  const boxMesh = new THREE.InstancedMesh(
-    UNIT_BOX, new THREE.MeshLambertMaterial({ color: 0xffffff }), boxList.length || 1
-  );
-  const m = new THREE.Matrix4(), q = new THREE.Quaternion();
-  const p = new THREE.Vector3(), s = new THREE.Vector3(1, 1, 1);
-  boxList.forEach(([x, z, y, h, c], i) => {
-    p.set(x + 0.5, y + h / 2, z + 0.5);
-    s.set(1, h, 1);
-    boxMesh.setMatrixAt(i, m.compose(p, q, s));
-    boxMesh.setColorAt(i, c);
-  });
+  let boxMesh = null;
   if (boxList.length) {
+    boxMesh = new THREE.InstancedMesh(
+      UNIT_BOX, new THREE.MeshLambertMaterial({ color: 0xffffff }), boxList.length
+    );
+    const m = new THREE.Matrix4(), q = new THREE.Quaternion();
+    const p = new THREE.Vector3(), s = new THREE.Vector3(1, 1, 1);
+    boxList.forEach(([x, z, y, h, c], i) => {
+      p.set(x + 0.5, y + h / 2, z + 0.5);
+      s.set(1, h, 1);
+      boxMesh.setMatrixAt(i, m.compose(p, q, s));
+      boxMesh.setColorAt(i, c);
+    });
     boxMesh.instanceMatrix.needsUpdate = true;
     if (boxMesh.instanceColor) boxMesh.instanceColor.needsUpdate = true;
   }
@@ -833,9 +1028,10 @@ function buildInteriorMesh(d, floors) {
     new THREE.EdgesGeometry(new THREE.BoxGeometry(w + 0.05, fh, dep + 0.05)),
     new THREE.LineBasicMaterial({ color: 0x6ea8ff, transparent: true, opacity: 0.9 })
   );
-  frame.position.set(d.wx, fh / 2, d.wz);
+  frame.position.set(ox + w / 2, fh / 2, oz + dep / 2);
 
-  interiorGroup.add(boxMesh, floorMesh, frame);
+  if (boxMesh) interiorGroup.add(boxMesh);
+  interiorGroup.add(floorMesh, frame);
   if (furnMesh) interiorGroup.add(furnMesh);
   if (winMesh) interiorGroup.add(winMesh);
   interiorGroup.userData.fh = fh;
@@ -854,7 +1050,13 @@ function setActiveStorey(f, moveCamera) {
   document.getElementById("storey-n").textContent = String(interior.active);
   const frame = interiorGroup.children.find((c) => c.isLineSegments);
   const fh = CFG.floorHeight;
-  if (frame) frame.position.set(interior.wx, interior.active * fh + fh / 2, interior.wz);
+  if (frame) {
+    frame.position.set(
+      interior.ox + interior.w / 2,
+      interior.active * fh + fh / 2,
+      interior.oz + interior.dep / 2,
+    );
+  }
   if (moveCamera) PLAYER.anchorY = interior.active * fh + 1.6;
 }
 storeySlider.addEventListener("input", () => setActiveStorey(+storeySlider.value, true));
@@ -863,6 +1065,7 @@ storeySlider.addEventListener("input", () => setActiveStorey(+storeySlider.value
 function setExteriorVisible(show) {
   for (const entry of chunks.values()) entry.group.visible = show;
   ground.visible = show;
+  legendEl.classList.toggle("hidden", !show);
   scene.background = show ? skyTex : INTERIOR_BG;
 }
 
@@ -910,6 +1113,7 @@ window.addEventListener("keydown", (e) => {
   PLAYER.keys.add(e.code);
 });
 window.addEventListener("keyup", (e) => PLAYER.keys.delete(e.code));
+window.addEventListener("blur", () => PLAYER.keys.clear());
 
 /* ---- world start ---- */
 async function loadConfig() {
@@ -921,9 +1125,7 @@ async function loadConfig() {
     zoneNames: cfg.zone_names,
     floorHeight: cfg.floor_height || 4.0,
     sdk: cfg.sdk || "",
-    cellMeters: cfg.cell_meters || 4,
     eyeHeight: cfg.eye_height || 1.7,
-    drawDistance: cfg.draw_distance || 8,
   });
   zoneInput.innerHTML = "";
   CFG.zoneNames.forEach((name, i) => {
@@ -970,11 +1172,9 @@ menuForm.addEventListener("submit", async (e) => {
 
 async function beginAt(spawn, seed) {
   // Reset the streaming state for the new world.
-  for (const [key, entry] of chunks) {
-    scene.remove(entry.group);
-    chunks.delete(key);
-  }
+  for (const [key, entry] of [...chunks]) dropChunk(key, entry);
   pickMeshes.length = 0;
+  pendingChunks.clear();
   lastCenter = null;
   fetches = 0;
 
@@ -1014,6 +1214,7 @@ renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.05);
   if (mode !== "menu") {
     updateStream();
+    resolvePenetration();
     if (!transitionBusy) stepPlayer(dt);
   }
   renderer.render(scene, camera);

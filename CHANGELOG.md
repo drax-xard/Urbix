@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Explorer v2 streaming is incremental**: `get_chunks` now takes an
+  explicit `coords: [[cx, cy], …]` list (deduped, capped at 64) instead of a
+  centre/radius square. The frontend tracks loaded and in-flight chunks and
+  requests only what it lacks, so crossing a chunk border transfers roughly
+  one edge rather than reserializing the whole 7×7 square.
+- **Explorer v2 interior lookup returns rooms**: `InteriorDto` carries the
+  `rooms` records already produced while laying out the floors, so entering
+  a building needs one `get_interior` call instead of `get_interior` +
+  `get_rooms`. The latter command remains for compatibility.
+- **Explorer v2 shares chunk materials**: facade, roof, and paving materials
+  are created once for the world instead of once per chunk, cutting shader
+  program/material churn as chunks stream.
+- **Explorer v2 walkability affordances**: paved surfaces were retuned for
+  contrast, each walkable cell gets a subtle tile seam, vacant lots render as
+  inset patchy dirt, and the HUD gains a colour key plus the current surface
+  name. Only street/sidewalk/plaza/greenway/park cells are walkable.
+- **Explorer v2 lot-aware massing**: buildings are grouped by their exact
+  interior key and rendered as stacked tiers (podium base, tower core, roof
+  caps) instead of a height-based flood fill. Tall cores no longer appear as
+  detached 1×1 boxes, and low podium cells stay attached to their lot.
+  `CellDto.lot_key` carries the `u64` key as exact hex so JS grouping does not
+  lose precision.
+- **Interior IDs are district-scoped**: the lot key now mixes in the nearest
+  Voronoi site index, because local block/slot coordinates repeat across
+  rotated/warped districts. Interiors can no longer be served from another
+  district's cached layout for the same local coordinates.
+
+### Fixed
+
+- **Interior room doors preserve the shaft** (`src/interior.rs`): a room
+  whose only adjacent circulation was the core could turn the core tile into
+  a door, erasing the vertical shaft. Door placement now skips core tiles and
+  scans for a corridor/door margin instead.
+- **Explorer v2 negative-coordinate streaming/collision**
+  (`explorer-v2/src/app.js`): `divEuclid` applied a C-style truncating
+  division correction after `Math.floor`, shifting every negative
+  non-multiple into the previous chunk. West/south of the origin the
+  frontend requested the wrong chunks and indexed the wrong cells, which
+  could let the player walk into a building and then get stuck when the
+  real chunk arrived. Chunk division now floors normally.
+- **Explorer v2 collision hardening**: unloaded chunks are solid rather than
+  free, walkability is derived from the same flags the spawn scan uses
+  (vacant lots are blocked), and a depenetration safety net snaps the player
+  to the nearest walkable cell if a stale position ever becomes invalid.
+- **Explorer v2 sticky navigation** (`explorer-v2/src/app.js`): exterior
+  collision now resolves each axis independently, so a blocked lateral
+  component no longer cancels forward motion — walls slide instead of
+  freezing the camera. The footprint test checks every built cell the player
+  radius overlaps (instead of one directional probe), movement is substepped
+  so sprint speed cannot tunnel, and paving is cell-aligned (`x + 0.5`) with
+  the building grid so the visible kerb matches collision.
+- **Explorer v2 interaction/resource leaks**: ENTER now queries the exact
+  built cell under the raycast hit (merged masses no longer always open the
+  mass-centre interior), and ESC returns to the player's pre-entry position.
+  Chunk and interior instance buffers are disposed on eviction/reset, the
+  shared unit-box geometry is never disposed, empty interiors no longer add
+  a stray unit box at the world origin, chunks spawned while inside stay
+  hidden, and losing window focus clears held movement keys.
+
 ## [0.21.0] — 2026-10-21
 
 ### Added

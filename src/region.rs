@@ -437,10 +437,28 @@ impl VoronoiDiagram {
     /// ```
     #[must_use]
     pub fn district_frame_for(&self, world_x: f64, world_z: f64) -> DistrictFrame {
+        self.district_frame_and_site_for(world_x, world_z).0
+    }
+
+    /// Per-district frame **and** the nearest site index that selected it.
+    ///
+    /// The site index is the district identity: two lots in different
+    /// districts can land on the same local block coordinates because their
+    /// frames rotate/warp differently. Consumers that key data by local
+    /// block coordinates (notably `chunk::interior_id_for_lot`) must mix this
+    /// index in to keep keys globally unique. Returns `(identity, 0)` for an
+    /// empty diagram.
+    #[must_use]
+    pub fn district_frame_and_site_for(
+        &self,
+        world_x: f64,
+        world_z: f64,
+    ) -> (DistrictFrame, usize) {
         if self.sites.is_empty() {
-            return DistrictFrame::identity();
+            return (DistrictFrame::identity(), 0);
         }
-        let idx = self.nearest_site_idx(world_x, world_z) as i64;
+        let site = self.nearest_site_idx(world_x, world_z);
+        let idx = site as i64;
         let angles = [0.0, 10.0, -10.0, 18.0, -18.0, 27.0, -27.0];
         let pick =
             (hash_coords(idx, 0, self.seed, domain::ORIENTATION) % angles.len() as u64) as usize;
@@ -451,14 +469,17 @@ impl VoronoiDiagram {
             * std::f64::consts::TAU as f32 as f64;
         let amp2 = 0.3 + hash_unit(idx, 4, self.seed, domain::ORIENTATION) as f64 * 0.7;
         let len2 = 12.0 + hash_unit(idx, 5, self.seed, domain::ORIENTATION) as f64 * 18.0;
-        DistrictFrame {
-            angle_rad,
-            warp_amp: amp,
-            warp_len: len,
-            warp_phase: phase,
-            warp_amp2: amp2,
-            warp_len2: len2,
-        }
+        (
+            DistrictFrame {
+                angle_rad,
+                warp_amp: amp,
+                warp_len: len,
+                warp_phase: phase,
+                warp_amp2: amp2,
+                warp_len2: len2,
+            },
+            site,
+        )
     }
 
     /// Skyline peak factor at a world coordinate: `1.0` far from downtown,

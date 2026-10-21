@@ -34,9 +34,11 @@ interior cache, gated by `examples/interiors_gate.rs`.
 ## 1. Overview
 
 A generated interior is a **separate mini-world**, not part of the outdoor chunk
-grid. It is keyed by `InteriorId` (`domain::INTERIOR` hash of the cell's world
-coords, `src/building.rs`) and cached in `InteriorCache` purely by capacity
-(no draw distance — `src/interior.rs:287`).
+grid. It is keyed by `InteriorId` (`domain::INTERIOR` hash of the lot's
+`(district, block, slot)`, `src/chunk.rs`) and cached in `InteriorCache`
+purely by capacity (no draw distance — `src/interior.rs`). The district index
+is part of the key because local block coordinates repeat across rotated,
+warped districts.
 
 ```
 built cell (height > 0)

@@ -63,6 +63,30 @@ html, body {
 #popup { top: 96px; }
 .hidden { display: none; }
 
+/* Walkability key: paved/green cells are walkable; vacant lots are not. */
+#legend {
+  position: fixed; left: 14px; bottom: 14px;
+  display: flex; flex-wrap: wrap; gap: 5px 12px; max-width: 330px;
+  padding: 8px 10px; border-radius: 8px;
+  background: rgba(10, 18, 30, .7); border: 1px solid rgba(255, 255, 255, .12);
+  font-size: 11px; opacity: .9;
+}
+#legend .sw {
+  display: inline-block; width: 10px; height: 10px; margin-right: 4px;
+  vertical-align: -1px; border-radius: 2px;
+  border: 1px solid rgba(255, 255, 255, .28);
+}
+#legend .street { background: #3d4a5e; }
+#legend .arterial { background: #53627a; }
+#legend .sidewalk { background: #9fa9b6; }
+#legend .plaza { background: #d0a66e; }
+#legend .park { background: #4f9160; }
+#legend .vacant {
+  background: repeating-linear-gradient(
+    45deg, #4a4132 0 3px, #2f2a22 3px 6px
+  );
+}
+
 /* Center-screen crosshair. */
 #crosshair {
   position: fixed; left: 50%; top: 50%; width: 18px; height: 18px;

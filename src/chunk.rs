@@ -91,7 +91,8 @@ pub fn generate_chunk(
             let zone = dominant_zone(&affinity);
             // District fabric: one orientation frame per nearest site, plus
             // the global diagonal boulevards cutting across every grid.
-            let frame = voronoi.district_frame_for(world_x as f64, world_z as f64);
+            let (frame, district) =
+                voronoi.district_frame_and_site_for(world_x as f64, world_z as f64);
             let diags = voronoi.diagonals();
 
             // Streets first; a street cell never becomes a building. The
@@ -299,7 +300,8 @@ pub fn generate_chunk(
                 if height > 0.0 {
                     // Lot-keyed interior: every cell of a lot shares one key
                     // so a building has one interior, not one per cell.
-                    cell.interior_id = interior_id_for_lot(block.bx, block.bz, slot.slot, seed);
+                    cell.interior_id =
+                        interior_id_for_lot(block.bx, block.bz, slot.slot, district, seed);
                 }
             }
 
@@ -461,14 +463,24 @@ fn lot_boosts(special: SpecialKind, slot: &LotSlot, zone: ZoneType, seed: u64) -
 ///
 /// `0` means "no interior", so built lots always take a nonzero key in
 /// practice (the hash is uniform over `u64`; callers treat 0 as none just
-/// like the old per-cell key). Keyed on `(block, slot)` — not on the cell —
-/// so every cell of one lot shares one interior. Uses a distinct hash domain
-/// so the id does not correlate with height or palette draws.
-fn interior_id_for_lot(block_bx: i64, block_bz: i64, slot: u8, seed: u64) -> InteriorId {
+/// like the old per-cell key). Keyed on `(district, block, slot)` — not on
+/// the cell — so every cell of one lot shares one interior. The district
+/// index is required because block coordinates are local to a district's
+/// rotated/warped frame: different districts can reuse the same `(block,
+/// slot)` at unrelated world positions. Uses a distinct hash domain so the
+/// id does not correlate with height or palette draws.
+fn interior_id_for_lot(
+    block_bx: i64,
+    block_bz: i64,
+    slot: u8,
+    district: usize,
+    seed: u64,
+) -> InteriorId {
+    let district_seed = seed ^ (district as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
     hash_coords(
         block_bx.wrapping_mul(16).wrapping_add(i64::from(slot)),
         block_bz,
-        seed,
+        district_seed,
         domain::INTERIOR,
     )
 }
@@ -668,6 +680,15 @@ mod tests {
         // A 32x32 city chunk should contain both streets and buildings.
         let total = buf.cell_count();
         assert!(built > 0 && built < total);
+    }
+
+    #[test]
+    fn interior_ids_include_the_district() {
+        // Local block coordinates repeat across rotated/warped districts, so
+        // the same (block, slot) must still yield different interior keys.
+        let a = interior_id_for_lot(3, -7, 2, 4, 445566);
+        assert_ne!(a, interior_id_for_lot(3, -7, 2, 5, 445566));
+        assert_eq!(a, interior_id_for_lot(3, -7, 2, 4, 445566));
     }
 
     #[test]

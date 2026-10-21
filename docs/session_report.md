@@ -587,3 +587,63 @@ macroquad/SDL2+OpenGL (loses the polished shaders).
 * Still needs the same human eyeball and polish threads listed above:
   menu/spawn/ENTER/ESC flow, facade shader, merged masses, retuned skyline;
   then retail fronts, chunk-border seams, and far-window fade.
+
+## Session 10 — Explorer v2 bugfix/optimization pass (2026-10-21)
+
+* **Streaming**: `get_chunks` now takes explicit `coords` (deduped, max 64);
+  the frontend tracks loaded/in-flight chunks and requests only missing
+  coordinates, so border crossings transfer about one edge instead of 49
+  chunks. Stale responses from slow fetches are ignored.
+* **Interior lookup**: `InteriorDto` now includes `rooms`; ENTER makes one
+  `get_interior` call. The raycast resolves the exact built cell under the
+  hit (not the merged-mass centre), and ESC returns to the pre-entry street
+  position.
+* **Rendering/resources**: chunk facade/roof/paving materials are shared
+  across the world; chunk eviction and world reset dispose instance buffers
+  only (shared `UNIT_BOX`/materials survive). Interior instance buffers are
+  disposed on clear, and empty interiors no longer add a stray unit box.
+* **Misc**: chunks spawned while inside stay hidden; window blur clears held
+  keys; interior collision probes 3×3 sample points; the storey frame is
+  centred on the generated footprint; removed unused config fields/state.
+* Verified: root build/test/clippy/fmt; explorer build/test (10/10), clippy,
+  fmt, release build; `node --check`. Still needs the human GUI eyeball.
+
+## Session 11 — Explorer v2 negative-coordinate collision fix (2026-10-21)
+
+* **Root cause found**: frontend `divEuclid` applied a C-style truncating
+  correction after `Math.floor`, shifting negative non-multiples into the
+  previous chunk (`divEuclid(-1, 32)` returned `-2`). West/south of the
+  origin streaming and collision indexed the wrong chunks/cells, allowing
+  walk-through and then trapping the player when the real chunk loaded.
+  Fixed to plain floor division and verified across negative cases.
+* **Collision hardening**: walkability now matches the spawn scan
+  (`h <= 0` + street/sidewalk/plaza/greenway/park flag); unloaded chunks
+  are solid; a depenetration safety net snaps to the nearest walkable cell
+  if a stale position is ever invalid.
+* **Walkability legibility**: brighter palette contrast, per-cell paver
+  seams, inset dirt-textured vacant lots (blocked), bottom-left HUD key, and
+  the status line now names the surface underfoot.
+* Verified: `node --check`; negative `divEuclid` assertions; Explorer
+  cargo test/clippy/fmt/release. GUI eyeball still needed.
+
+## Session 12 — Explorer v2 1×1 masses + interior alias (2026-10-21)
+
+* **Symptom**: some buildings rendered as detached 1×1 boxes, while ENTER
+  showed a much larger interior. A temporary seed-445566 probe found 12,774
+  single-cell masses, of which 12,033 were low fragments of lots with nearby
+  taller cells — the old flood fill split podium rings from tower cores.
+* **Massing**: `explorer-v2/src/app.js` now groups built cells by exact
+  interior key, splits the lot's heights into massing levels, and draws each
+  level as a tier over every cell that reaches it. The base tier covers the
+  whole lot, so cores rise from their podium and no lot cell becomes a
+  standalone 1×1. `CellDto.lot_key` (hex `u64`) keeps JS grouping exact.
+* **Interior alias**: `interior_id_for_lot` now mixes in the nearest Voronoi
+  site index. Local `(block, slot)` repeats across rotated districts, which
+  could serve a small lot a larger cached interior from elsewhere.
+  `VoronoiDiagram::district_frame_and_site_for` exposes the site without a
+  second nearest-site scan.
+* **Core preservation**: a room door could convert an adjacent core tile into
+  a door. Door placement now skips core tiles and scans for a corridor/door
+  margin, preserving the shaft.
+* Verified: root tests 192 + 4 + 1 + 3 + doc tests; `node --check`; Explorer
+  cargo test/clippy/fmt/release. GUI eyeball still needed.

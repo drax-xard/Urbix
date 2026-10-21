@@ -1471,11 +1471,15 @@ fn room_door(g: &mut Floor, rect: (u8, u8, u8, u8), base: u64, door_idx: usize) 
             match g.tiles[ni] {
                 // The margin cell touching the room becomes the doorway; it may
                 // already be a door punched for the street access.
-                Tile::Corridor | Tile::Core | Tile::Door => {
+                Tile::Corridor | Tile::Door => {
                     g.tiles[ni] = Tile::Door;
                     g.kinds[ni] = 0;
                     return;
                 }
+                // The core is circulation, but it is also the shaft: never
+                // convert a core tile into a door. Scan the rest of the
+                // perimeter for a proper corridor/door margin instead.
+                Tile::Core => {}
                 _ => {}
             }
         }

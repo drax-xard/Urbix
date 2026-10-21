@@ -115,6 +115,13 @@ pub struct CellDto {
     pub flags: u8,
     /// Deterministic interior key (0 = no interior).
     pub interior_id: u64,
+    /// Exact interior key as a string for frontend grouping.
+    ///
+    /// `interior_id` is a `u64`, but JSON parses numbers through a JS
+    /// `Number` (53-bit mantissa), which collapses nearby keys. Grouping
+    /// meshes by lot needs the exact value, so this hex form is carried
+    /// alongside the numeric compatibility field.
+    pub lot_key: String,
 }
 
 /// A generated chunk: header fields plus its cells.
@@ -166,6 +173,8 @@ pub struct InteriorDto {
     pub wz: i32,
     /// One entry per storey.
     pub floors: Vec<FloorDto>,
+    /// Enumerated rooms across all storeys (same records as `get_rooms`).
+    pub rooms: Vec<RoomDto>,
 }
 
 /// One enumerated room record.
@@ -383,7 +392,7 @@ fn resolve_zone_spawn(st: &mut EngineState, zone: u8, wx: i32, wz: i32) -> CmdRe
             ZONE_NAMES[zone as usize]
         )));
     }
-    sites.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    sites.sort_by(|a, b| a.0.total_cmp(&b.0));
 
     let mut chunk_cache: std::collections::HashMap<(i32, i32), Vec<CellDto>> =
         std::collections::HashMap::new();
@@ -522,53 +531,58 @@ fn chunk_to_cells(buf: &urbix::data::ChunkBuffer, cx: i32, cy: i32) -> Vec<CellD
             pal: cell.palette_id,
             flags: cell.flags.bits(),
             interior_id: cell.interior_id,
+            lot_key: if cell.interior_id == 0 {
+                String::new()
+            } else {
+                format!("{:016x}", cell.interior_id)
+            },
         });
     }
     out
 }
 
-/// Generate (or fetch cached) chunks in the `(2r+1)²` square centred on
-/// `(cx, cy)`. `r` is capped so a single call can never balloon the payload.
+/// Maximum chunks accepted by one `get_chunks` call.
+///
+/// The frontend streams a 7×7 square (49 chunks) on first load and then asks
+/// only for the newly exposed edge, so 64 leaves headroom without letting a
+/// bad request balloon the IPC payload.
+const MAX_CHUNK_BATCH: usize = 64;
+
+/// Build DTOs for the requested chunk coordinates, skipping duplicates.
+fn generate_chunks(engine: &mut WorldEngine, coords: &[[i32; 2]]) -> Vec<ChunkDto> {
+    let mut seen = std::collections::HashSet::with_capacity(coords.len());
+    let mut out = Vec::with_capacity(coords.len());
+    for &[ccx, ccy] in coords {
+        if !seen.insert((ccx, ccy)) {
+            continue;
+        }
+        let buf = engine.generate_chunk(ccx, ccy);
+        out.push(ChunkDto {
+            cx: ccx,
+            cy: ccy,
+            chunk_size: buf.header().chunk_size,
+            cells: chunk_to_cells(&buf, ccx, ccy),
+        });
+    }
+    out
+}
+
+/// Generate (or fetch cached) an explicit list of chunks.
+///
+/// The frontend tracks which chunks it already holds and requests only the
+/// new ones, so crossing a chunk border transfers roughly one edge instead of
+/// reserializing the whole streaming square.
 #[tauri::command]
 pub fn get_chunks(
     state: State<'_, SharedEngine>,
-    cx: i32,
-    cy: i32,
-    r: i32,
+    coords: Vec<[i32; 2]>,
 ) -> CmdResult<Vec<ChunkDto>> {
-    let r = r.clamp(0, 4);
-    let mut st = state
-        .lock()
-        .map_err(|_| CommandError::new("engine state poisoned"))?;
-    let engine = st
-        .engine
-        .as_mut()
-        .ok_or_else(|| CommandError::new("world not started"))?;
-
-    let mut out = Vec::with_capacity(((2 * r + 1) * (2 * r + 1)) as usize);
-    for dy in -r..=r {
-        for dx in -r..=r {
-            let ccx = cx + dx;
-            let ccy = cy + dy;
-            let buf = engine.generate_chunk(ccx, ccy);
-            out.push(ChunkDto {
-                cx: ccx,
-                cy: ccy,
-                chunk_size: buf.header().chunk_size,
-                cells: chunk_to_cells(&buf, ccx, ccy),
-            });
-        }
+    if coords.len() > MAX_CHUNK_BATCH {
+        return Err(CommandError::new(format!(
+            "chunk batch too large ({} > {MAX_CHUNK_BATCH})",
+            coords.len()
+        )));
     }
-    Ok(out)
-}
-
-/// Generate the interior for the built cell at world `(wx, wz)`.
-///
-/// Returns `floor_count == 0` (empty `floors`) for unbuilt/sealed cells,
-/// mirroring the v1 HTTP endpoint so the frontend's cross-fade logic is
-/// unchanged.
-#[tauri::command]
-pub fn get_interior(state: State<'_, SharedEngine>, wx: i32, wz: i32) -> CmdResult<InteriorDto> {
     let mut st = state
         .lock()
         .map_err(|_| CommandError::new("engine state poisoned"))?;
@@ -576,62 +590,11 @@ pub fn get_interior(state: State<'_, SharedEngine>, wx: i32, wz: i32) -> CmdResu
         .engine
         .as_mut()
         .ok_or_else(|| CommandError::new("world not started"))?;
-
-    let empty = InteriorDto {
-        interior_id: 0,
-        zone: 0,
-        door_side: 0,
-        footprint_w: 0,
-        footprint_d: 0,
-        floor_count: 0,
-        wx,
-        wz,
-        floors: Vec::new(),
-    };
-
-    let Some(layout) = engine.interior_layout(i64::from(wx), i64::from(wz)) else {
-        return Ok(empty);
-    };
-
-    let floors = layout
-        .floors
-        .iter()
-        .map(|f| FloorDto {
-            w: u16::from(f.width),
-            d: u16::from(f.depth),
-            tiles: f.tiles.iter().map(|t| tile_byte(*t)).collect(),
-            kinds: f.kinds.clone(),
-            furn: f.furn.clone(),
-        })
-        .collect();
-
-    Ok(InteriorDto {
-        interior_id: layout.id,
-        zone: layout.context.zone as u8,
-        door_side: layout.context.door_side as u8,
-        footprint_w: u16::from(layout.floors[0].width),
-        footprint_d: u16::from(layout.floors[0].depth),
-        floor_count: layout.floors.len() as u16,
-        wx,
-        wz,
-        floors,
-    })
+    Ok(generate_chunks(engine, &coords))
 }
 
-/// Enumerate every room of the built cell at world `(wx, wz)`.
-#[tauri::command]
-pub fn get_rooms(state: State<'_, SharedEngine>, wx: i32, wz: i32) -> CmdResult<Vec<RoomDto>> {
-    let mut st = state
-        .lock()
-        .map_err(|_| CommandError::new("engine state poisoned"))?;
-    let engine = st
-        .engine
-        .as_mut()
-        .ok_or_else(|| CommandError::new("world not started"))?;
-
-    let Some(layout) = engine.interior_layout(i64::from(wx), i64::from(wz)) else {
-        return Ok(Vec::new());
-    };
+/// Enumerate every room of a layout (ground blueprint resolved once).
+fn collect_rooms(engine: &WorldEngine, layout: &urbix::layout::InteriorLayout) -> Vec<RoomDto> {
     let cfg = *engine.config();
     let main_bp = cfg.blueprint_for(layout.context.zone);
     let ground = urbix::interior::resolve_ground_override(
@@ -663,7 +626,91 @@ pub fn get_rooms(state: State<'_, SharedEngine>, wx: i32, wz: i32) -> CmdResult<
             });
         }
     }
-    Ok(out)
+    out
+}
+
+/// Build a full interior DTO (grids + rooms) for the cell at `(wx, wz)`.
+///
+/// Returns `floor_count == 0` (empty `floors`/`rooms`) for unbuilt or sealed
+/// cells, mirroring the v1 HTTP endpoint so the frontend's cross-fade logic
+/// is unchanged.
+fn interior_dto(engine: &mut WorldEngine, wx: i32, wz: i32) -> InteriorDto {
+    let empty = InteriorDto {
+        interior_id: 0,
+        zone: 0,
+        door_side: 0,
+        footprint_w: 0,
+        footprint_d: 0,
+        floor_count: 0,
+        wx,
+        wz,
+        floors: Vec::new(),
+        rooms: Vec::new(),
+    };
+
+    let Some(layout) = engine.interior_layout(i64::from(wx), i64::from(wz)) else {
+        return empty;
+    };
+
+    let floors: Vec<FloorDto> = layout
+        .floors
+        .iter()
+        .map(|f| FloorDto {
+            w: u16::from(f.width),
+            d: u16::from(f.depth),
+            tiles: f.tiles.iter().map(|t| tile_byte(*t)).collect(),
+            kinds: f.kinds.clone(),
+            furn: f.furn.clone(),
+        })
+        .collect();
+
+    let (footprint_w, footprint_d) = layout
+        .floors
+        .first()
+        .map_or((0, 0), |f| (u16::from(f.width), u16::from(f.depth)));
+
+    InteriorDto {
+        interior_id: layout.id,
+        zone: layout.context.zone as u8,
+        door_side: layout.context.door_side as u8,
+        footprint_w,
+        footprint_d,
+        floor_count: layout.floors.len() as u16,
+        wx,
+        wz,
+        rooms: collect_rooms(engine, &layout),
+        floors,
+    }
+}
+
+/// Generate the interior (grids + rooms) for the built cell at `(wx, wz)`.
+#[tauri::command]
+pub fn get_interior(state: State<'_, SharedEngine>, wx: i32, wz: i32) -> CmdResult<InteriorDto> {
+    let mut st = state
+        .lock()
+        .map_err(|_| CommandError::new("engine state poisoned"))?;
+    let engine = st
+        .engine
+        .as_mut()
+        .ok_or_else(|| CommandError::new("world not started"))?;
+    Ok(interior_dto(engine, wx, wz))
+}
+
+/// Enumerate every room of the built cell at world `(wx, wz)`.
+#[tauri::command]
+pub fn get_rooms(state: State<'_, SharedEngine>, wx: i32, wz: i32) -> CmdResult<Vec<RoomDto>> {
+    let mut st = state
+        .lock()
+        .map_err(|_| CommandError::new("engine state poisoned"))?;
+    let engine = st
+        .engine
+        .as_mut()
+        .ok_or_else(|| CommandError::new("world not started"))?;
+
+    let Some(layout) = engine.interior_layout(i64::from(wx), i64::from(wz)) else {
+        return Ok(Vec::new());
+    };
+    Ok(collect_rooms(engine, &layout))
 }
 
 /// Query the raw (continuous) zone-affinity weights at world `(wx, wz)`.
@@ -754,6 +801,11 @@ mod tests {
         assert_eq!(cells[0].z, 2 * n as i32);
         assert_eq!(cells[n].x, -(n as i32));
         assert_eq!(cells[n].z, 2 * n as i32 + 1);
+        for cell in &cells {
+            if cell.interior_id != 0 {
+                assert_eq!(cell.lot_key, format!("{:016x}", cell.interior_id));
+            }
+        }
     }
 
     #[test]
@@ -767,5 +819,58 @@ mod tests {
     #[test]
     fn default_hues_match_config_constant() {
         assert_eq!(default_zone_hues(), DEFAULT_ZONE_HUES);
+    }
+
+    #[test]
+    fn generate_chunks_dedupes_and_preserves_order() {
+        let mut engine = WorldEngine::new(445566);
+        let out = generate_chunks(&mut engine, &[[-1, 2], [0, 0], [-1, 2]]);
+        assert_eq!(out.len(), 2);
+        assert_eq!((out[0].cx, out[0].cy), (-1, 2));
+        assert_eq!((out[1].cx, out[1].cy), (0, 0));
+        let n = usize::from(out[0].chunk_size);
+        assert_eq!(out[0].cells.len(), n * n);
+    }
+
+    #[test]
+    fn interior_dto_carries_floors_and_rooms() {
+        let mut engine = WorldEngine::new(445566);
+        let n = i32::from(engine.config().chunk_size);
+        let mut found = None;
+        'outer: for cy in -1..=1 {
+            for cx in -1..=1 {
+                let buf = engine.generate_chunk(cx, cy);
+                for i in 0..buf.cell_count() {
+                    let cell = buf.get_cell(i);
+                    if cell.height > 0.0 && cell.interior_id != 0 {
+                        let lx = (i % n as usize) as i32;
+                        let ly = (i / n as usize) as i32;
+                        found = Some((cx * n + lx, cy * n + ly));
+                        break 'outer;
+                    }
+                }
+            }
+        }
+        let (wx, wz) = found.expect("a built cell near the origin");
+        let dto = interior_dto(&mut engine, wx, wz);
+        assert!(dto.floor_count > 0);
+        assert_eq!(dto.floors.len(), usize::from(dto.floor_count));
+        assert!(!dto.rooms.is_empty());
+        assert!(dto.rooms.iter().all(|r| r.floor < dto.floor_count as u8));
+    }
+
+    #[test]
+    fn interior_dto_is_empty_for_unbuilt_cells() {
+        let mut engine = WorldEngine::new(445566);
+        let buf = engine.generate_chunk(0, 0);
+        let n = buf.header().chunk_size as usize;
+        let (wx, wz) = (0..buf.cell_count())
+            .find(|&i| buf.get_cell(i).height <= 0.0)
+            .map(|i| ((i % n) as i32, (i / n) as i32))
+            .expect("a street cell");
+        let dto = interior_dto(&mut engine, wx, wz);
+        assert_eq!(dto.floor_count, 0);
+        assert!(dto.floors.is_empty());
+        assert!(dto.rooms.is_empty());
     }
 }

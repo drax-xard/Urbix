@@ -37,9 +37,11 @@ dependency**:
 
 Notes:
 
-- The Three.js frontend from v1 (mass merging, facade shader, paving,
-  interior meshes) is carried over and evolved; no npm toolchain — plain ES
-  modules with vendored `three.module.js`.
+- The Three.js frontend from v1 (facade shader, paving, interior meshes) is
+  carried over and evolved. Building massing is now lot-aware and tiered
+  (one interior key per lot, podium/tower tiers) instead of height-based
+  flood fill; no npm toolchain — plain ES modules with vendored
+  `three.module.js`.
 - Pointer Lock is supported in WKWebView (macOS Safari ≥ 10.1) and is
   already triggered from a user gesture in the existing code.
 - `serve.c` and the HTTP API are **not** used by v2; v1 remains untouched.
@@ -77,9 +79,9 @@ safe).
 | `start_world(seed)` | build a `WorldEngine` for the seed | config snapshot |
 | `get_config()` | active/default `WorldConfig` snapshot | zone names/hues, floor height, defaults |
 | `find_zone_start(zone, wx, wz)` | nearest matching Voronoi site + bounded ring scan | `{ wx, wz, x, z }` spawn on a walkable cell of the target zone |
-| `get_chunks(cx, cy, r)` | `generate_chunk` × (2r+1)², `r ≤ 4` | same JSON shape v1 consumed |
-| `get_interior(wx, wz)` | interior grids + metadata | same shape v1 consumed |
-| `get_rooms(wx, wz)` | per-room records (`rooms_of_floor`) | room list |
+| `get_chunks(coords)` | `generate_chunk` for each requested `[cx, cy]` (deduped, ≤ 64) | cells plus exact `lot_key` |
+| `get_interior(wx, wz)` | interior grids + metadata + rooms | floors, footprints, room records |
+| `get_rooms(wx, wz)` | per-room records (`rooms_of_floor`) | room list (compatibility; `get_interior` already returns it) |
 | `get_zone(wx, wz)` | zone affinity query | `{ weights: [f32; 5] }` |
 
 All buffers are parsed in Rust (typed structs, never manual C), serialized
@@ -101,16 +103,25 @@ spawn places the player at cell centre, eye height 1.7 m.
 - **FPS controller**: click canvas → pointer lock; WASD + mouselook (yaw
   and pitch, pitch clamped); eye height 1.7 m; gravity snapped to the
   ground plane (y = 0 exterior / storey floor interior); cell-based
-  collision — movement blocked into built cells, free on
-  street/sidewalk/plaza/greenway/park; Shift sprints. Orbit mode retired.
+  collision — only street/sidewalk/plaza/greenway/park cells are walkable
+  (vacant lots and unloaded chunks are solid); Shift sprints. If a stale
+  position ever overlaps a building, a safety net snaps to the nearest
+  walkable cell. Orbit mode retired.
 - **ENTER interaction**: center-screen raycast against building instance
-  meshes; on hit, fetch interior + rooms, build the interior mesh (v1
-  logic), and place the player at the doorway on the ground floor.
-  ESC returns to the street just outside the door. Interior keeps WASD +
-  mouselook + R/F storey switching and wall collision.
-- **Streaming**: driven by player position, radius 3, batch
-  `get_chunks` fetches; chunks outside radius removed/disposed.
+  meshes; the hit point resolves the exact built cell, then one
+  `get_interior` call returns grids plus rooms. The
+  interior mesh is built with v1 logic and the player is placed at the
+  doorway on the ground floor. ESC returns to the spot the player occupied
+  before entering. Interior keeps WASD + mouselook + R/F storey switching
+  and wall collision.
+- **Streaming**: driven by player position, radius 3. Only chunk
+  coordinates that are neither loaded nor already in flight are requested,
+  so crossing a border transfers roughly one edge; chunks outside the
+  radius (and stale chunks from slow fetches) are removed and their
+  instance buffers disposed. Chunk materials are shared across the world.
 - **HUD**: seed/zone/position/mode hint + frame stats (trimmed from v1).
+  The bottom-left key names each walkable surface and marks vacant lots as
+  non-walkable; the status line reports the surface currently underfoot.
 
 ## Build & run
 
