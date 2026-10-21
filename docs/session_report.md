@@ -570,3 +570,20 @@ macroquad/SDL2+OpenGL (loses the polished shaders).
   road graph (§8.3), weather (§8.5), overlays (§8.6); perpendicular snapping
   for seam-stub T-junctions; `docs/interiors.md` stale line refs;
   `walkability` "tall cells" relative proxy.
+
+## Session 9 — commit Explorer v2 / release 0.21.0 (2026-10-21)
+
+* Session 8 tree committed as `b196ba8` ("Release 0.21.0: add standalone
+  Explorer v2"), 26 files.
+* Engine `Cargo.toml` → `0.21.0` (additive `CellFlags::bits()` +
+  `urbix::VERSION`); `CHANGELOG.md` `[0.21.0]` absorbs the Unreleased
+  entries; `README.md` version lines bumped. No wire/FFI/output change, so
+  the SDK stays vendored at 0.20.1.
+* Explorer `Cargo.lock` is now tracked (root ignore anchored to
+  `/Cargo.lock`); `docs/explorer_v2.md` corrected to the shipped command
+  surface.
+* Verified: root build/tests (191 lib + 4 bin + 4 integration + 42 doctests),
+  clippy, fmt; explorer build/test (7/7), clippy, fmt, release; `node --check`.
+* Still needs the same human eyeball and polish threads listed above:
+  menu/spawn/ENTER/ESC flow, facade shader, merged masses, retuned skyline;
+  then retail fronts, chunk-border seams, and far-window fade.
